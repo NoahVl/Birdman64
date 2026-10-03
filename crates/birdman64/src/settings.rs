@@ -2207,13 +2207,10 @@ fn ble_status_lines(locked_by: Option<&str>, status: &crate::ble::Status) -> Vec
     match status {
         Status::Off => {}
         Status::Starting => lines.push("Starting Bluetooth\u{2026}".into()),
-        Status::NoAdapter => {
-            lines.push("No Bluetooth found on this PC. Turn Bluetooth on, or add an adapter.".into())
-        }
+        Status::NoAdapter => lines
+            .push("No Bluetooth found on this PC. Turn Bluetooth on, or add an adapter.".into()),
         Status::Searching => {
-            lines.push(
-                "Searching\u{2026} press the small Sync button on each controller.".into(),
-            );
+            lines.push("Searching\u{2026} press the small Sync button on each controller.".into());
             lines.push(pair_hint.into());
         }
         Status::Connected(pads) => lines.push(format!("Connected: {}", pads.join(", "))),

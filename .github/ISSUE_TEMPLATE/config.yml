@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Contributing guide
-    url: CONTRIBUTING.md
+    url: https://github.com/NoahVl/Birdman64/blob/main/CONTRIBUTING.md
     about: How to build, test and submit changes

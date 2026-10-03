@@ -1594,7 +1594,10 @@ mod tests {
         // which the game reads as full on both axes, like a real pad.
         let d = std::f32::consts::FRAC_1_SQRT_2;
         let (x, y) = stick_to_n64(d, -d);
-        assert!((70..=72).contains(&x) && (-72..=-70).contains(&y), "{x},{y}");
+        assert!(
+            (70..=72).contains(&x) && (-72..=-70).contains(&y),
+            "{x},{y}"
+        );
         assert_eq!(game_axis(x, 68, 61.0), 1.0);
         assert_eq!(game_axis(y, 70, 63.0), -1.0);
         // Halfway along a diagonal stays half (linear inside the gate).

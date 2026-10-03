@@ -20,7 +20,10 @@ pub struct Start {
 /// `hg|rb|gc|cb|sd|jh|bm` (or full names); test 1-based; pilot
 /// `lark|goose|hawk|kiwi|ibis|robin` (default lark); file 1|2 (default 1).
 pub fn parse(s: &str) -> Result<Start, String> {
-    let parts: Vec<String> = s.split(':').map(|p| p.trim().to_ascii_lowercase()).collect();
+    let parts: Vec<String> = s
+        .split(':')
+        .map(|p| p.trim().to_ascii_lowercase())
+        .collect();
     if !(3..=5).contains(&parts.len()) {
         return Err("expected <class>:<vehicle>:<test>[:<pilot>[:<file>]]".into());
     }
@@ -39,7 +42,11 @@ pub fn parse(s: &str) -> Result<Start, String> {
         "sd" | "skydiving" | "sky_diving" => 4,
         "jh" | "jumblehopper" | "jumble_hopper" => 5,
         "bm" | "birdman" => 6,
-        v => return Err(format!("unknown vehicle `{v}` (hg, rb, gc, cb, sd, jh, bm)")),
+        v => {
+            return Err(format!(
+                "unknown vehicle `{v}` (hg, rb, gc, cb, sd, jh, bm)"
+            ));
+        }
     };
     let test = match parts[2].parse::<i32>() {
         Ok(t @ 1..=8) => t - 1,
@@ -59,7 +66,13 @@ pub fn parse(s: &str) -> Result<Start, String> {
         Some("2") => 1,
         Some(f) => return Err(format!("bad file `{f}` (1 or 2)")),
     };
-    Ok(Start { file, class, vehicle, test, pilot })
+    Ok(Start {
+        file,
+        class,
+        vehicle,
+        test,
+        pilot,
+    })
 }
 
 static ASKED: AtomicBool = AtomicBool::new(false);
@@ -111,13 +124,32 @@ mod tests {
     fn parses() {
         assert_eq!(
             parse("a:hg:2").unwrap(),
-            Start { file: 0, class: 1, vehicle: 0, test: 1, pilot: 0 }
+            Start {
+                file: 0,
+                class: 1,
+                vehicle: 0,
+                test: 1,
+                pilot: 0
+            }
         );
         assert_eq!(
             parse("Pilot:Gyrocopter:3:ibis:2").unwrap(),
-            Start { file: 1, class: 3, vehicle: 2, test: 2, pilot: 4 }
+            Start {
+                file: 1,
+                class: 3,
+                vehicle: 2,
+                test: 2,
+                pilot: 4
+            }
         );
-        for bad in ["a:hg", "c:hg:1", "a:xx:1", "a:hg:0", "a:hg:1:bob", "a:hg:1:lark:3"] {
+        for bad in [
+            "a:hg",
+            "c:hg:1",
+            "a:xx:1",
+            "a:hg:0",
+            "a:hg:1:bob",
+            "a:hg:1:lark:3",
+        ] {
             assert!(parse(bad).is_err(), "{bad}");
         }
     }
