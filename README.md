@@ -16,34 +16,31 @@ then follow the [Quick start](#quick-start). An unofficial fan project; see
 
 ## Screenshots
 
-Flight over Holiday Island, rendered at 1080p with 8x MSAA in a 16:9 window
-that fills the screen (the original console shows black bars here):
+Holiday Island at 1080p, 16:9, 8x MSAA.
 
 ![A hang glider banking over the coast in a widescreen view](https://github.com/NoahVl/Birdman64/releases/download/media/hero.jpg)
 
-Same moment, original 4:3 output next to Birdman64's 16:9 view. Nothing is
-cropped or stretched: widescreen just shows more of the world:
+The original 4:3 image (left) and Birdman64 at 16:9 (right). Widescreen shows
+more of the world instead of stretching it.
 
 ![Before and after: 4:3 versus 16:9](https://github.com/NoahVl/Birdman64/releases/download/media/before-after.jpg)
 
-The rocket belt at 21:9, and the test briefing with its 3D background filling
-the width. The game runs at your display's refresh rate:
+The rocket belt at 21:9.
 
 ![Rocket belt in flight at 21:9](https://github.com/NoahVl/Birdman64/releases/download/media/rocket-belt-21x9.jpg)
 
+A test briefing at 16:9.
+
 ![Test briefing screen at 16:9](https://github.com/NoahVl/Birdman64/releases/download/media/briefing.jpg)
 
-More screenshots:
-
 <details>
-<summary>Controls page and setup screen</summary>
+<summary>More screenshots: controls and first-time setup</summary>
 
-Every key and button can be rebound in game. The Controls page shows which
-N64 button you are changing and what it does in the game:
+Every key and button can be rebound in the settings menu.
 
 ![Controls page of the in-game settings menu](https://github.com/NoahVl/Birdman64/releases/download/media/controls.jpg)
 
-The first start builds the game for your PC, once, usually in under a minute:
+The one-time setup on first start takes about a minute.
 
 ![First start setup screen](https://github.com/NoahVl/Birdman64/releases/download/media/setup.png)
 
