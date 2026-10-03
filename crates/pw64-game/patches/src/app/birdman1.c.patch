@@ -1,0 +1,46 @@
+--- a/src/app/birdman1.c
++++ b/src/app/birdman1.c
+@@ -8,6 +8,13 @@
+ #include "birdman.h"
+ #include "code_9A960.h"
+ #include "demo.h"
++#include <pw64_rate.h>
++
++// PW64 rate: held wing-flutter factors of bird_802CE190, per BirdmanData. One
++// exists: the single vehicle buffer game.c D_80362748[1].
++static BirdmanData* sPw64FlutterOwner;
++static f32 sPw64FlutterAcc;
++static f32 sPw64Flutter[2];
+ 
+ void bird_802CE190(BirdmanData* bmData, u8 gameState) {
+     Mtx4F sp558;
+@@ -99,11 +106,25 @@
+         } else if (sp30 > 1.5f) {
+             sp30 = 1.5f;
+         }
+-        bmData->unk2E0 = func_80313AF4(((uvRandF_RANLUX() * 0.2f) + 0.8f) * sp34, bmData->unk2E0, 15.0f);
+-        uvRandF_RANLUX();
++        // PW64 rate: the random flutter factor was drawn per frame and low-passed
++        // (k=15) -> jitter ~sqrt(dt). Draw it once per REF frame and hold it (the
++        // two discarded draws too, so the RNG order is unchanged at REF rate).
++        if (sPw64FlutterOwner != bmData) {
++            if (sPw64FlutterOwner != NULL) {
++                pw64_fatal("birdman1.c: second BirdmanData for the flutter targets", PW64_U32(bmData));
++            }
++            sPw64FlutterOwner = bmData;
++            sPw64FlutterAcc = 1.0f; // draw on the first frame
++        }
++        if (pw64_ticks(&sPw64FlutterAcc) > 0) {
++            sPw64Flutter[0] = (uvRandF_RANLUX() * 0.2f) + 0.8f;
++            uvRandF_RANLUX();
++            sPw64Flutter[1] = (uvRandF_RANLUX() * 0.2f) + 0.8f;
++            uvRandF_RANLUX();
++        }
++        bmData->unk2E0 = func_80313AF4(sPw64Flutter[0] * sp34, bmData->unk2E0, 15.0f);
+         bmData->unk2E8 = func_80313AF4(sp30, bmData->unk2E8, 15.0f);
+-        bmData->unk2E4 = func_80313AF4(((uvRandF_RANLUX() * 0.2f) + 0.8f) * sp34, bmData->unk2E4, 15.0f);
+-        uvRandF_RANLUX();
++        bmData->unk2E4 = func_80313AF4(sPw64Flutter[1] * sp34, bmData->unk2E4, 15.0f);
+         bmData->unk2EC = func_80313AF4(sp30, bmData->unk2EC, 15.0f);
+         uvModelGetPosm(bmData->unk3F4, 0x18, &sp558);
+         uvMat4RotateAxis(&sp558, bmData->unk2E0, 'x');

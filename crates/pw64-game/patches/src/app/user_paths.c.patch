@@ -1,0 +1,33 @@
+--- a/src/app/user_paths.c
++++ b/src/app/user_paths.c
+@@ -62,6 +62,9 @@
+         case 'COMM':
+             temp1 = sp88;
++            // PW64: whole records read off the raw BE block; swap in place
++            // (5 s32, s16 unk14, 2 pad = 0x18 bytes; mirrors anim.c).
++            PW64_SWAP(temp1, 1, UnkCommStruct, "5w h 2b");
+             var_s3 = temp1->unk0;
+             temp_v1 = temp1->unk4;
+             temp_s0->unk22 = temp1->unkC;
+@@ -72,6 +75,11 @@
+         case 'QUAT':
+             temp2 = sp88;
++            // PW64: swap the BE {count, unk4} header, then every 0x18-byte
++            // entry {Vec4F, s32, pad} as 6 words. Without this the swapped
++            // count is huge, _uvMemAllocAlign8 fails and unkC stays NULL
++            // (release crashed writing unkC[0] through the NULL).
++            pw64_swap(temp2, 1, 8, "2w");
++            pw64_swap((u8*)temp2 + 8, temp2->count, sizeof(UnkQuatStruct_Unk8), "6w");
+             temp_s0->unk8 = temp2->count;
+             temp_s0->unk4 = temp2->unk4;
+             temp_s0->unk0 = 0;
+@@ -92,6 +100,11 @@
+         case 'XLAT':
+             temp3 = sp88;
++            // PW64: swap the BE {count, unk4} header, then every 0x10-byte
++            // entry {Vec3F, s32} as 4 words (same class as QUAT above).
++            pw64_swap(temp3, 1, 8, "2w");
++            pw64_swap((u8*)temp3 + 8, temp3->count, sizeof(UnkTranslatStruct_Unk8), "4w");
+             temp_s0->unk18 = temp3->count;
+             temp_s0->unk14 = temp3->unk4;
+             temp_s0->unk10 = 0;

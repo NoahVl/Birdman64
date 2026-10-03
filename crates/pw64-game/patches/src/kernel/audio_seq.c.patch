@@ -1,0 +1,23 @@
+--- a/src/kernel/audio_seq.c
++++ b/src/kernel/audio_seq.c
+@@ -25,6 +25,9 @@ void uvaSeqNew(s32 arg0) {
+         uvaSeqStop();
+     }
+     _uvMediaCopy(gSequenceData, gSeqFile->seqArray[arg0].offset, seq_align);
++    // PW64: the compact-seq header (u32 trackOffset[16], division) is read as
++    // words by cseq.c; the track data after it is a byte stream.
++    PW64_SWAP(gSequenceData, 1, ALCMidiHdr, "17w");
+     alCSeqNew(&D_80261230, gSequenceData);
+     alSeqpSetBank(gSeqPlayer, gWaveTableBank);
+     alSeqpSetSeq(gSeqPlayer, (ALSeq*)&D_80261230);
+@@ -53,6 +56,10 @@ void uvaSeqStop(void) {
+     alSeqpStop(gSeqPlayer);
+     uvClkReset(UV_CLKID_SEQ);
+     while (alSeqpGetState(gSeqPlayer)) {
++        // PW64: on the N64 the audio thread preempts this spin and processes
++        // the stop; the native scheduler is cooperative, so without a yield
++        // the loop always ran into the 2 s timeout (≈6 s per level load).
++        osYieldThread();
+         if (uvClkGetSec(UV_CLKID_SEQ) > 2.0) {
+             _uvDebugPrintf("uvaSeqStop timed out\n");
+             return;

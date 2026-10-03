@@ -1,0 +1,19 @@
+--- a/src/app/ski_lift.c
++++ b/src/app/ski_lift.c
+@@ -4,6 +4,7 @@
+ #include "proxanim.h"
+ #include "ski_lift.h"
+ #include "spath.h"
++#include <pw64_rate.h>
+ 
+ typedef struct {
+     s32 objId;
+@@ -21,7 +22,7 @@ STATIC_FUNC void skiLiftUpdate(void) {
+ 
+     for (i = 0; i < ARRAY_COUNT(sSkiLift); i++) {
+         if (sSkiLift[i].objId != 0xFFFF) {
+-            sSkiLift[i].interval += 0.03f;
++            sSkiLift[i].interval += 0.03f * pw64_scale(); // PW64 rate: was per frame
+             if (sSkiLift[i].interval >= 100.0f) {
+                 sSkiLift[i].interval -= 100.0f;
+             }

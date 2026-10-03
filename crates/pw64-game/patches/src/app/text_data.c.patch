@@ -1,0 +1,10 @@
+--- a/src/app/text_data.c
++++ b/src/app/text_data.c
+@@ -43,6 +43,7 @@ void textLoadBlock(s32 userFileIdx) {
+         case 'DATA': // 0x44415441
+             sTextData[sTextDataCount] = _uvMemAllocAlign8(size + 2);
+             _uvMediaCopy(sTextData[sTextDataCount], data, size);
++            PW64_SWAP16(sTextData[sTextDataCount], size / 2); // PW64: BE s16 table
+ 
+ #if defined(VERSION_JP)
+             var_v1 = (size / 2) - 5;

@@ -1,0 +1,16 @@
+--- a/src/app/snow.c
++++ b/src/app/snow.c
+@@ -62,11 +62,13 @@
+     } else {
+         endPtr = sSnowData->endPtr;
+         idxPtr = sSnowData->fbIdx;
+         if (endPtr != NULL) {
+             for (idxPtr = sSnowData->fbIdx; idxPtr < endPtr; idxPtr++) {
+                 fb16[*idxPtr] = 0xFFFF;
+             }
++            // PW64: framebuffers are GPU targets natively; draw the same pixels there.
++            pw64_fb_pixels(PW64_U32(fb), sSnowData->fbIdx, (s32)(endPtr - sSnowData->fbIdx), 0xFFFF);
+         }
+     }
+     return 0;
+ }

@@ -1,0 +1,79 @@
+--- a/src/kernel/debug.c
++++ b/src/kernel/debug.c
+@@ -80,19 +80,27 @@ STATIC_DATA Vtx_t D_8024B528[] = {
+     {  { 6, 4, 0 }, 0, { 0, 0 }, { 0x00, 0xFF, 0x00, 0xFF } },
+ };
+ 
++// PW64: a pointer in a 32-bit Gfx word isn't a constant initializer on a
++// 64-bit host. The vertex addresses are filled in at runtime (pw64DbgFixupVtx).
++#ifdef PW64_NATIVE
++#define PW64_VTX(v) 0
++#else
++#define PW64_VTX(v) v
++#endif
++
+ STATIC_DATA Gfx D_8024B5A8[] = {
+-    gsSPVertex(D_8024B348, ARRAY_COUNT(D_8024B348), 0),
++    gsSPVertex(PW64_VTX(D_8024B348), ARRAY_COUNT(D_8024B348), 0),
+     gsSPEndDisplayList(),
+ };
+ 
+ STATIC_DATA Gfx D_8024B5B8[] = {
+-    gsSPVertex(D_8024B428, ARRAY_COUNT(D_8024B428), 0),
+-    gsSPVertex(D_8024B518, ARRAY_COUNT(D_8024B518), 15),
++    gsSPVertex(PW64_VTX(D_8024B428), ARRAY_COUNT(D_8024B428), 0),
++    gsSPVertex(PW64_VTX(D_8024B518), ARRAY_COUNT(D_8024B518), 15),
+     gsSPEndDisplayList(),
+ };
+ 
+ STATIC_DATA Gfx D_8024B5D0[] = {
+-    gsSPVertex(D_8024B528, ARRAY_COUNT(D_8024B528), 0),
++    gsSPVertex(PW64_VTX(D_8024B528), ARRAY_COUNT(D_8024B528), 0),
+     gsSPEndDisplayList(),
+ };
+ 
+@@ -739,10 +747,24 @@ void uvDbg_80233A40(s32 arg0, u16 arg1) {
+     D_802C8020 += D_802C802C * sp28;
+ }
+ 
++#ifdef PW64_NATIVE
++static void pw64DbgFixupVtx(void) {
++    // Option C: the exe image lies below 4 GB, so the truncation is lossless.
++    D_8024B5A8[0].words.w1 = (u32)(size_t)D_8024B348;
++    D_8024B5B8[0].words.w1 = (u32)(size_t)D_8024B428;
++    D_8024B5B8[1].words.w1 = (u32)(size_t)D_8024B518;
++    D_8024B5D0[0].words.w1 = (u32)(size_t)D_8024B528;
++}
++#else
++#define pw64DbgFixupVtx()
++#endif
++
+ void uvDbg_80233D04(u16 arg0) {
+     u8 sp1F;
+     u8 idx;
+ 
++    pw64DbgFixupVtx();
++
+     sp1F = D_8024B334[arg0];
+     if (D_802C8030 != 1) {
+         uvGfxDisplayList(D_8024B5A8);
+@@ -759,6 +781,8 @@ void uvDbg_80233DB8(char ch) {
+     u16 sp1E;
+     u16 idx;
+ 
++    pw64DbgFixupVtx();
++
+     if (ch >= 'a') {
+         ch -= 0x20;
+     }
+@@ -832,7 +856,9 @@ void uvDbg_80233FC8(char* fmt, s32 arg1, ...) {
+                 base = 2;
+             } else if (ch == 'f') {
+             } else if (ch == 's') {
+-                sp24 = (u8*)*spB4;
++                // PW64: walking varargs via &arg1 only works for the first
++                // argument on x64 (8-byte slots); every caller passes one %d.
++                sp24 = (u8*)PW64_PTR(*spB4);
+                 sp20 = 0;
+                 sp28.m[0][0] = D_802C8024;
+                 sp28.m[1][1] = D_802C8028;

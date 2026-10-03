@@ -1,0 +1,11 @@
+--- a/src/kernel/user_file.c
++++ b/src/kernel/user_file.c
+@@ -18,7 +18,7 @@ void* uvUserFileRead(s32 userFileIdx, MemType request) {
+         _uvDebugPrintf("Too many user files\n");
+         return NULL;
+     }
+-    sp30 = uvFileReadHeader((s32)sp38);
++    sp30 = uvFileReadHeader(sp38);
+     sp2C = uvFileGetCurLength(sp30);
+     if (uvFileGetCurTag(sp30) == 'UVRW') {                 // 0x55565257
+         uvFile_80224170(sp30, &sp2C, &sp38, 'COMM', 0, 0); // 0x434F4D4DU

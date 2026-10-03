@@ -1,0 +1,24 @@
+# PW64_INPUT_SCRIPT: like fly_hang_glider.txt, but presses Z twice to take
+# photos (Z_TRIG -> snapPhoto -> HUD_CAM_RENDER_SHUTTER): verifies the camera
+# shutter bars at the widescreen edges. Dump frames just after each press.
+# Run: PW64_WIDESCREEN=21:9 PW64_DUMP_FRAMES=1810,1830,2010,2030 ...
+1100 A      # title menu (up at ~1000): Start game
++6
+1200 A      # file select: first file
++6
+1300 A      # vehicle & class: Beginner / Hang Glider
++6
+1400 A      # pilot select: Lark
++6
+1500 A      # class summary -> test briefing
++6
+1600 A      # briefing: Start
++6
+1750 stick -60,0   # bank left
+1800 Z             # photo 1: shutter bars close
+1870               # ...
+2000 stick 0,-50   # nose up
+2020 Z             # photo 2
+2090
+2100 stick 60,0    # bank right
+2250

@@ -1,0 +1,10 @@
+[package]
+name = "pw64-audio"
+description = "HLE of the N64 RSP audio microcode (aspMain ABI) + host audio output (cpal)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pw64-audio-data.workspace = true
+cpal.workspace = true

@@ -1,0 +1,27 @@
+--- a/src/app/code_AC1A0.c
++++ b/src/app/code_AC1A0.c
+@@ -145,6 +145,11 @@
+     shadow_80334C70();
+ }
+ 
++// PW64 rate: f64 shadow of the test timer rbData->unk8 (f32 `+= dt` rounding
++// bias grows with the frame count, see code_9A960.c func_80313D74). Resyncs
++// when the field was written elsewhere (load reset, shared vehicle buffer).
++static f64 sPw64TestTime;
++
+ void rocketBeltMovementFrame(RocketBeltData* rbData, u8 gameState) {
+     f32 spB4;
+     f32 var_fv0_3;
+@@ -175,7 +180,11 @@
+         rbData->unk68 = stickX;
+         rbData->unk6C = stickY;
+         if ((rbData->unk8 > 0.0f) || (buttons & (A_BUTTON | B_BUTTON))) {
+-            rbData->unk8 += D_8034F854;
++            if ((f32)sPw64TestTime != rbData->unk8) {
++                sPw64TestTime = rbData->unk8;
++            }
++            sPw64TestTime += D_8034F854;
++            rbData->unk8 = (f32)sPw64TestTime;
+         }
+ 
+         rbData->unk70 = func_80313F08(&D_80371070, ABS_NOEQ(stickX));

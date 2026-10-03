@@ -1,0 +1,22 @@
+# Normalize line endings: keep LF for everything we hash or parse, let git
+# pick for the rest. Binary files are marked explicitly.
+* text=auto
+
+# LF everywhere: these are hashed, parsed or run on every OS, so their bytes
+# must be identical no matter which OS checked them out.
+*.sh text eol=lf
+packaging/linux/AppRun text eol=lf
+*.desktop text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.rs text eol=lf
+*.md text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.patch text eol=lf
+decomp-manifest.txt text eol=lf
+
+# Binary, never normalized.
+*.png binary
+*.ico binary
+*.zip binary

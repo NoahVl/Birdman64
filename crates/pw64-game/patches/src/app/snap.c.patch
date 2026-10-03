@@ -1,0 +1,147 @@
+--- a/src/app/snap.c
++++ b/src/app/snap.c
+@@ -1572,1 +1572,6 @@
+-            while (uvClkGetSec(UV_CLKID_APP) < 0.1) { }
++            // PW64: on the N64 retraces, the scheduler and the audio thread
++            // preempt this 0.1 s spin; the native scheduler is cooperative,
++            // so yield (else gfx tasks queued before it never start and the
++            // audio thread starves: stutter). native-build.md §9 yield rule.
++            while (uvClkGetSec(UV_CLKID_APP) < 0.1) { osYieldThread(); }
+@@ -1777,1 +1782,3 @@
+-    while (uvClkGetSec(UV_CLKID_APP) < 0.1) { }
++    // PW64: yield (see func_8033D3EC): the second func_8033ADD4 task must
++    // finish before uvCopyFrameBuf(0) below, else one fb loses the frame.
++    while (uvClkGetSec(UV_CLKID_APP) < 0.1) { osYieldThread(); }
+@@ -1824,1 +1831,3 @@
+-    while (uvClkGetSec(UV_CLKID_APP) < 0.1) { }
++    // PW64: yield (see func_8033DDD8): else the single-photo view flickers.
++    while (uvClkGetSec(UV_CLKID_APP) < 0.1) { osYieldThread(); }
+@@ -2007,6 +2007,75 @@
+     return D_80350550;
+ }
+ 
++/* PW64: the EEPROM photo album is the first 172 bits (LSB-first per byte) of
++ * each Unk8033F050 *as IDO lays it out* (big-endian, bitfields MSB-first and
++ * packed into the bytes after unk8 / unk11, size 0x18). MSVC starts a new u32
++ * unit after the u8s (size 0x1C, LSB-first), so copying the host struct's
++ * bits saved padding and dropped every unk12_* field (veh, subject count,
++ * subject extras). These build/parse the N64 byte image explicitly (checked
++ * against clang's MIPS-BE layout, native-build.md §5). */
++#define PW64_PHOTO_BITS 172
++_Static_assert(PW64_PHOTO_BITS * PHOTO_COUNT_MAX == 0x408, "photo bits in the save (save.c)");
++_Static_assert(sizeof(D_80373300) * 8 >= PW64_PHOTO_BITS * PHOTO_COUNT_MAX, "D_80373300 holds the album bitstream");
++
++static void pw64_photoToIdo(Unk8033F050* s, u8* p) {
++    p[0] = (u16)s->unk0 >> 8;
++    p[1] = (u8)s->unk0;
++    p[2] = (u16)s->unk2 >> 8;
++    p[3] = (u8)s->unk2;
++    p[4] = (u16)s->unk4 >> 8;
++    p[5] = (u8)s->unk4;
++    p[6] = s->unk6;
++    p[7] = s->unk7;
++    p[8] = s->unk8;
++    p[9] = (s->unk9_0 << 6) | (s->unk9_2 << 4) | s->unk9_4;
++    p[10] = (s->unk9_8 << 4) | s->unk9_12;
++    p[11] = (s->unk9_16 << 4) | s->unk9_20;
++    p[12] = s->unkC;
++    p[13] = s->unkD;
++    p[14] = s->unkE;
++    p[15] = s->unkF;
++    p[16] = s->unk10;
++    p[17] = s->unk11;
++    p[18] = (s->unk12_0 << 4) | (s->unk12_4 << 1) | (s->unk12_7 >> 2);
++    p[19] = ((s->unk12_7 & 3) << 6) | (s->unk12_10 << 3) | s->unk12_13;
++    p[20] = (s->unk12_16 << 5) | (s->unk12_19 << 2) | (s->unk12_22 >> 1);
++    p[21] = ((s->unk12_22 & 1) << 7) | (s->unk12_25 << 4);
++    p[22] = 0;
++    p[23] = 0;
++}
++
++static void pw64_photoFromIdo(u8* p, Unk8033F050* s) {
++    s->unk0 = (s16)((p[0] << 8) | p[1]);
++    s->unk2 = (s16)((p[2] << 8) | p[3]);
++    s->unk4 = (s16)((p[4] << 8) | p[5]);
++    s->unk6 = p[6];
++    s->unk7 = p[7];
++    s->unk8 = p[8];
++    s->unk9_0 = p[9] >> 6;
++    s->unk9_2 = (p[9] >> 4) & 3;
++    s->unk9_4 = p[9] & 0xF;
++    s->unk9_8 = p[10] >> 4;
++    s->unk9_12 = p[10] & 0xF;
++    s->unk9_16 = p[11] >> 4;
++    s->unk9_20 = p[11] & 0xF;
++    s->unkC = p[12];
++    s->unkD = p[13];
++    s->unkE = p[14];
++    s->unkF = p[15];
++    s->unk10 = p[16];
++    s->unk11 = p[17];
++    s->unk12_0 = p[18] >> 4;
++    s->unk12_4 = (p[18] >> 1) & 7;
++    s->unk12_7 = ((p[18] & 1) << 2) | (p[19] >> 6);
++    s->unk12_10 = (p[19] >> 3) & 7;
++    s->unk12_13 = p[19] & 7;
++    s->unk12_16 = p[20] >> 5;
++    s->unk12_19 = (p[20] >> 2) & 7;
++    s->unk12_22 = ((p[20] & 3) << 1) | (p[21] >> 7);
++    s->unk12_25 = (p[21] >> 4) & 7;
++}
++
+ void func_8033E784(Unk8033F050* arg0, s32 arg1, s32 arg2) {
+     if (arg2 != 0) {
+         ((u8*)arg0)[arg1 / 8] |= 1 << (arg1 % 8);
+@@ -2028,6 +2097,7 @@
+     s32 i;
+     s32 j;
+     s32 var_s5;
++    u8 ido[0x18];
+ 
+     var_s5 = 0;
+     *arg0 = D_80373300;
+@@ -2035,6 +2105,9 @@
+ 
+     for (i = 0; i < PHOTO_COUNT_MAX; i++) {
+         var_s1 = &sp6C;
++        // PW64: fields a slot doesn't set were stack garbage on N64; zero them
++        // so the saved bits (and the EEPROM mirror compare) are deterministic.
++        uvMemSet(&sp6C, 0, sizeof(sp6C));
+         if ((i < D_80350528) && (D_80373060[i].unk43[0] != 0)) {
+             var_s1->unk0 = func_8034AD14(D_80373060[i].unk0.x);
+             var_s1->unk2 = func_8034AD14(D_80373060[i].unk0.y);
+@@ -2100,8 +2173,9 @@
+             var_s1->unkC = 0;
+         }
+ 
+-        for (j = 0; j < 172; j++) {
+-            func_8033E784(*arg0, var_s5, func_8033E810(&sp6C, j));
++        pw64_photoToIdo(&sp6C, ido);
++        for (j = 0; j < PW64_PHOTO_BITS; j++) {
++            func_8033E784(*arg0, var_s5, func_8033E810((Unk8033F050*)ido, j));
+             var_s5++;
+         }
+     }
+@@ -2116,6 +2190,7 @@
+     s32 j;
+     s32 var_s3;
+     s32 pad;
++    u8 ido[0x18];
+ 
+     var_v1 = &D_80362690->unkC[D_80362690->unk9C];
+     camera = var_v1->unk70;
+@@ -2124,10 +2199,12 @@
+ 
+     for (i = 0; i < PHOTO_COUNT_MAX; i++) {
+         var_s1 = &sp84;
+-        for (j = 0; j < 172; j++) {
+-            func_8033E784(var_s1, j, func_8033E810(arg0, var_s3));
++        uvMemSet(ido, 0, sizeof(ido));
++        for (j = 0; j < PW64_PHOTO_BITS; j++) {
++            func_8033E784((Unk8033F050*)ido, j, func_8033E810(arg0, var_s3));
+             var_s3++;
+         }
++        pw64_photoFromIdo(ido, var_s1);
+         if (var_s1->unk9_4) {
+             D_80373060[D_80350528].unk0.x = var_s1->unk0;
+             D_80373060[D_80350528].unk0.y = var_s1->unk2;

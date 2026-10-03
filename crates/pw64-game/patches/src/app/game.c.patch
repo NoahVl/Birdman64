@@ -1,0 +1,33 @@
+--- a/src/app/game.c
++++ b/src/app/game.c
+@@ -179,4 +179,23 @@
+ s32 gameUpdateStateTitle(Unk80362690* arg0) {
+     s32 gameState;
++    int spF, spC, spV, spT, spP; // PW64: int, as pw64_direct_start takes
+ 
++    // PW64: PW64_START boots straight into one test (pw64-platform start.rs):
++    // load the save file like the file menu does, then skip to test setup.
++    if (pw64_direct_start(&spF, &spC, &spV, &spT, &spP)) {
++        Unk80362690_Unk0* unkC = &arg0->unkC[arg0->unk9C];
++        fileMenu_802E8FF4(spF);
++        unkC->veh = spV;
++        unkC->pilot = spP;
++        if (IS_BONUS_VEHICLE(spV) && (spV != VEHICLE_BIRDMAN)) {
++            unkC->cls = spT; // the bonus test menu stores its pick in cls
++        } else {
++            unkC->cls = spC;
++            unkC->test = spT;
++        }
++        D_8034F164 = 0;
++        return GAME_STATE_TEST_SETUP;
++    }
+     if (uvControllerCheckInserted(0) == 0) {
+@@ -1181,7 +1200,7 @@ void func_802EE14C(u16 veh) {
+     if (veh == temp_s0->veh) {
+         return;
+     }
+-    uvEventPost(0xD, &sp44);
++    uvEventPost(0xD, PW64_U32(&sp44));
+     switch (temp_s0->veh) {
+     case VEHICLE_HANG_GLIDER:
+         func_802EF328(temp_s0->vehicleData);

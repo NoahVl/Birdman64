@@ -1,0 +1,179 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 360" width="440" height="360">
+<!-- Original drawing of a three-prong N64-style controller (front view) for
+     Birdman64's settings Controls page. Hand-authored; no logos or
+     trademarks. Letters are stroked paths (resvg is built without text).
+     Every input has an id btn-<slot>; pad_art.rs injects a <style> that
+     restyles one of them (.face fill + #hl-glow) to highlight it. -->
+<style>
+.ind { opacity: 0 }
+.glyph { fill: none; stroke-linecap: round; stroke-linejoin: round }
+</style>
+<defs>
+  <radialGradient id="g-body" cx="0.5" cy="0.28" r="0.75">
+    <stop offset="0" stop-color="#d3d4da"/>
+    <stop offset="0.55" stop-color="#b4b5bd"/>
+    <stop offset="1" stop-color="#8e8f98"/>
+  </radialGradient>
+  <linearGradient id="g-shoulder" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#9c9da6"/>
+    <stop offset="1" stop-color="#6e6f78"/>
+  </linearGradient>
+  <radialGradient id="g-well" cx="0.5" cy="0.4" r="0.6">
+    <stop offset="0" stop-color="#9fa0a8"/>
+    <stop offset="1" stop-color="#a9aab2"/>
+  </radialGradient>
+  <linearGradient id="g-dpad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#55565e"/>
+    <stop offset="1" stop-color="#2c2d33"/>
+  </linearGradient>
+  <radialGradient id="g-gate" cx="0.5" cy="0.35" r="0.65">
+    <stop offset="0" stop-color="#3c3d44"/>
+    <stop offset="1" stop-color="#5a5b63"/>
+  </radialGradient>
+  <radialGradient id="g-stick" cx="0.4" cy="0.32" r="0.7">
+    <stop offset="0" stop-color="#f1f2f5"/>
+    <stop offset="0.7" stop-color="#c9cad0"/>
+    <stop offset="1" stop-color="#a2a3ab"/>
+  </radialGradient>
+  <radialGradient id="g-a" cx="0.38" cy="0.3" r="0.75">
+    <stop offset="0" stop-color="#7d9cf0"/>
+    <stop offset="1" stop-color="#2f52c0"/>
+  </radialGradient>
+  <radialGradient id="g-b" cx="0.38" cy="0.3" r="0.75">
+    <stop offset="0" stop-color="#6fcf88"/>
+    <stop offset="1" stop-color="#23853f"/>
+  </radialGradient>
+  <radialGradient id="g-c" cx="0.38" cy="0.3" r="0.75">
+    <stop offset="0" stop-color="#ffe27a"/>
+    <stop offset="1" stop-color="#d9a514"/>
+  </radialGradient>
+  <radialGradient id="g-start" cx="0.38" cy="0.3" r="0.75">
+    <stop offset="0" stop-color="#f07a7e"/>
+    <stop offset="1" stop-color="#b4232b"/>
+  </radialGradient>
+  <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="5"/>
+    <feOffset dx="0" dy="6" result="b"/>
+    <feComponentTransfer><feFuncA type="linear" slope="0.55"/></feComponentTransfer>
+    <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="btn-shadow" x="-30%" y="-30%" width="160%" height="170%">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="1.4"/>
+    <feOffset dx="0" dy="1.6"/>
+    <feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer>
+    <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="hl-glow" x="-60%" y="-60%" width="220%" height="220%">
+    <feMorphology in="SourceAlpha" operator="dilate" radius="3" result="d"/>
+    <feGaussianBlur in="d" stdDeviation="4" result="b"/>
+    <feFlood flood-color="#ffffff" flood-opacity="0.95"/>
+    <feComposite in2="b" operator="in"/>
+    <feMerge><feMergeNode/><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+
+<!-- Body: wide top section and three prongs (one outline). -->
+<g filter="url(#shadow)">
+  <path id="body" fill="url(#g-body)" stroke="#5c5d66" stroke-width="2"
+    d="M 72 46 C 150 34 290 34 368 46
+       C 398 51 412 72 412 102 C 412 152 410 222 400 276
+       C 392 324 362 342 338 338 C 312 334 300 314 296 290
+       C 292 260 288 228 278 214 C 271 206 266 208 264 218
+       C 263 256 266 304 258 326 C 248 352 192 352 182 326
+       C 174 304 177 256 176 218 C 174 208 169 206 162 214
+       C 152 228 148 260 144 290 C 140 314 128 334 102 338
+       C 78 342 48 324 40 276 C 30 222 28 152 28 102
+       C 28 72 42 51 72 46 Z"/>
+</g>
+<!-- Soft top-edge highlight. -->
+<path d="M 80 52 C 160 41 280 41 360 52" fill="none" stroke="#ffffff" stroke-opacity="0.45" stroke-width="2.5" stroke-linecap="round"/>
+<!-- Grip seams on the prongs. -->
+<path d="M 58 236 C 64 282 80 314 100 322 M 382 236 C 376 282 360 314 340 322"
+  fill="none" stroke="#8a8b94" stroke-width="1.5" stroke-linecap="round"/>
+
+<!-- Shoulder buttons on the top edge. -->
+<g id="btn-L" filter="url(#btn-shadow)">
+  <path class="face" fill="url(#g-shoulder)" stroke="#4e4f57" stroke-width="1.5"
+    d="M 34 100 C 34 74 47 56 74 51 L 150 41 L 151 58 L 82 67 C 61 71 51 84 50 102 Z"/>
+  <path class="glyph" stroke="#f1f2f5" stroke-width="1.9" transform="translate(84 49) scale(0.95)" d="M 0 0 V 10 H 6"/>
+</g>
+<g id="btn-R" filter="url(#btn-shadow)">
+  <path class="face" fill="url(#g-shoulder)" stroke="#4e4f57" stroke-width="1.5"
+    d="M 406 100 C 406 74 393 56 366 51 L 290 41 L 289 58 L 358 67 C 379 71 389 84 390 102 Z"/>
+  <path class="glyph" stroke="#f1f2f5" stroke-width="1.9" transform="translate(349 49) scale(0.95)"
+    d="M 0 10 V 0 H 4 C 7 0 7 5.5 4 5.5 H 0 M 3.5 5.5 L 6.5 10"/>
+</g>
+
+<!-- D-pad (left), in a shallow round well. -->
+<circle cx="104" cy="128" r="43" fill="url(#g-well)" stroke="#8c8d96" stroke-width="1.5"/>
+<path d="M 72 108 A 43 43 0 0 1 136 108" fill="none" stroke="#6e6f78" stroke-opacity="0.6" stroke-width="2"/>
+<g filter="url(#btn-shadow)">
+  <g id="btn-UP"><path class="face" fill="url(#g-dpad)" d="M 92 94 Q 92 92 94 92 H 114 Q 116 92 116 94 V 116 L 104 128 L 92 116 Z"/>
+    <path d="M 104 98 L 109 105 H 99 Z" class="mark" fill="#76777f"/></g>
+  <g id="btn-DOWN"><path class="face" fill="url(#g-dpad)" d="M 92 140 L 104 128 L 116 140 V 162 Q 116 164 114 164 H 94 Q 92 164 92 162 Z"/>
+    <path d="M 104 158 L 109 151 H 99 Z" class="mark" fill="#76777f"/></g>
+  <g id="btn-LEFT"><path class="face" fill="url(#g-dpad)" d="M 70 118 Q 70 116 72 116 H 92 L 104 128 L 92 140 H 72 Q 70 140 70 138 Z"/>
+    <path d="M 74 128 L 81 123 V 133 Z" class="mark" fill="#76777f"/></g>
+  <g id="btn-RIGHT"><path class="face" fill="url(#g-dpad)" d="M 116 116 H 136 Q 138 116 138 118 V 138 Q 138 140 136 140 H 116 L 104 128 Z"/>
+    <path d="M 134 128 L 127 123 V 133 Z" class="mark" fill="#76777f"/></g>
+</g>
+<circle cx="104" cy="128" r="5" fill="#26272c" fill-opacity="0.55"/>
+
+<!-- Start (centre, red). -->
+<g id="btn-START" filter="url(#btn-shadow)">
+  <circle class="face" cx="220" cy="104" r="11" fill="url(#g-start)" stroke="#7d151b" stroke-width="1.2"/>
+</g>
+<path class="glyph" stroke="#4a4b53" stroke-width="1.5" transform="translate(201.5 121) scale(0.62)"
+  d="M 6.5 1.5 C 5.5 0 1 -0.5 0.6 2.4 C 0.3 5 6.6 4.6 6.6 7.4 C 6.6 10.4 1.4 10.6 0.3 8.6
+     M 10 0 H 17 M 13.5 0 V 10
+     M 20 10 L 23.5 0 L 27 10 M 21.3 6.3 H 25.7
+     M 30 10 V 0 H 34 C 37 0 37 5.5 34 5.5 H 30 M 33.5 5.5 L 36.5 10
+     M 40 0 H 47 M 43.5 0 V 10"/>
+
+<!-- Analog stick (centre prong top): octagonal gate + cap. -->
+<path d="M 206 154 H 234 L 254 174 V 202 L 234 222 H 206 L 186 202 V 174 Z"
+  fill="url(#g-gate)" stroke="#2f3036" stroke-width="1.5" stroke-linejoin="round"/>
+<g id="btn-STICK" filter="url(#btn-shadow)">
+  <circle class="face" cx="220" cy="188" r="23" fill="url(#g-stick)" stroke="#6f7078" stroke-width="1.5"/>
+  <circle cx="220" cy="188" r="15" fill="none" stroke="#9c9da5" stroke-width="1.2"/>
+  <circle cx="220" cy="188" r="8" fill="none" stroke="#a9aab1" stroke-width="1"/>
+</g>
+<g class="ind" id="ind-STICK_UP"><path d="M 220 128 L 233 147 H 207 Z" class="mark" fill="#ffffff" stroke="#3a3b42" stroke-width="1.5" stroke-linejoin="round"/></g>
+<g class="ind" id="ind-STICK_DOWN"><path d="M 220 248 L 233 229 H 207 Z" class="mark" fill="#ffffff" stroke="#3a3b42" stroke-width="1.5" stroke-linejoin="round"/></g>
+<g class="ind" id="ind-STICK_LEFT"><path d="M 160 188 L 179 175 V 201 Z" class="mark" fill="#ffffff" stroke="#3a3b42" stroke-width="1.5" stroke-linejoin="round"/></g>
+<g class="ind" id="ind-STICK_RIGHT"><path d="M 280 188 L 261 175 V 201 Z" class="mark" fill="#ffffff" stroke="#3a3b42" stroke-width="1.5" stroke-linejoin="round"/></g>
+
+<!-- Z trigger: on the back of the centre prong, shown as a dashed tab. -->
+<g id="btn-Z">
+  <rect class="face" x="203" y="274" width="34" height="38" rx="9" fill="#9a9ba3" fill-opacity="0.55"
+    stroke="#55565e" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <path class="glyph" stroke="#3e3f46" stroke-width="2" transform="translate(215.5 282) scale(1.0)" d="M 0 0 H 9 L 0 12 H 9"/>
+  <path class="glyph" stroke="#4a4b53" stroke-width="1.1" transform="translate(208 299) scale(0.5)"
+    d="M 0 0 V 10 H 4.2 C 6.8 10 6.8 5 4.2 5 H 0 M 0 0 H 3.8 C 6.2 0 6.2 5 3.8 5
+       M 10 10 L 13.5 0 L 17 10 M 11.3 6.3 H 15.7
+       M 26 1.5 C 24 -0.5 20 0 20 5 C 20 10 24 10.5 26 8.5
+       M 30 0 V 10 M 30 6 L 36 0 M 32 4 L 36 10"/>
+</g>
+
+<!-- Face buttons (right): B, A, and the C diamond. -->
+<g id="btn-B" filter="url(#btn-shadow)">
+  <circle class="face" cx="278" cy="128" r="14" fill="url(#g-b)" stroke="#155a2a" stroke-width="1.2"/>
+  <path class="glyph" stroke="#eafbef" stroke-width="2.2" transform="translate(274.5 122)"
+    d="M 0 5.5 H 4 C 7 5.5 7 12 4 12 H 0 V 0 H 3.6 C 6.4 0 6.4 5.5 3.6 5.5"/>
+</g>
+<g id="btn-A" filter="url(#btn-shadow)">
+  <circle class="face" cx="300" cy="160" r="17" fill="url(#g-a)" stroke="#1c3584" stroke-width="1.2"/>
+  <path class="glyph" stroke="#eef2ff" stroke-width="2.4" transform="translate(295 153)"
+    d="M 0 13 L 5 0 L 10 13 M 1.9 8.2 H 8.1"/>
+</g>
+<g filter="url(#btn-shadow)">
+  <g id="btn-C_UP"><circle class="face" cx="352" cy="96" r="11.5" fill="url(#g-c)" stroke="#8d6a07" stroke-width="1.2"/>
+    <path d="M 352 89.5 L 357.5 99 H 346.5 Z" class="mark" fill="#6b5108"/></g>
+  <g id="btn-C_DOWN"><circle class="face" cx="352" cy="144" r="11.5" fill="url(#g-c)" stroke="#8d6a07" stroke-width="1.2"/>
+    <path d="M 352 150.5 L 357.5 141 H 346.5 Z" class="mark" fill="#6b5108"/></g>
+  <g id="btn-C_LEFT"><circle class="face" cx="328" cy="120" r="11.5" fill="url(#g-c)" stroke="#8d6a07" stroke-width="1.2"/>
+    <path d="M 321.5 120 L 331 114.5 V 125.5 Z" class="mark" fill="#6b5108"/></g>
+  <g id="btn-C_RIGHT"><circle class="face" cx="376" cy="120" r="11.5" fill="url(#g-c)" stroke="#8d6a07" stroke-width="1.2"/>
+    <path d="M 382.5 120 L 373 114.5 V 125.5 Z" class="mark" fill="#6b5108"/></g>
+</g>
+</svg>

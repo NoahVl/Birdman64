@@ -1,0 +1,29 @@
+--- a/src/app/replay_screen.c
++++ b/src/app/replay_screen.c
+@@ -33,6 +33,7 @@
+ #include "text_data.h"
+ #include "whale.h"
+ #include "wind_objects.h"
++#include <pw64_rate.h>
+ 
+ #if defined(VERSION_JP)
+ #define CONTROLLER_MSG_LEN 0x14
+@@ -511,7 +512,7 @@ void func_8032D51C(s32 fadeoutType) {
+         uvVtxEndPoly();
+         func_803141E4();
+         uvGfxEnd();
+-        var_fs1 += (1.0f / 60.0f);
++        var_fs1 += pw64_real_dt(); // PW64 rate: fade assumed 1/60 s per frame
+     }
+     func_80314154();
+     for (i = 0; i < 2; i++) {
+@@ -546,7 +547,8 @@ void func_8032D90C(void) {
+     msg3 = textGetDataByIdx(TEXT_NO_CNT3);
+     msg4 = textGetDataByIdx(TEXT_NO_CNT4);
+     while (1) {
+-        var_fs0 += 0.003f;
++        // PW64 rate: colour cycle stepped per frame of this 60 Hz menu loop.
++        var_fs0 += 0.003f * 60.0f * pw64_real_dt();
+         if (var_fs0 > 1.0f) {
+             var_fs0 -= 1.0f;
+         }

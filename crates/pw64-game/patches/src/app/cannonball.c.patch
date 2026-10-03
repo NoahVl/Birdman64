@@ -1,0 +1,27 @@
+--- a/src/app/cannonball.c
++++ b/src/app/cannonball.c
+@@ -154,6 +154,11 @@
+     cbData->camera->clipFar -= 100.0f;
+ }
+ 
++// PW64 rate: f64 shadow of the test timer cbData->unk8 (f32 `+= dt` rounding
++// bias grows with the frame count, see code_9A960.c func_80313D74). Resyncs
++// when the field was written elsewhere (load reset, shared vehicle buffer).
++static f64 sPw64TestTime;
++
+ // cannonMovementFrame called every frame while aiming cannon and while in flight
+ void cannonMovementFrame(CannonballData* cbData, u8 gameState) {
+     f32 stickX;
+@@ -176,7 +181,11 @@
+         return;
+     }
+ 
+-    cbData->unk8 += D_8034F854;
++    if ((f32)sPw64TestTime != cbData->unk8) {
++        sPw64TestTime = cbData->unk8;
++    }
++    sPw64TestTime += D_8034F854;
++    cbData->unk8 = (f32)sPw64TestTime;
+     cbData->unk11D = 0;
+     if (gameState != GAME_STATE_RESULTS) {
+         stickX = demoGetInputs(cbData->unk10, INPUT_AXIS_X);

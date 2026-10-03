@@ -1,0 +1,10 @@
+[package]
+name = "pw64-audio-data"
+description = "Pilotwings 64 audio data: libultra sound banks (ctl/tbl), VADPCM decoding and compact sequences"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true

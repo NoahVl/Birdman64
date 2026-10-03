@@ -1,0 +1,11 @@
+--- a/src/kernel/geometry.c
++++ b/src/kernel/geometry.c
+@@ -344,7 +344,7 @@ void uvVtxEndPoly(void) {
+                 var_v0 = 15;
+                 gSPVertex(gGfxDisplayListHead++, OS_PHYSICAL_TO_K0(&gGeomVertexPtrs[var_t5]), 14, 1);
+                 gSP1Triangle(gGfxDisplayListHead++, 0, 15, 1, 0);
+-                gSPVertex(gGfxDisplayListHead++, (((u32)(&gGeomVertexPtrs[var_t5]) + 0x80000000)) + 14 * sizeof(Vtx), 1, 15);
++                gSPVertex(gGfxDisplayListHead++, ((PW64_U32(&gGeomVertexPtrs[var_t5]) + 0x80000000)) + 14 * sizeof(Vtx), 1, 15);
+             } else {
+                 var_v0 = var_t4;
+                 gSPVertex(gGfxDisplayListHead++, OS_PHYSICAL_TO_K0(&gGeomVertexPtrs[var_t5]), var_v0, 1);

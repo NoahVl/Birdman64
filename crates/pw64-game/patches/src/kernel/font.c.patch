@@ -1,0 +1,94 @@
+--- a/src/kernel/font.c
++++ b/src/kernel/font.c
+@@ -4,6 +4,7 @@
+ #include <uv_memory.h>
+ #include <uv_font.h>
+ #include <uv_string.h>
++#include <pw64_endian.h> // PW64: native ROM-layout loaders
+ 
+ #if defined(VERSION_JP)
+ #define FONT_MAX_MSG_LEN 25
+@@ -32,6 +33,8 @@ typedef struct Unk80289380 {
+ STATIC_DATA Bitmap sFontBitmaps[FONT_MAX_MSG_LEN];
+ STATIC_DATA Gfx sFontDList[FONT_DL_COUNT * 2];
+ STATIC_DATA FontMessage sFontMessages[FONT_MSG_COUNT];
++// PW64: widescreen HUD anchor per message (pw64_widescreen.c), both
++// anchors packed as u16 (horizontal | vertical << 8).
++static u16 sPw64MsgAnchor[FONT_MSG_COUNT];
+ 
+ STATIC_DATA Sprite sFontSprite = {
+     0,                     // x
+@@ -99,13 +102,16 @@ ParsedUVFT* uvParseTopUVFT(s32 arg0) {
+             _uvMediaCopy((void*)ret->str, srcAddr, nbytes);
+             break;
+         case 'FRMT':
+-            ret->bmfmt = srcAddr[0];
+-            ret->bmsiz = srcAddr[1];
++            // PW64: BE s32 words (low byte kept, as on the N64).
++            ret->bmfmt = (u8)uvMemRead(&srcAddr[0], 4);
++            ret->bmsiz = (u8)uvMemRead(&srcAddr[1], 4);
+             break;
+         case 'BITM':
+-            bitmCount = nbytes / sizeof(Bitmap);
+-            ret->bitmap = (Bitmap*)_uvMemAlloc(nbytes, 8);
+-            _uvMediaCopy((void*)ret->bitmap, srcAddr, nbytes);
++            // PW64: N64 Bitmaps are 16 bytes (4-byte buf); the host struct is
++            // wider. Convert from the BE block (scratch RAM, read mode 1).
++            bitmCount = nbytes / PW64_N64_BITMAP_SIZE;
++            ret->bitmap = (Bitmap*)_uvMemAlloc(bitmCount * sizeof(Bitmap), 8);
++            pw64_load_bitmaps(ret->bitmap, srcAddr, bitmCount);
+             break;
+         case 'IMAG':
+             ret->imag[imagCount] = _uvMemAlloc(nbytes, 8);
+@@ -120,7 +126,7 @@ ParsedUVFT* uvParseTopUVFT(s32 arg0) {
+     uvFile_80223F30(idx);
+     // update indexes to pointers allocated above
+     for (i = 0; i < bitmCount; i++) {
+-        ret->bitmap[i].buf = ret->imag[(u32)ret->bitmap[i].buf];
++        ret->bitmap[i].buf = ret->imag[PW64_U32(ret->bitmap[i].buf)];
+     }
+     return ret;
+ }
+@@ -302,6 +308,7 @@ s32 uvFontPrintStr16(s32 x, s32 y, s16* str16, s32 strLen, s32 end) {
+ 
+         if (str16[i16] == 0xFD) {
+             sFontMessages[sFontMsgCount].str16[i] = -1;
++            sPw64MsgAnchor[sFontMsgCount] = pw64_hud_anchor | (pw64_hud_vanchor << 8);
+             sFontMsgCount++;
+             sFontMessages[sFontMsgCount].r = sFontColorR;
+             sFontMessages[sFontMsgCount].g = sFontColorG;
+@@ -329,6 +336,7 @@ s32 uvFontPrintStr16(s32 x, s32 y, s16* str16, s32 strLen, s32 end) {
+         sFontMessages[sFontMsgCount].str16[i] = -1;
+     }
+ 
++    sPw64MsgAnchor[sFontMsgCount] = pw64_hud_anchor | (pw64_hud_vanchor << 8);
+     sFontMsgCount++;
+     if (sp24 != 0) {
+         ret = -1;
+@@ -374,6 +382,7 @@ void uvFontPrintStr(s32 x, s32 y, const char* str) {
+ 
+     sFontMessages[sFontMsgCount].str16[strLen] = -1;
+     sFontMessages[sFontMsgCount].font = gGfxUnkPtrs->fonts[sFontCurId];
++    sPw64MsgAnchor[sFontMsgCount] = pw64_hud_anchor | (pw64_hud_vanchor << 8);
+     sFontMsgCount++;
+ }
+ 
+@@ -434,8 +443,17 @@ void uvFontGenDlist(void) {
+     sFontSprite.rsp_dl_next = &sFontSprite.rsp_dl[(gGfxFbIndex * FONT_DL_COUNT) + D_80248E90];
+ 
+     for (i = 0; i < sFontMsgCount; i++) {
++        // PW64: each message keeps the widescreen HUD anchors of its print.
++        if (i == 0 || sPw64MsgAnchor[i] != sPw64MsgAnchor[i - 1]) {
++            pw64_hud_emit_anchor(sPw64MsgAnchor[i] & 0xFF);
++            pw64_hud_emit_vanchor(sPw64MsgAnchor[i] >> 8);
++        }
+         uvFontMsgGenDlist(&sFontMessages[i]);
+     }
++    if (sPw64MsgAnchor[sFontMsgCount - 1] !=
++        (u16)(pw64_hud_anchor | (pw64_hud_vanchor << 8))) {
++        pw64_hud_emit_anchor(pw64_hud_anchor);
++        pw64_hud_emit_vanchor(pw64_hud_vanchor);
++    }
+     spFinish(&gGfxDisplayListHead);
+     gGfxDisplayListHead--;
+     D_80248E90 += sFontMsgCount;

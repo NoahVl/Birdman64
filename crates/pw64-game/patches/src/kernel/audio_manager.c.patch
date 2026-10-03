@@ -1,0 +1,108 @@
+--- a/src/kernel/audio_manager.c
++++ b/src/kernel/audio_manager.c
+@@ -7,6 +7,7 @@
+ #include <libc/stddef.h>
+ #include <segment_symbols.h>
+ #include "code_1050.h"
++#include <pw64_endian.h> // PW64: native ROM-layout loaders
+ 
+ ALCSPlayer gALCSPlayer;
+ ALSndPlayer gALSndPlayer;
+@@ -37,7 +38,7 @@ u8* gSequenceData;
+ STATIC_DATA s32 nextDMA = 0;
+ STATIC_DATA s32 curAcmdList = 0;
+ STATIC_DATA s32 D_80248C88 = 0;
+-STATIC_DATA u8* gAudioHeapStart = 0x80000400;
++STATIC_DATA u8* gAudioHeapStart = (u8*)0x80000400;
+ 
+ ALSeqPlayer* gSeqPlayer = (ALSeqPlayer*)&gALCSPlayer;
+ ALSndPlayer* gSndPlayer = &gALSndPlayer;
+@@ -72,3 +73,8 @@
+         // clang-format off
+-        s32 customFxParams[] = {
++        // PW64: static. Decomp UB: this block-scope array's lifetime ends at
++        // the closing brace, but gALSynConfig.params keeps pointing at it and
++        // amCreateAudioMgr -> alFxNew reads it after the block. IDO kept the
++        // slot intact; clang -O2 legally drops the dead stores, so release
++        // builds walked garbage fx params off the coroutine stack.
++        static s32 customFxParams[] = {
+             8, /* section count */
+@@ -99,10 +105,11 @@ void uvaManagerInit(void) {
+         alSndpNew(gSndPlayer, &gALSndpConfig);
+         alCSPNew((ALCSPlayer*)gSeqPlayer, &gALSeqpConfig);
+         osSendMesg(&D_80261188, NULL, OS_MESG_BLOCK);
+-        _uvMediaCopy(&seqFile, SEGMENT_ROM_START(audio_seq), 0x8);
+-        seqFileSize = (seqFile.seqCount * sizeof(ALSeqData)) + offsetof(ALSeqFile, seqArray);
+-        gSeqFile = alHeapAlloc(&gAudioHeap, 1, seqFileSize);
+-        _uvMediaCopy(gSeqFile, SEGMENT_ROM_START(audio_seq), seqFileSize);
++        // PW64: the ROM ALSeqFile is BE with 4-byte offsets; deserialise it
++        // into the host layout (native/src/pw64_audio_load.c).
++        (void)seqFile;
++        (void)seqFileSize;
++        gSeqFile = pw64_alSeqFileLoad(SEGMENT_ROM_START(audio_seq), &gAudioHeap);
+         alSeqFileNew(gSeqFile, SEGMENT_ROM_START(audio_seq));
+ 
+         for (i = 0; i < gSeqFile->seqCount; i++) {
+@@ -166,7 +173,8 @@ STATIC_FUNC void __amMain(void* entry) {
+     s32 pad;
+     s32 done = FALSE;
+     AudioMsg* msg = NULL;
+-    s32 lastInfo = 0;
++    // PW64: was s32, which sign-extends the (RDRAM window) pointer it holds.
++    AudioInfo* lastInfo = NULL;
+     OSScClient scClient;
+ 
+     osRecvMesg(&D_80261188, (OSMesg*)&msg, OS_MESG_BLOCK);
+@@ -200,7 +208,7 @@ STATIC_FUNC u32 __amHandleFrameMsg(AudioInfo* info, AudioInfo* previousInfo) {
+     s32 samplesLeft;
+ 
+     __clearAudioDMA();
+-    audioPtr = osVirtualToPhysical(info->data);
++    audioPtr = PW64_PTR(osVirtualToPhysical(info->data));
+     if (previousInfo != NULL) {
+         osAiSetNextBuffer(previousInfo->data, previousInfo->frameSamples << 2);
+     }
+@@ -220,10 +228,10 @@ STATIC_FUNC u32 __amHandleFrameMsg(AudioInfo* info, AudioInfo* previousInfo) {
+ 
+     task = &info->task;
+     task->list.t.data_ptr = (u64*)__am.ACMDList[curAcmdList];
+-    task->list.t.data_size = (acmdPtr - __am.ACMDList[curAcmdList]) * sizeof(Acmd);
++    task->list.t.data_size = (u32)((acmdPtr - __am.ACMDList[curAcmdList]) * sizeof(Acmd));
+     task->list.t.type = M_AUDTASK;
+     task->list.t.ucode_boot = (u64*)rspbootTextStart;
+-    task->list.t.ucode_boot_size = (u64*)((uintptr_t)rspbootTextEnd - (uintptr_t)rspbootTextStart);
++    task->list.t.ucode_boot_size = (u32)((uintptr_t)rspbootTextEnd - (uintptr_t)rspbootTextStart);
+     task->list.t.flags = 0;
+     task->list.t.ucode = (u64*)aspMainTextStart;
+     task->list.t.ucode_data = (u64*)aspMainDataStart;
+@@ -347,7 +355,8 @@ STATIC_FUNC void __clearAudioDMA(void) {
+     audFrameCt++;
+ }
+ 
+-void uvaManager_80204438(s32 arg0, void** arg1, u32* arg2, void** arg3) {
++// PW64: arg0 is a filesystem address (void*, see uvFileReadHeader); was s32.
++void uvaManager_80204438(void* arg0, void** arg1, u32* arg2, void** arg3) {
+     s32 temp_v0;
+     u32 var_v0;
+     u32 sp44;
+@@ -382,14 +391,14 @@ void uvaManager_80204518(s32 arg0) {
+     s32 pad;
+ 
+     uvaManager_80204438(gUVBlockOffsets.UVSX[arg0], &sp5C, &sp54, &sp58);
+-    bankFile = alHeapAlloc(&gAudioHeap, 1, SEGMENT_ROM_SIZE(audio_ctl));
+-    _uvMediaCopy(bankFile, SEGMENT_ROM_START(audio_ctl), SEGMENT_ROM_SIZE(audio_ctl));
+-    alBnkfNew(bankFile, SEGMENT_ROM_START(audio_tbl));
++    // PW64: copy + alBnkfNew (in-place offset patching of the BE, 4-byte
++    // pointer layout) replaced by a deserialiser into host-layout structs
++    // (native/src/pw64_audio_load.c).
++    bankFile = pw64_alBnkfLoad(SEGMENT_ROM_START(audio_ctl), (u32)SEGMENT_ROM_SIZE(audio_ctl),
++                               SEGMENT_ROM_START(audio_tbl));
+     gWaveTableBank = bankFile->bankArray[0];
+     alSeqpSetBank(gSeqPlayer, gWaveTableBank);
+-    bankFile = alHeapAlloc(&gAudioHeap, 1, sp54);
+-    _uvMediaCopy(bankFile, sp5C, sp54);
+-    alBnkfNew(bankFile, sp58);
++    bankFile = pw64_alBnkfLoad(sp5C, sp54, sp58);
+     gAudioSXBank = bankFile->bankArray[0];
+     gAudioSXInst = gAudioSXBank->instArray[0];
+     gSndVoiceTable = alHeapAlloc(&gAudioHeap, 1, gSndPlayer->maxSounds * 2);

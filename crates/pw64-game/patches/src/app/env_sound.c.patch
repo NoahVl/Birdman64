@@ -1,0 +1,20 @@
+--- a/src/app/env_sound.c
++++ b/src/app/env_sound.c
+@@ -16,6 +16,7 @@
+ #include "shadow.h"
+ #include "shuttle.h"
+ #include "snd.h"
++#include <pw64_rate.h>
+ 
+ typedef struct {
+     f32 unk0;
+@@ -242,7 +243,8 @@ void envSound_802E2A00(s32 eventType, void* arg1, s32 eventData) {
+         for (i = 0; i < esState->count; i++) {
+             emitter = &esState->emitters[i];
+             if (D_8034EF20 != 0) {
+-                uvEmitterSetVol(emitter->emitterId, uvEmitterGetVol(emitter->emitterId) * 0.95f);
++                // PW64 rate: fade `vol *= 0.95` was per frame -> per REF frame.
++                uvEmitterSetVol(emitter->emitterId, uvEmitterGetVol(emitter->emitterId) * pw64_decay(0.95f));
+             } else {
+                 if ((sp26C == emitter->unk6) || (emitter->unk6 == 0xA)) {
+                     switch (emitter->sndId) {

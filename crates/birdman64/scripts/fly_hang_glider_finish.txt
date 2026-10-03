@@ -1,0 +1,61 @@
+# PW64_INPUT_SCRIPT: fly_hang_glider.txt extended through the end of the
+# test: two photos (Z) on the way, then the scripted cliff crash, crash-cam
+# flow (~4.5 s) and A taps through the results pages (photos!).
+# Verifies: landing/crash -> results -> photo grid <-> single-photo view.
+# Run: PW64_MAX_RETRACES=4200 PW64_DUMP_FRAMES=... PW64_INPUT_SCRIPT=this
+1100 A      # title menu: Start game
++6
+1200 A      # file select: first file
++6
+1300 A      # vehicle & class: Beginner / Hang Glider
++6
+1400 A      # pilot select: Lark
++6
+1500 A      # class summary -> test briefing
++6
+1600 A      # briefing: Start
++6
+1750 stick -60,0   # bank left
+1800 Z             # photo 1
+1870               # level out
+1950 stick 0,-50   # nose up
+2020 Z             # photo 2
+2090
+2100 stick 60,0    # bank right
+2250
+2350 stick 0,50    # nose down
+2420
+2500               # level: glides into the cliff (base script: 9 m at 2700)
+# Results: menus only see a press on a rising edge (uvControllerButtonPress,
+# button & !prevButton), and the pad is polled every frame in flight/crash-cam
+# (app_entrypoint -> demo_80323020) but not during the results pre-loop or
+# the first 0.75 s of the menu. So press AND release (+6) every 100 retraces:
+# a held A gives one edge only, which the crash-cam eats if the crash is late.
+# Expected: results menu -> A: "Check which photo ?" grid -> A: single-photo
+# view -> A: grid again (cycles; phase depends on when the menu comes up).
+2900 A             # crash-cam flow -> results
++6
+3000 A
++6
+3100 A
++6
+3200 A
++6
+3300 A             # results: photo pages
++6
+3400 A
++6
+3500 A
++6
+3600 A
++6
+3700 A
++6
+3800 A
++6
+3900 A
++6
+4000 A
++6
+4100 A
++6

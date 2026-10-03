@@ -1,0 +1,19 @@
+--- a/src/libultra/audio/synthesizer.c
++++ b/src/libultra/audio/synthesizer.c
+@@ -124,10 +124,16 @@
+     /*
+      * build the parameter update list
+      */
++    /* PW64: the pool stride must fit the LARGEST param struct. Natively
++     * ALStartParamAlt is 40 bytes (8-byte `next` + an 8-aligned `wave`
++     * pointer) while ALParam is 32, so writing `update->wave` spilled into
++     * the next pool entry's `next` link. On the N64 both are 28 bytes. */
+-    params = alHeapAlloc(hp, c->maxUpdates, sizeof(ALParam));
++    params = alHeapAlloc(hp, c->maxUpdates, sizeof(ALStartParamAlt));
+     drvr->paramList = 0;
+     for (i = 0; i < c->maxUpdates; i++) {
+-        paramPtr= &params[i];
++        paramPtr = (ALParam *)((char *)params + i * sizeof(ALStartParamAlt));
+         paramPtr->next = drvr->paramList;
+         drvr->paramList = paramPtr;
+     }

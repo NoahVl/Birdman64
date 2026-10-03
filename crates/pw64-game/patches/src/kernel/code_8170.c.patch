@@ -1,0 +1,103 @@
+--- a/src/kernel/code_8170.c
++++ b/src/kernel/code_8170.c
+@@ -195,6 +195,21 @@ void func_80207630(f32 arg0, f32 arg1, f
+     *arg3 /= 360.0f;
+ }
+ 
++#ifdef PW64_NATIVE
++// PW64: the texture tint loops below (env time-of-day colouring, env.c
++// env_802E1C1C) read and write texels as u16, but texture images stay
++// big-endian in RAM (as the RDP reads them; pw64-gfx decodes them so). Swap
++// the 16-bit images (the u16 cases: fmt 4, and fmt 1/2 at 16 bits) to host
++// order around the loops. Without it dusk/night levels got rainbow noise.
++static void pw64_tint_swap16(s32 fmt, s32 bits, s32 size, void* img) {
++    if (fmt == 4 || ((fmt == 1 || fmt == 2) && bits == 16)) {
++        PW64_SWAP16(img, size / 2);
++    }
++}
++#else
++#define pw64_tint_swap16(fmt, bits, size, img)
++#endif
++
+ void func_802077BC(s32 arg0, s32 arg1, s32 arg2, void* arg3, f32 arg4, f32 arg5, f32 arg6, f32 arg7, f32 arg8, f32 arg9) {
+     u8* var_a0;
+     u16* var_a1;
+@@ -224,6 +239,7 @@ void func_802077BC(s32 arg0, s32 arg1, s
+         }
+     }
+ 
++    pw64_tint_swap16(arg0, arg1, arg2, arg3); // PW64: BE texels -> host
+     switch (arg0) {
+     case 4:
+         arg4 *= (1.0f - arg7) * 31.0f;
+@@ -298,6 +314,7 @@ void func_802077BC(s32 arg0, s32 arg1, s
+         }
+         break;
+     }
++    pw64_tint_swap16(arg0, arg1, arg2, arg3); // PW64: back to BE
+ }
+ 
+ void func_8020921C(s32 arg0, s32 arg1, s32 arg2, void* arg3, f32 arg4, f32 arg5, f32 arg6, f32 arg7, f32 arg8, f32 arg9) {
+@@ -319,6 +336,7 @@ void func_8020921C(s32 arg0, s32 arg1, s
+     f32 sp78;
+     s32 pad2[2];
+ 
++    pw64_tint_swap16(arg0, arg1, arg2, arg3); // PW64: BE texels -> host
+     switch (arg0) {
+     case 4:
+         var_s0 = arg3;
+@@ -397,6 +415,7 @@ void func_8020921C(s32 arg0, s32 arg1, s
+         }
+         break;
+     }
++    pw64_tint_swap16(arg0, arg1, arg2, arg3); // PW64: back to BE
+ }
+ 
+ void func_8020ABAC(Vtx* arg0, s32 arg1, f32 arg2, f32 arg3, f32 arg4, f32 arg5, f32 arg6, f32 arg7) {
+@@ -515,6 +534,7 @@ void func_8020B894(s32 arg0, s32 arg1, s
+             var_fv1 = arg6;
+         }
+     }
++    pw64_tint_swap16(arg0, arg1, arg2, arg3); // PW64: BE texels -> host
+     switch (arg0) {
+     case 4:
+         var_a1 = arg3;
+@@ -580,6 +600,7 @@ void func_8020B894(s32 arg0, s32 arg1, s
+         }
+         break;
+     }
++    pw64_tint_swap16(arg0, arg1, arg2, arg3); // PW64: back to BE
+ }
+ 
+ void func_8020D0D8(s32 arg0, s32 arg1, s32 arg2, void* arg3, f32 arg4, f32 arg5, f32 arg6) {
+@@ -597,6 +618,7 @@ void func_8020D0D8(s32 arg0, s32 arg1, s
+     f32 sp68;
+     s32 pad2[2];
+ 
++    pw64_tint_swap16(arg0, arg1, arg2, arg3); // PW64: BE texels -> host
+     switch (arg0) {
+     case 4:
+         var_s0 = arg3;
+@@ -665,6 +687,7 @@ void func_8020D0D8(s32 arg0, s32 arg1, s
+         }
+         break;
+     }
++    pw64_tint_swap16(arg0, arg1, arg2, arg3); // PW64: back to BE
+ }
+ 
+ void func_8020E760(Vtx* arg0, s32 arg1, f32 arg2, f32 arg3, f32 arg4) {
+@@ -1007,12 +1030,12 @@ u32 uvTerraGetPt(s32 terraId, f32 arg1,
+         _uvDebugPrintf("uvTerraGetPt: terra %d not defined for level\n", terraId);
+     }
+     if (func_80212FF4(uvtr, arg1, arg2, 0.0f, &sp94, &sp90, &sp8C, &sp6E, &sp76, 0) == 0) {
+-        return *surfaceId = NULL;
++        *surfaceId = NULL; return 0; // PW64: returned the pointer as u32 (always 0)
+     }
+     var_v0 = &uvtr->unk28[sp6E];
+     uvct = var_v0->unk40;
+     if (uvct == NULL) {
+-        return *surfaceId = NULL;
++        *surfaceId = NULL; return 0; // PW64: returned the pointer as u32 (always 0)
+     }
+ 
+     sp94 *= gGfxUnkPtrs->unk1608;

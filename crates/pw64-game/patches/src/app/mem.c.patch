@@ -1,0 +1,9 @@
+--- a/src/app/mem.c
++++ b/src/app/mem.c
+@@ -32,5 +32,5 @@ void mem_init(void) {
+ }
+ 
+ s32 mem_remaining(void) {
+-    return sLevelObjHeapPtr - &sLevelObjHeap[0];
++    return (s32)(sLevelObjHeapPtr - &sLevelObjHeap[0]);
+ }

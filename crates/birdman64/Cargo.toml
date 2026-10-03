@@ -1,0 +1,52 @@
+[package]
+name = "birdman64"
+description = "Birdman64: native PC port of Pilotwings 64"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Release build (`release.yml`): `windows_subsystem = "windows"`, i.e. no
+# console window for a double-clicked exe. Off by default: developers keep
+# stderr.
+gui-subsystem = []
+# Game C linked into the exe (dev default). Exactly one of static-game /
+# first-run: release builds use `--no-default-features --features first-run`.
+default = ["static-game"]
+static-game = ["pw64-game/static"]
+# Release: no decomp code in the exe; the game module is built on the
+# player's machine and loaded at runtime (docs/notes/first-run-build.md).
+first-run = ["pw64-game/dylib", "dep:pw64-cbuild"]
+
+[dependencies]
+pw64-game = { path = "../pw64-game", default-features = false }
+pw64-gfx = { path = "../pw64-gfx" }
+pw64-platform = { path = "../pw64-platform" }
+pw64-audio.workspace = true
+pw64-formats.workspace = true
+pw64-rom.workspace = true
+anyhow.workspace = true
+btleplug.workspace = true
+env_logger.workspace = true
+futures.workspace = true
+gilrs.workspace = true
+uuid.workspace = true
+# First-run ROM picker (rom_setup.rs): native dialog, no winit/wgpu coupling.
+rfd.workspace = true
+# first-run: fetch the decomp + build the game module (firstrun.rs).
+pw64-cbuild = { workspace = true, features = ["fetch"], optional = true }
+serde.workspace = true
+serde_json.workspace = true
+winit.workspace = true
+log.workspace = true
+png.workspace = true
+wgpu.workspace = true
+toml.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+resvg.workspace = true
+
+[build-dependencies]
+# Windows exe resource (pw64.rc: icon + VERSIONINFO; build.rs gates on the
+# target OS so Linux-target clippy/cross builds stay clean).
+embed-resource.workspace = true

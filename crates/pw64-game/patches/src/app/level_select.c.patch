@@ -1,0 +1,22 @@
+--- a/src/app/level_select.c
++++ b/src/app/level_select.c
+@@ -715,7 +715,15 @@
+     uvGfxBindTexture(GFX_STATE_TEXTURE_NONE);
+-    uvVtxRect(0, SUBSCREEN_Y0, SCREEN_WIDTH - 1, 0);
+-    uvVtxRect(0, SCREEN_HEIGHT - 1, SCREEN_WIDTH - 1, SUBSCREEN_Y1);
+-    uvVtxRect(0, SUBSCREEN_Y1, SUBSCREEN_X0, SUBSCREEN_Y0);
+-    uvVtxRect(SUBSCREEN_X1, SUBSCREEN_Y1, SCREEN_WIDTH - 1, SUBSCREEN_Y0);
++    // PW64: the class summary's own border bars (drawScreenBorder's four
++    // rects, inline here): fill screen shows the world in the bar
++    // rows/columns (pw64_widescreen.c); widescreen already shows it past
++    // the columns.
++    if (!pw64_fill_frame) {
++        uvVtxRect(0, SUBSCREEN_Y0, SCREEN_WIDTH - 1, 0);
++        uvVtxRect(0, SCREEN_HEIGHT - 1, SCREEN_WIDTH - 1, SUBSCREEN_Y1);
++        if (pw64_widescreen_aspect <= 0.0f) {
++            uvVtxRect(0, SUBSCREEN_Y1, SUBSCREEN_X0, SUBSCREEN_Y0);
++            uvVtxRect(SUBSCREEN_X1, SUBSCREEN_Y1, SCREEN_WIDTH - 1, SUBSCREEN_Y0);
++        }
++    }
+     func_803141E4();
+ }

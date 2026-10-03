@@ -1,0 +1,233 @@
+# PW64_INPUT_SCRIPT: title -> Birdman (Holiday Island, "TEST 1 Skywalk 1") -> flap A at
+# 5 presses/s for 20 s. Regression check for the birdman flap impulse (framerate.md,
+# birdman0.c birdMovementFrame): the altitude HUD must climb at every PW64_FPS (60, 144).
+# Verified 2026-10-02 (altitude HUD @2000/2300/2600/2900/3200/3400): 60 Hz
+# 104/97/160/249/340/398 m, 144 Hz 104/97/160/250/341/398 m.
+# Needs a save with Birdman unlocked (all main-vehicle Beginner tests >= silver +
+# all attempted): the crafted all-gold save from docs/notes/sweep.md "Cannonball bonus
+# game" (builder tmp/make_cannon_eep.py -> tmp/cannon.eep; never commit .eep files):
+#   PW64_EEP=<copy of tmp/cannon.eep>   (copy it: the game may rewrite the save)
+# Route: 3 stick-right taps; the third enters the bonus page on the Birdman row
+# (level_select.c func_8030EA54: right from column 2 at row 0 -> D_8034F7B8), A there
+# selects veh 6. Then pilot (Lark) -> test overview -> test details Start.
+# Format: <retrace|+delta> [A B Z START L R CU CD CL CR DU DD DL DR] [stick X,Y]
+1100 A            # title (menu up ~1000): Start game
++6
+1200 A            # file select: File 1
++6
+1310 stick 80,0   # tap right 1: hang glider -> rocket belt
+1330 stick 0,0
+1380 stick 80,0   # tap right 2: rocket belt -> gyrocopter
+1400 stick 0,0
+1430 stick 80,0   # tap right 3: -> bonus page, Birdman row
+1450 stick 0,0
+1520 A            # select Birdman -> pilot select
++6
+1680 A            # pilot select: Lark -> test overview
++6
+1820 A            # test overview -> test details
++6
+1960 A            # test details: Start -> flight starts ~2000 (airborne, gliding)
++6
+# Flap: A every 12 retraces (5/s at the 60 Hz retrace clock), 2100..3288, released +6.
+2100 A
++6
+2112 A
++6
+2124 A
++6
+2136 A
++6
+2148 A
++6
+2160 A
++6
+2172 A
++6
+2184 A
++6
+2196 A
++6
+2208 A
++6
+2220 A
++6
+2232 A
++6
+2244 A
++6
+2256 A
++6
+2268 A
++6
+2280 A
++6
+2292 A
++6
+2304 A
++6
+2316 A
++6
+2328 A
++6
+2340 A
++6
+2352 A
++6
+2364 A
++6
+2376 A
++6
+2388 A
++6
+2400 A
++6
+2412 A
++6
+2424 A
++6
+2436 A
++6
+2448 A
++6
+2460 A
++6
+2472 A
++6
+2484 A
++6
+2496 A
++6
+2508 A
++6
+2520 A
++6
+2532 A
++6
+2544 A
++6
+2556 A
++6
+2568 A
++6
+2580 A
++6
+2592 A
++6
+2604 A
++6
+2616 A
++6
+2628 A
++6
+2640 A
++6
+2652 A
++6
+2664 A
++6
+2676 A
++6
+2688 A
++6
+2700 A
++6
+2712 A
++6
+2724 A
++6
+2736 A
++6
+2748 A
++6
+2760 A
++6
+2772 A
++6
+2784 A
++6
+2796 A
++6
+2808 A
++6
+2820 A
++6
+2832 A
++6
+2844 A
++6
+2856 A
++6
+2868 A
++6
+2880 A
++6
+2892 A
++6
+2904 A
++6
+2916 A
++6
+2928 A
++6
+2940 A
++6
+2952 A
++6
+2964 A
++6
+2976 A
++6
+2988 A
++6
+3000 A
++6
+3012 A
++6
+3024 A
++6
+3036 A
++6
+3048 A
++6
+3060 A
++6
+3072 A
++6
+3084 A
++6
+3096 A
++6
+3108 A
++6
+3120 A
++6
+3132 A
++6
+3144 A
++6
+3156 A
++6
+3168 A
++6
+3180 A
++6
+3192 A
++6
+3204 A
++6
+3216 A
++6
+3228 A
++6
+3240 A
++6
+3252 A
++6
+3264 A
++6
+3276 A
++6
+3288 A
++6
+3400 stick 0,0    # idle; run to PW64_MAX_RETRACES=3400

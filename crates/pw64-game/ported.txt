@@ -1,0 +1,26 @@
+# Functions ported to Rust (crates/pw64-kernel), proven bit-identical by
+# crates/pw64-game/tests/kernel_diff.rs against the renamed C originals
+# (pw64_c_<name>). One name per line; build.rs finds the defining decomp
+# file and renames it there only. See docs/notes/rust-port.md.
+uvVec2Dot
+uvVec3Add
+uvVec3Copy
+uvVec3Cross
+uvVec3Dot
+uvVec3Len
+uvVec3Mul
+uvVec3Normal
+uvVec3ScalarProj
+uvMat4Copy
+uvMat4Mul
+uvMat4SetIdentity
+uvMat4CopyXYZ
+uvMat4MulBA
+uvMat4RotateAxis
+uvMat4LocalTranslate
+uvMat4Scale
+uvMat4InvertTranslationRotation
+uvMat4LocalToWorld
+uvMat4SetFrustrum
+uvMat4SetOrtho
+uvMat4SetQuaternionRotation

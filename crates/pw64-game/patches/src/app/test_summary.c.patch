@@ -1,0 +1,21 @@
+--- a/src/app/test_summary.c
++++ b/src/app/test_summary.c
+@@ -200,7 +200,8 @@ void func_8030C6A0(void) {
+     s16* sp6C;
+     s16* sp68;
+     s32 pad;
+-    s16 sp5C[3];
++    // PW64: textFmtInt writes dst[length] and dst[length + 1] (terminators).
++    s16 sp5C[3 + 2];
+     s32 sp58;
+     s32 var_v1;
+     s32 sp50;
+@@ -238,7 +239,7 @@ void func_8030C6A0(void) {
+     uvVtxEndPoly();
+     uvGfxClearFlags(GFX_STATE_AA);
+     func_803141E4();
+-    textFmtInt(sp5C, sp50, ARRAY_COUNT(sp5C));
++    textFmtInt(sp5C, sp50, 3);
+     uvSprtDraw(0);
+     uvSprtDraw(1);
+     uvFontSet(6);

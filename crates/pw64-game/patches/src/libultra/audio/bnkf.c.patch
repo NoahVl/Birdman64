@@ -1,0 +1,72 @@
+--- a/src/libultra/audio/bnkf.c
++++ b/src/libultra/audio/bnkf.c
+@@ -26,14 +26,17 @@
+  * ### when the file format settles down a little, I'll remove these
+  * ### for efficiency.
+  */
+-static  void _bnkfPatchBank(ALBank *bank, s32 offset, s32 table);
+-static  void _bnkfPatchInst(ALInstrument *i, s32 offset, s32 table);
+-static  void _bnkfPatchSound(ALSound *s, s32 offset, s32 table);
+-static  void _bnkfPatchWaveTable(ALWaveTable *w, s32 offset, s32 table);
++/* PW64: offsets/table were s32; `ptr + (s32)0x80xxxxxx` goes negative on a
++ * 64-bit host, so they are u32 (zero-extended). The in-place patching still
++ * assumes the N64 (4-byte pointer, BE) layout: replaced in Phase 5. */
++static  void _bnkfPatchBank(ALBank *bank, u32 offset, u32 table);
++static  void _bnkfPatchInst(ALInstrument *i, u32 offset, u32 table);
++static  void _bnkfPatchSound(ALSound *s, u32 offset, u32 table);
++static  void _bnkfPatchWaveTable(ALWaveTable *w, u32 offset, u32 table);
+ 
+ void alSeqFileNew(ALSeqFile *file, u8 *base)
+ {
+-    s32 offset = (s32) base;
++    u32 offset = PW64_U32(base);
+     s32 i;
+     
+     /*
+@@ -46,8 +49,8 @@ void alSeqFileNew(ALSeqFile *file, u8 *base)
+ 
+ void alBnkfNew(ALBankFile *file, u8 *table)
+ {
+-    s32 offset = (s32) file;
+-    s32 woffset = (s32) table;
++    u32 offset = PW64_U32(file);
++    u32 woffset = PW64_U32(table);
+     
+     s32 i;
+     
+@@ -66,7 +69,7 @@ void alBnkfNew(ALBankFile *file, u8 *table)
+     }
+ }
+ 
+-void _bnkfPatchBank(ALBank *bank, s32 offset, s32 table) 
++void _bnkfPatchBank(ALBank *bank, u32 offset, u32 table) 
+ {
+     s32 i;
+     
+@@ -88,7 +91,7 @@ void _bnkfPatchBank(ALBank *bank, s32 offset, s32 table)
+     }
+ }
+ 
+-void _bnkfPatchInst(ALInstrument *inst, s32 offset, s32 table)
++void _bnkfPatchInst(ALInstrument *inst, u32 offset, u32 table)
+ {
+     s32 i;
+ 
+@@ -105,7 +108,7 @@ void _bnkfPatchInst(ALInstrument *inst, s32 offset, s32 table)
+     }
+ }
+ 
+-void _bnkfPatchSound(ALSound *s, s32 offset, s32 table)
++void _bnkfPatchSound(ALSound *s, u32 offset, u32 table)
+ {
+     if (s->flags)
+         return;
+@@ -119,7 +122,7 @@ void _bnkfPatchSound(ALSound *s, s32 offset, s32 table)
+     _bnkfPatchWaveTable(s->wavetable, offset, table);
+ }
+ 
+-void _bnkfPatchWaveTable(ALWaveTable *w, s32 offset, s32 table)
++void _bnkfPatchWaveTable(ALWaveTable *w, u32 offset, u32 table)
+ {
+     if (w->flags)
+         return;

@@ -1,0 +1,24 @@
+--- a/src/app/falco.c
++++ b/src/app/falco.c
+@@ -17,6 +17,7 @@
+ #include "splash.h"
+ #include "task.h"
+ #include "text_data.h"
++#include <pw64_rate.h>
+ 
+ // .bss
+ f32 D_8035AF30;
+@@ -780,9 +781,11 @@ void falco_802E55A0(Falco* falco) {
+             var_fv0 = 1.0f;
+             break;
+         }
+-        falco->unkCC = (0.2f * var_fv0) + (0.8f * falco->unkCC);
++        // PW64 rate: low-pass `0.8 * x + 0.2 * target` was per frame -> per REF frame.
++        falco->unkCC = var_fv0 + (falco->unkCC - var_fv0) * pw64_decay(0.8f);
+     } else {
+-        falco->unkCC = (falco->unkCC * 0.8f) + 5.526f;
++        // PW64 rate: `x * 0.8 + 5.526` = low-pass toward 5.526 / 0.2, per REF frame.
++        falco->unkCC = (5.526f / 0.2f) + (falco->unkCC - (5.526f / 0.2f)) * pw64_decay(0.8f);
+     }
+     sp48.f[0] = falco->unk16C.m[3][0];
+     sp48.f[1] = falco->unk16C.m[3][1];

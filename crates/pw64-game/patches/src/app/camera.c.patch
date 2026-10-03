@@ -1,0 +1,38 @@
+--- a/src/app/camera.c
++++ b/src/app/camera.c
+@@ -11,6 +11,7 @@
+ #include "demo.h"
+ #include "environment.h"
+ #include "task.h"
++#include <pw64_rate.h>
+ 
+ // TODO: Unk802D472C_SP60 needs to be merged with some combination of Unk802D3658_Unk1224/8
+ typedef struct {
+@@ -245,10 +246,11 @@ STATIC_FUNC void camera_802D3790(Camera* camera) {
+             var_fv0 = -camera->unk1378;
+         }
+         temp_fv1_2 = camera->unk1380;
+-        if ((var_fv0 - temp_fv1_2) > 3.0f) {
+-            var_fv0 = temp_fv1_2 + 3.0f;
+-        } else if ((temp_fv1_2 - var_fv0) > 3.0f) {
+-            var_fv0 = temp_fv1_2 - 3.0f;
++        // PW64 rate: elevation rate limit was 3 deg per frame -> per REF frame.
++        if ((var_fv0 - temp_fv1_2) > 3.0f * pw64_scale()) {
++            var_fv0 = temp_fv1_2 + 3.0f * pw64_scale();
++        } else if ((temp_fv1_2 - var_fv0) > 3.0f * pw64_scale()) {
++            var_fv0 = temp_fv1_2 - 3.0f * pw64_scale();
+         }
+         camera->unk1380 = var_fv0;
+         spA4.z = (-uvSinF(var_fv0 * 0.0174533f) * camera->unk1374) + spBC.z; // almost DEG_TO_RAD(1)
+@@ -955,8 +957,9 @@ STATIC_FUNC void camera_802D559C(Camera* camera) {
+     uvMat4UnkOp6(&camera->unk108, &camera->unk80, &sp48);
+     temp_v0 = camera_802D472C(camera, &sp48);
+     if (temp_v0 != 0) {
+-        camera->unk210.z += 2.0f;
+-        sp48.m[3][2] += 2.0f;
++        // PW64 rate: rose 2 m per occluded frame -> per REF frame.
++        camera->unk210.z += 2.0f * pw64_scale();
++        sp48.m[3][2] += 2.0f * pw64_scale();
+         uvMat4UnkOp6(&camera->unk108, &camera->unk80, &sp48);
+     }
+ }

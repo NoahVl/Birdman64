@@ -1,0 +1,23 @@
+--- a/include/libultra/PR/os_convert.h
++++ b/include/libultra/PR/os_convert.h
+@@ -72,15 +72,16 @@ extern "C" {
+ 
+ /* OS_K?_TO_PHYSICAL macro bug fix for CodeWarrior */
+ #ifndef __MWERKS__
+-#define	OS_K0_TO_PHYSICAL(x)	(u32)(((char *)(x)-0x80000000))
+-#define	OS_K1_TO_PHYSICAL(x)	(u32)(((char *)(x)-0xa0000000))
++#define	OS_K0_TO_PHYSICAL(x)	(u32)(PW64_U32(x)-0x80000000)
++#define	OS_K1_TO_PHYSICAL(x)	(u32)(PW64_U32(x)-0xa0000000)
+ #else
+ #define	OS_K0_TO_PHYSICAL(x)	((char *)(x)-0x80000000)
+ #define	OS_K1_TO_PHYSICAL(x)	((char *)(x)-0xa0000000)
+ #endif
+ 
+-#define	OS_PHYSICAL_TO_K0(x)	(void *)(((u32)(x)+0x80000000))
+-#define	OS_PHYSICAL_TO_K1(x)	(void *)(((u32)(x)+0xa0000000))
++/* PW64: 32-bit (mod 2^32) arithmetic on host pointers < 4 GB, zero-extended. */
++#define	OS_PHYSICAL_TO_K0(x)	PW64_PTR(PW64_U32(x)+0x80000000)
++#define	OS_PHYSICAL_TO_K1(x)	PW64_PTR(PW64_U32(x)+0xa0000000)
+ 
+ 
+ /**************************************************************************

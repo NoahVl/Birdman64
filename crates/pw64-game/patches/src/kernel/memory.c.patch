@@ -1,0 +1,147 @@
+--- a/src/kernel/memory.c
++++ b/src/kernel/memory.c
+@@ -34,9 +34,16 @@ u32 D_802B892C;
+ u32 D_802B8930;
+ u32 D_802B8934;
+ 
++#ifdef PW64_NATIVE
++// PW64: linker symbols for fixed N64 RAM addresses (map: kernel_TEXT_START,
++// app_BSS_END). They bound RDRAM-window regions, so they must stay constants.
++#define kernel_TEXT_START (*(u8(*)[1])0x802000A0)
++#define D_803805E0 (*(u8*)0x803805E0)
++#else
+ extern u8 kernel_TEXT_START[];
+ 
+ extern u8 D_803805E0;
++#endif
+ 
+ void uvMemInitBlocks(void) {
+     D_802B8830[0].start = 0x800DA800;
+@@ -48,7 +55,7 @@ void uvMemInitBlocks(void) {
+     D_802B8830[3].start = 0x80000400;
+     D_802B8830[3].end = 0x800417DC;
+     D_802B8830[4].start = 0x80200000;
+-    D_802B8830[4].end = &D_803805E0;
++    D_802B8830[4].end = PW64_U32(&D_803805E0);
+     D_802B8830[5].start = 0x80000000;
+     D_802B8830[5].end = 0x80000400;
+     D_802B8820 = 6;
+@@ -143,7 +150,7 @@ void _uvMediaCopy(void* vAddr, void* devAddr, u32 nbytes) {
+ 
+     dst = vAddr;
+     src = devAddr;
+-    if ((u32)src & 0x80000000) {
++    if (PW64_U32(src) & 0x80000000) {
+         for (i = 0; (u32)i < nbytes; i++) {
+             dst[i] = src[i];
+         }
+@@ -158,26 +165,27 @@ void _uvMediaCopy(void* vAddr, void* devAddr, u32 nbytes) {
+     }
+ 
+     if (nbytes != 0) {
+-        if (((s32)src | (s32)dst | nbytes) & 1) {
++        if ((PW64_U32(src) | PW64_U32(dst) | nbytes) & 1) {
+             _uvDebugPrintf("Media copy src and dst && nbytes must be even\n");
+             // it appears the devs intended to cause a fault by storing to an unaligned address,
+             // but IDO outsmarted them and broke this into two `sb` instructions
+             *(u16*)(1) = 0;
+             return;
+         }
+-        if ((s32)dst & 7) {
+-            alignCeil = (u8*)((s32)(dst + 7) & ~7);
+-            alignDiff = alignCeil - dst;
++        if (PW64_U32(dst) & 7) {
++            // PW64: was (u8*)((s32)(dst + 7) & ~7), which sign-extends window addresses.
++            alignCeil = (u8*)PW64_PTR(PW64_U32(dst + 7) & ~7);
++            alignDiff = (s32)(alignCeil - dst);
+             if ((nbytes != (u32)alignDiff) != 0) {
+-                _uvDMA(alignCeil, src + alignDiff, nbytes - alignDiff);
++                _uvDMA(alignCeil, PW64_U32(src + alignDiff), nbytes - alignDiff);
+             }
+-            osPiReadIo(src, (u32*)&buf[0]);
+-            osPiReadIo(src + 4, (u32*)&buf[4]);
++            osPiReadIo(PW64_U32(src), (u32*)&buf[0]);
++            osPiReadIo(PW64_U32(src + 4), (u32*)&buf[4]);
+             for (i = 0; i < alignDiff && (u32)i < nbytes; i++) {
+                 dst[i] = buf[i];
+             }
+         } else {
+-            _uvDMA(dst, src, nbytes);
++            _uvDMA(dst, PW64_U32(src), nbytes);
+         }
+     }
+ }
+@@ -192,7 +200,7 @@ u64 uvMemRead(void* vAddr, u32 nbytes) {
+     if ((nbytes != 1) && (nbytes != 2) && (nbytes != 4) && (nbytes != 8)) {
+         _uvDebugPrintf("uvMemRead was called with an invalid size\n");
+         out = 0;
+-    } else if ((u32)src & 0x80000000) {
++    } else if (PW64_U32(src) & 0x80000000) {
+         out = src[0];
+         if (nbytes >= 2U) {
+             temp1 = out << 8;
+@@ -256,12 +264,13 @@ s32 _uvMemOverAlloc(u32 size, u32 alignment) {
+     }
+ }
+ 
+-s32 _uvMemAlloc(u32 size, u32 alignment) {
++// PW64: returns a pointer (see uv_memory.h); the heap bookkeeping stays u32.
++void* _uvMemAlloc(u32 size, u32 alignment) {
+     u32 alignedStart;
+ 
+     alignedStart = ((D_802B892C + alignment) - 1) & ~(alignment - 1);
+     if (D_802B8934 != 0) {
+-        return _uvMemOverAlloc(size, alignment);
++        return PW64_PTR(_uvMemOverAlloc(size, alignment));
+     }
+ 
+     if (func_8022A5F4(alignedStart, size) == 0) {
+@@ -275,13 +284,13 @@ s32 _uvMemAlloc(u32 size, u32 alignment) {
+         D_802B892C = D_802B8880->unk0;
+         D_802B8934 += size;
+         D_802B8828 = 0;
+-        return _uvMemOverAlloc(size, alignment);
++        return PW64_PTR(_uvMemOverAlloc(size, alignment));
+     }
+-    return alignedStart;
++    return PW64_PTR(alignedStart);
+ }
+ 
+ void _uvMemFreeScratch(void* addr) {
+-    switch ((u32)addr) {
++    switch (PW64_U32(addr)) {
+     case 0x803DA800:
+         D_802B8920[0] = 0;
+         break;
+@@ -303,11 +312,11 @@ void* _uvMemGetScratch(u32 size) {
+     } else {
+         // clang-format off:returns need to be on same line to match reordering
+         if (D_802B8920[0] == 0) {
+-            D_802B8920[0] = 1; return 0x803DA800;
++            D_802B8920[0] = 1; return PW64_PTR(0x803DA800);
+         } else if (D_802B8920[1] == 0) {
+-            D_802B8920[1] = 1; return 0x800DA800;
++            D_802B8920[1] = 1; return PW64_PTR(0x800DA800);
+         } else if (D_802B8920[2] == 0) {
+-            D_802B8920[2] = 1; return 0x80100000;
++            D_802B8920[2] = 1; return PW64_PTR(0x80100000);
+         } else {
+             _uvDebugPrintf("_uvMemGetScratch: all scratch areas are full\n", size);
+         }
+@@ -354,6 +363,8 @@ void uvLevelInit(void) {
+         switch (tag) {
+         case 'COMM':
+             _uvMediaCopy(&gUVBlockCounts, source, length);
++            // PW64: BE f32 + 16 u16.
++            PW64_SWAP(&gUVBlockCounts, 1, UVBlockCounts, "w 16h");
+             gLevelData.unk1608 = gUVBlockCounts.unk0;
+             break;
+         default:
+@@ -366,6 +377,6 @@ void uvLevelInit(void) {
+     }
+ }
+ 
+-s32 _uvMemAllocAlign8(u32 size) {
++void* _uvMemAllocAlign8(u32 size) {
+     return _uvMemAlloc(size, 8);
+ }

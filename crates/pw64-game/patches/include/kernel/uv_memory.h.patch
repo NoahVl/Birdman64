@@ -1,0 +1,22 @@
+--- a/include/kernel/uv_memory.h
++++ b/include/kernel/uv_memory.h
+@@ -83,7 +83,9 @@ void uvMemSet(void* vAddr, u8 value, u32 nbytes);
+ s32 uvMemCmp(u8* lhs, u8* rhs, u32 count);
+ 
+ s32 _uvMemOverAlloc(u32 size, u32 alignment);
+-s32 _uvMemAlloc(u32 size, u32 alignment);
++// PW64: the allocator returns window addresses (0x80xxxxxx) as s32; a host
++// pointer from a sign-extended s32 is wrong, so it returns a pointer instead.
++void* _uvMemAlloc(u32 size, u32 alignment);
+ 
+ void _uvMemGetBlocks(u32 arg0, u32 arg1);
+ 
+@@ -91,7 +93,7 @@ void _uvMemFreeScratch(void *addr);
+ void *_uvMemGetScratch(u32 size);
+ 
+ void uvLevelInit(void);
+-s32 _uvMemAllocAlign8(u32 size);
++void* _uvMemAllocAlign8(u32 size);
+ 
+ // read data from user (Pilotwings) file
+ // can request data be returned from dynamic allocation, scratch buffer, or ROM offset

@@ -1,0 +1,20 @@
+[package]
+name = "pw64-platform"
+description = "Native replacement for libultra and the other symbols the decomp C expects (exported as extern \"C\")"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+corosensei.workspace = true
+pw64-rom.workspace = true
+anyhow.workspace = true
+
+# Crash-tracer VEH (src/os/crash.rs) only; the low stacks declare their
+# Win32 imports directly so they can carry their own cfg gates.
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+# Linux: mmap for the fixed-address stacks, sigaction for the crash tracer.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

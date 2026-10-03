@@ -1,0 +1,20 @@
+--- a/src/kernel/anim.c
++++ b/src/kernel/anim.c
+@@ -31,6 +31,8 @@
+         case 'COMM':
+             temp1 = sp74;
++            // PW64: the record is read whole off the raw BE block; swap it in
++            // place (5 s32, s16 unk14, 2 pad = 0x18 bytes on both sides).
++            PW64_SWAP(temp1, 1, UnkCommStruct, "5w h 2b");
+             var_s3 = _uvMemAlloc(sizeof(ParsedUVAN), 4);
+             var_s3->modelId = temp1->modelId;
+@@ -52,6 +54,9 @@
+         case 'PART':
+             temp2 = sp74;
++            // PW64: swap the BE {count, unk4} header, then every 0x14-byte
++            // key {Vec4F, s16 frame, u16 MSB-first bitfield}. `sizeof(
++            // UnkPartStruct_Unk8)` is 0x14 on both sides (header patched).
++            pw64_swap(temp2, 1, 8, "2w");
++            pw64_swap((u8*)temp2 + 8, temp2->count, sizeof(UnkPartStruct_Unk8), "4w 2h");
+             temp_v0_3 = _uvMemAlloc(sizeof(ParsedUVAN_Unk0), 4);
+             if (var_s4 != NULL) {

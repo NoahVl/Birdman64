@@ -1,0 +1,41 @@
+# cargo-about configuration (release.yml: `cargo about generate about.hbs`
+# -> THIRD_PARTY_LICENSES.html): the licences of every Rust crate the
+# release binaries ship (pw64, pw64-game, pw64-platform, pw64-kernel and
+# their transitive deps).
+#
+# The decomp and its MIT licence are NOT here: the game C is not shipped
+# (it is downloaded and compiled on the player's machine; see
+# first-run-build.md). Its licence is mentioned in
+# packaging/DECOMP-LICENSE-NOTE.txt, which the zip ships alongside this file.
+#
+# SPDX identifiers we accept. A dependency with a different licence fails
+# the run (so a new crate cannot silently add a licence to the release);
+# add it here only after reading it. Priority order matters: Apache-2.0
+# beats MIT for dual-licensed crates (one text is enough).
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+
+# Targets we ship (dependency graph filtering; the macOS entries keep the
+# graph a superset so one file covers every platform).
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+
+# Built-in clarifications for crates that under- or mis-package their
+# licence info.
+workarounds = ["ring", "rustls"]
+
+# Our own crates are unpublished workspace members: not relevant for the
+# third-party list, but their licence is checked like any other.
+private = { ignore = false }

@@ -1,0 +1,11 @@
+--- a/src/libultra/audio/cseq.c
++++ b/src/libultra/audio/cseq.c
+@@ -49,7 +49,7 @@ void alCSeqNew(ALCSeq *seq, u8 *ptr)
+         {
+             flagTmp = 1 << i;
+             seq->validTracks |= flagTmp;
+-            seq->curLoc[i] = (u8*)((u32)ptr + tmpOff);
++            seq->curLoc[i] = (u8*)PW64_PTR(PW64_U32(ptr) + tmpOff);
+             seq->evtDeltaTicks[i] = __readVarLen(seq,i);
+             /*__alCSeqGetTrackEvent(seq,i); prime the event buffers  */
+         }

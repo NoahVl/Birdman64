@@ -1,0 +1,75 @@
+--- a/src/app/gyrocopter.c
++++ b/src/app/gyrocopter.c
+@@ -18,6 +18,13 @@
+ #include "app/code_66F70.h"
+ #include "app/code_9A960.h"
+ #include "app/code_B2900.h"
++#include <pw64_rate.h>
++
++// PW64 rate: hands-off level-flight trim (gcData->unk7C, func_80309090) counts
++// REF frames: fraction of the current one, and "unk7C was just set to 1 by
++// func_80308478" (its setup must run once, not every frame of that REF frame).
++static f32 sPw64GcTrimAcc;
++static s32 sPw64GcTrimFresh;
+ 
+ void func_80304738(GyrocopterData* gcData);
+ void func_80304B98(GyrocopterData* gcData);
+@@ -1573,6 +1580,8 @@ void func_80308478(GyrocopterData* gcData) {
+             (gcData->fuel > 0.0f)) {
+             if (gcData->unk7C == 0) {
+                 gcData->unk7C = 1;
++                sPw64GcTrimAcc = 0.0f; // PW64 rate
++                sPw64GcTrimFresh = TRUE;
+             }
+         } else {
+             gcData->unk7C = 0;
+@@ -1895,21 +1904,27 @@ void func_80309090(GyrocopterData* gcData) {
+     if ((gcData->unk6D == 0) && (gcData->unk6E == 0)) {
+         if (gcData->unk7C != 0) {
+             if (ABS_NOEQ(gcData->unk1AC.y) < 0.08f) {
+-                if (gcData->unk7C == 1) {
++                // PW64 rate: unk7C counted frames (blends over 50/100 frames = 50/100
++                // REF frames on the N64); it now counts REF frames, and the blends use
++                // the fractional count. `100 * dt` was the blend duration in seconds:
++                // 100 * REF_DT. The unk7C == 1 setup runs once per trigger.
++                if ((gcData->unk7C == 1) && sPw64GcTrimFresh) {
++                    sPw64GcTrimFresh = FALSE;
+                     gcData->unk80 = gcData->unk1AC.y;
+                     gcData->unk84 = gcData->unk1AC.z;
+-                    gcData->unk88 = (gcData->unk1AC.z + ((4.0f * sp4C.z) / (100.0f * D_8034F854))) * -0.5f;
++                    gcData->unk88 = (gcData->unk1AC.z + ((4.0f * sp4C.z) / (100.0f * PW64_REF_DT))) * -0.5f;
+                 } else if (gcData->unk7C > 100) {
+                     gcData->unk7C = 1;
++                    sPw64GcTrimAcc = 0.0f;
+                     gcData->unk80 = 0.0f;
+                     gcData->unk84 = 0.0f;
+-                    gcData->unk88 = (-2.0f * sp4C.z) / (100.0f * D_8034F854);
++                    gcData->unk88 = (-2.0f * sp4C.z) / (100.0f * PW64_REF_DT);
+                 }
+                 if (gcData->unk7C < 50.0f) {
+-                    temp_fv0 = gcData->unk7C / 50.0f;
++                    temp_fv0 = (gcData->unk7C + sPw64GcTrimAcc) / 50.0f;
+                     gcData->unk1AC.z = gcData->unk84 + ((gcData->unk88 - gcData->unk84) * temp_fv0);
+                 } else if (gcData->unk7C < 100) {
+-                    temp_fv0 = (1.0f - ((gcData->unk7C - 50.0f) / 50.0f));
++                    temp_fv0 = (1.0f - (((gcData->unk7C + sPw64GcTrimAcc) - 50.0f) / 50.0f));
+                     gcData->unk1AC.z = gcData->unk88 * temp_fv0;
+                 } else {
+                     gcData->unk1AC.y = 0.0f;
+@@ -1917,13 +1932,13 @@ void func_80309090(GyrocopterData* gcData) {
+                 }
+                 if (gcData->unk7C < 100) {
+                     if (gcData->unk80 > 0.0f) {
+-                        temp_fv0 = gcData->unk7C / 100.0f;
++                        temp_fv0 = (gcData->unk7C + sPw64GcTrimAcc) / 100.0f;
+                         gcData->unk1AC.y = gcData->unk80 * (1.0f - temp_fv0);
+                     }
+-                    gcData->unk7C++;
++                    gcData->unk7C += pw64_ticks(&sPw64GcTrimAcc);
+                 } else {
+                     if (ABS_NOEQ(gcData->unk190.z) > 0.00001f) {
+-                        gcData->unk7C++;
++                        gcData->unk7C += pw64_ticks(&sPw64GcTrimAcc);
+                     }
+                 }
+             }

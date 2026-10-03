@@ -1,0 +1,148 @@
+--- a/src/app/code_82B90.c
++++ b/src/app/code_82B90.c
+@@ -23,6 +23,7 @@
+ #include "app/code_66F70.h"
+ #include "app/code_9A960.h"
+ #include "app/code_D1ED0.h"
++#include <pw64_rate.h>
+ 
+ Unk802D3658_Unk111C D_80368C00;
+ Unk802D3658_Unk111C D_80368D08;
+@@ -687,7 +688,8 @@ void func_802FD114(JumbleHopperData* jhData) {
+ }
+ 
+ void func_802FD388(JumbleHopperData* jhData) {
+-    jhData->unk140.x -= (jhData->unk14 * FABS(jhData->unk14)) * 5.0;
++    // PW64 rate: 5 deg per frame while crouching/charging -> per REF frame.
++    jhData->unk140.x -= (jhData->unk14 * FABS(jhData->unk14)) * 5.0 * pw64_scale();
+ }
+ 
+ void func_802FD3E0(JumbleHopperData* jhData) {
+@@ -901,7 +903,7 @@ void func_802FDF8C(JumbleHopperData* jhData, f32 arg1) {
+     } else if (arg1 < -0.2f) {
+         arg1 = -0.2f;
+     }
+-    jhData->unk598 -= arg1 * 25.0f;
++    jhData->unk598 -= arg1 * 25.0f * pw64_scale(); // PW64 rate: was per frame (visual)
+ 
+     if (jhData->unk598 > 30.0f) {
+         jhData->unk598 = 30.0f;
+@@ -917,7 +919,7 @@ void func_802FE054(JumbleHopperData* jhData, f32 arg1) {
+     } else if (arg1 < -0.2f) {
+         arg1 = -0.2f;
+     }
+-    jhData->unk5A0 -= arg1 * 25.0f;
++    jhData->unk5A0 -= arg1 * 25.0f * pw64_scale(); // PW64 rate: was per frame (visual)
+ 
+     if (jhData->unk5A0 > 10.0f) {
+         jhData->unk5A0 = 10.0f;
+@@ -940,7 +942,7 @@ void func_802FE1A8(JumbleHopperData* jhData, f32 arg1) {
+     } else if (arg1 < -0.2f) {
+         arg1 = -0.2f;
+     }
+-    jhData->unk5A8 -= arg1 * 25.0f;
++    jhData->unk5A8 -= arg1 * 25.0f * pw64_scale(); // PW64 rate: was per frame (visual)
+ 
+     if (jhData->unk5A8 > 10.0f) {
+         jhData->unk5A8 = 10.0f;
+@@ -986,7 +988,7 @@ void func_802FE2FC(JumbleHopperData* jhData) {
+     if (jhData->unk548 > 360.0f) {
+         jhData->unk548 -= 360.0f;
+     }
+-    jhData->unk54C *= 0.95f;
++    jhData->unk54C *= pw64_decay(0.95f); // PW64 rate: was per frame (visual)
+     temp_fv1 = 50.0f;
+     temp_fa0 = (uvCosF(jhData->unk548 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk54C) + (-15.0f + (temp_fv1 * 0.5f));
+     func_802FBCA8(jhData, jhData->unk65A, temp_fa0, 'x');
+@@ -1011,10 +1013,10 @@ void func_802FE564(JumbleHopperData* jhData) {
+     }
+     if (jhData->unk55C != 0) {
+         var_fa1 = 235.0f;
+-        jhData->unk554 *= 0.995f;
++        jhData->unk554 *= pw64_decay(0.995f); // PW64 rate: was per frame (visual)
+     } else {
+         var_fa1 = 95.0f;
+-        jhData->unk554 *= 0.985f;
++        jhData->unk554 *= pw64_decay(0.985f); // PW64 rate: was per frame (visual)
+     }
+ 
+     jhData->unk5A0 = (uvCosF(jhData->unk550 * 0.0174533f) * (var_fa1 * 0.5f) * jhData->unk554) + (-85.0f + (var_fa1 * 0.5f));
+@@ -1051,10 +1053,10 @@ void func_802FE7A0(JumbleHopperData* jhData) {
+     }
+     if (jhData->unk56C != 0) {
+         var_fa1 = 235.0f;
+-        jhData->unk564 *= 0.995f;
++        jhData->unk564 *= pw64_decay(0.995f); // PW64 rate: was per frame (visual)
+     } else {
+         var_fa1 = 95.0f;
+-        jhData->unk564 *= 0.985f;
++        jhData->unk564 *= pw64_decay(0.985f); // PW64 rate: was per frame (visual)
+     }
+ 
+     jhData->unk5A8 = (uvCosF(jhData->unk560 * 0.0174533f) * (var_fa1 * 0.5f) * jhData->unk564) + (-85.0f + (var_fa1 * 0.5f));
+@@ -1078,7 +1080,7 @@ void func_802FE9DC(JumbleHopperData* jhData, f32 arg1) {
+     } else if (arg1 < -0.1f) {
+         arg1 = -0.1f;
+     }
+-    jhData->unk5CC += arg1 * 25.0f;
++    jhData->unk5CC += arg1 * 25.0f * pw64_scale(); // PW64 rate: was per frame (visual)
+ 
+     if (jhData->unk5CC > 15.0f) {
+         jhData->unk5CC = 15.0f;
+@@ -1096,7 +1098,7 @@ void func_802FEAD0(JumbleHopperData* jhData, f32 arg1) {
+     } else if (arg1 < -0.1f) {
+         arg1 = -0.1f;
+     }
+-    jhData->unk5D4 += arg1 * 25.0f;
++    jhData->unk5D4 += arg1 * 25.0f * pw64_scale(); // PW64 rate: was per frame (visual)
+ 
+     if (jhData->unk5D4 > 15.0f) {
+         jhData->unk5D4 = 15.0f;
+@@ -1119,19 +1121,19 @@ void func_802FEBC4(JumbleHopperData* jhData) {
+     }
+ 
+     if (jhData->unk57C == 3) {
+-        jhData->unk574 *= 0.99f * jhData->unk578;
++        jhData->unk574 *= pw64_decay(0.99f * jhData->unk578); // PW64 rate: was per frame (visual)
+         temp_fv1 = 145.0f;
+         jhData->unk5CC = (uvCosF(jhData->unk570 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk574) + (-55.0f + (temp_fv1 * 0.5f));
+     } else if (jhData->unk57C == 2) {
+-        jhData->unk574 *= 0.99f * jhData->unk578;
++        jhData->unk574 *= pw64_decay(0.99f * jhData->unk578); // PW64 rate: was per frame (visual)
+         temp_fv1 = 110.0f;
+         jhData->unk5CC = (uvCosF(jhData->unk570 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk574) + (-55.0f + (temp_fv1 * 0.5f));
+     } else if (jhData->unk57C == 1) {
+-        jhData->unk574 *= 0.985f * jhData->unk578;
++        jhData->unk574 *= pw64_decay(0.985f * jhData->unk578); // PW64 rate: was per frame (visual)
+         temp_fv1 = 80.0f;
+         jhData->unk5CC = (uvCosF(jhData->unk570 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk574) + (-45.0f + (temp_fv1 * 0.5f));
+     } else {
+-        jhData->unk574 *= 0.985f * jhData->unk578;
++        jhData->unk574 *= pw64_decay(0.985f * jhData->unk578); // PW64 rate: was per frame (visual)
+         temp_fv1 = 45.0f;
+         jhData->unk5CC = (uvCosF(jhData->unk570 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk574) + (-30.0f + (temp_fv1 * 0.5f));
+     }
+@@ -1163,19 +1165,19 @@ void func_802FEEC0(JumbleHopperData* jhData) {
+     }
+ 
+     if (jhData->unk58C == 3) {
+-        jhData->unk584 *= 0.99f * jhData->unk588;
++        jhData->unk584 *= pw64_decay(0.99f * jhData->unk588); // PW64 rate: was per frame (visual)
+         temp_fv1 = 145.0f;
+         jhData->unk5D4 = (uvCosF(jhData->unk580 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk584) + (-55.0f + (temp_fv1 * 0.5f));
+     } else if (jhData->unk58C == 2) {
+-        jhData->unk584 *= 0.99f * jhData->unk588;
++        jhData->unk584 *= pw64_decay(0.99f * jhData->unk588); // PW64 rate: was per frame (visual)
+         temp_fv1 = 110.0f;
+         jhData->unk5D4 = (uvCosF(jhData->unk580 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk584) + (-55.0f + (temp_fv1 * 0.5f));
+     } else if (jhData->unk58C == 1) {
+-        jhData->unk584 *= 0.985f * jhData->unk588;
++        jhData->unk584 *= pw64_decay(0.985f * jhData->unk588); // PW64 rate: was per frame (visual)
+         temp_fv1 = 80.0f;
+         jhData->unk5D4 = (uvCosF(jhData->unk580 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk584) + (-45.0f + (temp_fv1 * 0.5f));
+     } else {
+-        jhData->unk584 *= 0.985f * jhData->unk588;
++        jhData->unk584 *= pw64_decay(0.985f * jhData->unk588); // PW64 rate: was per frame (visual)
+         temp_fv1 = 45.0f;
+         jhData->unk5D4 = (uvCosF(jhData->unk580 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk584) + (-30.0f + (temp_fv1 * 0.5f));
+     }

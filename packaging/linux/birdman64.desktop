@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Birdman64
+Comment=A native port of Pilotwings 64
+Exec=birdman64
+Icon=birdman64
+Categories=Game;
+Terminal=false
+StartupWMClass=birdman64

@@ -1,0 +1,43 @@
+# Build output
+/target/
+
+# NEVER commit copyrighted game data (see CONTRIBUTING.md)
+/rom/
+/data/
+*.z64
+*.n64
+*.v64
+*.zip
+*.eep
+*.eep.tmp
+*.eep.bak
+
+# Scratch output (screenshots, traces, maps, disassembly — ROM-derived, never commit)
+/tmp/
+
+# Game data written next to a dev build (personal ROM path, saves, crash log)
+pw64.toml
+pw64.toml.new
+crash.log
+# First-run build cache of a dev run of the first-run flavour (decomp download, game module)
+/cache/
+# The project's C compiler (zig, T13), fetched by the get_zig example
+/tools/zig/
+
+# Dev-run marker (U14: crash detection)
+running.lock
+instance.lock
+
+# Markdown: only the community files and design notes below are part of the
+# repository; other .md files are local working notes.
+*.md
+!README.md
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!SECURITY.md
+!CHANGELOG.md
+!ROADMAP.md
+!.github/**/*.md
+!packaging/release-notes.md
+!packaging/linux/README.md
+!docs/notes/*.md

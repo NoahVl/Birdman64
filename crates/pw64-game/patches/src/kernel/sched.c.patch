@@ -1,0 +1,154 @@
+--- a/src/kernel/sched.c
++++ b/src/kernel/sched.c
+@@ -7,6 +7,14 @@
+ #define RSP_DONE_MSG 667
+ #define RDP_DONE_MSG 668
+ #define PRE_NMI_MSG 669
++/* PW64: host present tick (docs/notes/framerate.md "Design"): posted by the
++ * OS core at the display rate when one is set (pw64-platform os/vi.rs); the
++ * VI latches swaps there instead of at the retrace. */
++#define PW64_PRESENT_MSG 670
++static void _uvScHandlePresent(void);
++/* PW64: 1 while the scheduler runs _uvScHandleRetrace for a present tick
++ * (single thread: _uvScMain); it gates the retrace-only gates and the flip. */
++static s32 pw64_sc_present;
+ 
+ Unk802B92A0 D_802B8940[5];
+ Unk802B92A0 D_802B92A0[5];
+@@ -170,7 +178,12 @@
+ void _uvScDlistRecover(void) {
+     _uvDebugPrintf("Recovered from a bad display list\n");
+ 
+-    IO_WRITE(SP_STATUS_REG, 0x2902);
++    /* PW64: no RCP registers natively (IO_WRITE would hit the unmapped
++     * 0xA4040010); the HLE SP always completes tasks, so the recovery's
++     * effect here is just the done messages below. */
++    pw64_log("sc recover rsp/rdp70/6B/6C",
++             (gSchedRspStatus & 0xFF) | (gSchedRdpStatus << 8) | (D_802B9C6B << 16) |
++                 (D_802B9C6C << 24));
+     if (gSchedRspStatus != 0) {
+         osSendMesg(&gSchedInst.interruptQ, (OSMesg)RSP_DONE_MSG, OS_MESG_NOBLOCK);
+     }
+@@ -222,6 +235,8 @@
+     osSetEventMesg(OS_EVENT_DP, &sc->interruptQ, (OSMesg)RDP_DONE_MSG);
+     osSetEventMesg(OS_EVENT_PRENMI, &sc->interruptQ, (OSMesg)PRE_NMI_MSG);
+     osViSetEvent(&sc->interruptQ, (OSMesg)VIDEO_MSG, (u32)numFields);
++    /* PW64: present ticks (only posted when the host sets a present rate). */
++    pw64_present_set_event(&sc->interruptQ, (OSMesg)PW64_PRESENT_MSG);
+ 
+     osCreateThread(&sc->thread, 4, _uvScMain, (void*)sc, stack, priority);
+     osStartThread(&sc->thread);
+@@ -247,7 +262,7 @@
+     while (1) {
+         osRecvMesg(&gSchedInst.interruptQ, &msg, OS_MESG_BLOCK);
+ 
+-        switch ((int)msg) {
++        switch ((int)PW64_U32(msg)) {
+         case VIDEO_MSG:
+             _uvScHandleRetrace();
+             break;
+@@ -260,6 +275,9 @@
+         case PRE_NMI_MSG:
+             _uvScHandleNMI();
+             break;
++        case PW64_PRESENT_MSG:
++            _uvScHandlePresent();
++            break;
+         default:
+             _uvDebugPrintf("unknown sched interrupt mesg: 0x%x\n", msg);
+             break;
+@@ -273,6 +291,13 @@
+     OSScClient* var_s0;
+ 
+     msg = NULL;
++    /* PW64: a present tick shares the flip, cmdQ drain and gfx start below
++     * (no copied statements); the clock update and the timeout and audio
++     * gates that follow are retrace-only. */
++    if (pw64_sc_present != 0) {
++        if (gNmiAsserted != 0) {
++            return;
++        }
++        goto pw64_shared;
++    }
+     uvClkUpdate();
+     if (gNmiAsserted == 0) {
+         D_802B9C84 = 1;
+@@ -289,6 +314,9 @@
+         }
+         if (D_802B9C70 >= 51) {
+             _uvDebugPrintf("RSP timeout on %c, sending wakeup...\n", gSchedRspStatus);
++            /* PW64: trace which recovery path fires (packed state). */
++            pw64_log("sc RSP timeout rsp/6F/70",
++                     (gSchedRspStatus & 0xFF) | (D_802B9C6F << 8) | (D_802B9C70 << 16));
+             _uvScDlistRecover();
+             return;
+         }
+@@ -303,7 +331,10 @@
+             _uvDebugPrintf("_uvScHandleRetrace: audio still busy\n");
+             return;
+         }
++pw64_shared:
++        /* PW64: with present ticks the VI latched the swap at the tick, so
++         * a retrace must not flip while the present path owns the flip. */
+-        if (D_802B9C68 != 0) {
++        if ((D_802B9C68 != 0) && ((pw64_sc_present != 0) || !pw64_present_active())) {
+             D_802B9C68 = 0;
+             uvSc_8022C34C();
+             D_802B9C6E ^= 1;
+@@ -326,12 +357,21 @@
+         }
+ 
++        /* PW64: a present tick ends here: start the next gfx task only when
++         * the RSP is idle (an audio task taken above keeps waiting for the
++         * next retrace, exactly as before), then return; the audio start,
++         * yield handling and client notification below stay on the retrace. */
++        if (pw64_sc_present != 0) {
++            if ((gSchedRspStatus == 0) && (D_802B9C60[D_802B9C6E] != NULL)) {
++                _uvScRunGfx();
++            }
++            return;
++        }
+         if (D_802B9C58 != NULL) {
+             if (gSchedRspStatus == 'g') {
+                 if (D_802B9C6C != 0) {
+                     _uvDebugPrintf("_uvScHandleRetrace:  2nd yield\n");
+                 }
+                 if (D_802B9C6B != 0) {
+                     _uvDebugPrintf("_uvScHandleRetrace: gfx task didn't yield\n");
++                    /* PW64: trace which recovery path fires (packed state). */
++                    pw64_log("sc gfx no-yield rsp/6B/6C",
++                             (gSchedRspStatus & 0xFF) | (D_802B9C6B << 8) | (D_802B9C6C << 16));
+                     _uvScDlistRecover();
+                     return;
+                 }
+@@ -352,6 +392,29 @@
+     }
+ }
+ 
++/* PW64: the present tick (docs/notes/framerate.md "Present tick"): the OS
++ * core posts PW64_PRESENT_MSG at the display rate and the VI latches the
++ * pending swap there instead of at the retrace. This handler only sets
++ * pw64_sc_present and re-enters _uvScHandleRetrace, which shares its swap
++ * flip, cmdQ drain and RSP-idle gfx start with the retrace path while the
++ * clock update, RSP/RDP timeouts, audio-busy gate, audio start, yield
++ * handling and client notification stay retrace-only: no decomp statement
++ * is restated here (the release ships only our added lines as ops,
++ * first-run-build.md T16). The shared drain logs with the retrace's labels
++ * (also for an unknown task type at a tick: unreachable, only gfx and
++ * audio tasks are queued). An audio task taken at the tick is only stored;
++ * the next retrace starts it, exactly as before (it would have waited in
++ * cmdQ until then). A gfx task may start while one waits: the HLE finishes
++ * it before the next retrace is delivered (OS-core invariant,
++ * native-build.md §8), so that retrace finds the RSP idle and starts the
++ * audio task directly, never the yield path (D_802B9C6B). While audio runs
++ * (RSP 'a', e.g. retrace and tick delivered together), _uvScDoneAud starts
++ * the flipped-in task, as after a retrace. */
++static void _uvScHandlePresent(void) {
++    pw64_sc_present = 1;
++    _uvScHandleRetrace();
++    pw64_sc_present = 0;
++}
++
+ void _uvScHandleRSP(void) {
+     if (gSchedRspStatus == 0) {
+         _uvDebugPrintf("_uvScHandleRSP -- state error, should have been busy\n");

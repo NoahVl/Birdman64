@@ -1,0 +1,29 @@
+{{!-- THIRD_PARTY_LICENSES.html template (release.yml: cargo about generate
+about.hbs). One section per licence: the full text, then every shipped crate
+that uses it. --}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Birdman64 - third-party licences</title>
+<style>
+body { font-family: sans-serif; max-width: 60em; margin: 1em auto; padding: 0 1em; }
+.license-text { white-space: pre-wrap; border: 1px solid #ccc; padding: 1em; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>Birdman64 third-party licences</h1>
+<p>Birdman64 itself is MIT licensed (see LICENSE). This page lists the
+licences of the open-source crates compiled into its executables.</p>
+{{#each licenses}}
+<h2>{{name}}</h2>
+<p>Used by:</p>
+<ul>
+{{#each used_by}}
+<li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+{{/each}}
+</ul>
+<pre class="license-text">{{text}}</pre>
+{{/each}}
+</body>
+</html>

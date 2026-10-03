@@ -1,0 +1,14 @@
+--- a/src/app/code_A8C30.c
++++ b/src/app/code_A8C30.c
+@@ -259,7 +259,10 @@ void func_80321760(void) {
+     if (IS_MAIN_VEHICLE(sp3D4->veh)) {
+         i = (sp3D4->cls * 3) + sp3D4->veh;
+     } else {
+-        i = ((u8*)D_8034F980)[(sp3D4->cls + sp3D4->veh * 3) + 15];
++        // PW64: a byte table packed into the tail of an s32 array; take the
++        // byte IDO (big-endian) put at that offset, not the host-LE one.
++        i = (sp3D4->cls + sp3D4->veh * 3) + 15;
++        i = (u8)(D_8034F980[i / 4] >> (24 - 8 * (i % 4)));
+         D_8036D8E0 = 12.0f;
+     }
+     if (i > 11) {

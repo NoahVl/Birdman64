@@ -1,0 +1,258 @@
+--- a/src/kernel/texture.c
++++ b/src/kernel/texture.c
+@@ -9,6 +9,7 @@
+ #include <uv_sprite.h>
+ #include <uv_texture.h>
+ #include <segment_symbols.h>
++#include <libc/stddef.h> // PW64: offsetof for the ROM-layout copies
+ 
+ typedef struct {
+     u16 count;
+@@ -74,6 +75,8 @@ void uvMemInitBlockHdr(void) {
+ 
+     while ((tag = uvFileReadBlock(sp64, &sp5C, &src, 1)) != 0) {
+         if (tag == 'TABL') {
++            // PW64: BE {tag, size} pairs, in scratch RAM (read mode 1).
++            PW64_SWAP(src, sp5C / sizeof(UVBlockHeader), UVBlockHeader, "2w");
+             for (var_a1 = 0, var_a0 = (UVBlockHeader*)src; var_a1 < sp5C; var_a1 += 8, var_a0++) {
+                 switch (var_a0->tag) {
+                 case 0:
+@@ -378,7 +381,7 @@ void uvConsumeBytes(void* dst, u8** ptr, s32 size) {
+         *ptr += 2;
+         break;
+     case 4:
+-        *(s32*)dst = uvMemRead(*ptr, size);
++        *(s32*)dst = (s32)uvMemRead(*ptr, size);
+         *ptr += 4;
+         break;
+     default:
+@@ -410,7 +413,12 @@ ParsedUVEN* _uvParseUVEN(u8* src) {
+     }
+ 
+     uven = (ParsedUVEN*)_uvMemAlloc(sizeof(ParsedUVEN), 4);
+-    uvConsumeBytes(uven, &src, sizeof(ParsedUVEN));
++    // PW64: the ROM record is the N64 ParsedUVEN (0x3C bytes, 4-byte pointer
++    // slots at 0x30..). Copy only the data prefix (identical layout on the
++    // host), swap its two floats; the pointer/count slots are set below.
++    uvConsumeBytes(uven, &src, offsetof(ParsedUVEN, modelTable));
++    src += 0x3C - offsetof(ParsedUVEN, modelTable);
++    PW64_SWAP32(&uven->fogMin, 2);
+     uven->modelCount = modelCount;
+     uven->callback = 0;
+     uven->modelTable = (uven->modelCount) ? modelTable : NULL;
+@@ -478,6 +486,7 @@ ParsedUVMD* _uvParseUVMD(u8* src) {
+     uvConsumeBytes(&sp6E, &src, sizeof(sp6E));
+     vtxTable = (Vtx*)_uvMemAlloc(vtxCount * sizeof(Vtx), 8);
+     _uvMediaCopy(vtxTable, src, vtxCount * sizeof(Vtx));
++    PW64_SWAP(vtxTable, vtxCount, Vtx, "6h 4b"); // PW64: BE Vtx
+     src += vtxCount * sizeof(Vtx);
+     lodRadius = (f32*)_uvMemAlloc(lodCount * sizeof(f32), 4);
+     lodTable = (uvModelLOD*)_uvMemAlloc(lodCount * sizeof(uvModelLOD), 4);
+@@ -526,11 +535,17 @@ ParsedUVMD* _uvParseUVMD(u8* src) {
+ 
+     mtxTable = (Mtx4F*)_uvMemAlloc(mtxCount * sizeof(Mtx4F), 4);
+     uvConsumeBytes(mtxTable, &src, mtxCount * sizeof(Mtx4F));
++    PW64_SWAP(mtxTable, mtxCount, Mtx4F, "16w"); // PW64: BE f32[16]
+     if (sp7A) {
+         var_s6 = (UnkUVMD_24*)_uvMemAlloc(sp7A * sizeof(UnkUVMD_24), 4);
+ 
+         for (i = 0; i < sp7A; i++) {
+-            uvConsumeBytes(&var_s6[i], &src, sizeof(var_s6[i]));
++            // PW64: ROM records are the N64 layout (0x24 bytes, a 4-byte
++            // pointer slot unk20 at 0x20, set below). Copy the data prefix and
++            // swap it: u8 x3 + pad, f32 x6, u16 unk1C + pad.
++            uvConsumeBytes(&var_s6[i], &src, offsetof(UnkUVMD_24, unk20));
++            src += 0x24 - offsetof(UnkUVMD_24, unk20);
++            pw64_swap(&var_s6[i], 1, offsetof(UnkUVMD_24, unk20), "4b 6w h 2b");
+         }
+     } else {
+         var_s6 = NULL;
+@@ -632,10 +647,12 @@ ParsedUVCT* _uvParseUVCT(u8* src) {
+ 
+     vtxTable = (Vtx*)_uvMemAlloc(vtxCount * sizeof(Vtx), 8);
+     _uvMediaCopy(vtxTable, src, vtxCount * sizeof(Vtx));
++    PW64_SWAP(vtxTable, vtxCount, Vtx, "6h 4b"); // PW64: BE Vtx
+     src += vtxCount * sizeof(Vtx);
+ 
+     spA4 = (void*)_uvMemAlloc(sp8A * sizeof(Unk80225FBC_0x28_UnkC), 4);
+     _uvMediaCopy((void*)spA4, src, sp8A * sizeof(Unk80225FBC_0x28_UnkC));
++    PW64_SWAP(spA4, sp8A, Unk80225FBC_0x28_UnkC, "4h"); // PW64: BE u16[4]
+     src += sp8A * sizeof(Gfx);
+ 
+     sp98 = (UnkSobjDraw*)_uvMemAlloc(sp86 * sizeof(UnkSobjDraw), 4);
+@@ -644,6 +661,9 @@ ParsedUVCT* _uvParseUVCT(u8* src) {
+         uvConsumeBytes(&sp7B, &src, sizeof(sp7B));
+         tempSp98->unk4 = (void*)_uvMemAlloc(sp7B * sizeof(Mtx), 4);
+         uvConsumeBytes(tempSp98->unk4, &src, sp7B * sizeof(Mtx));
++        // PW64: the C accesses Mtx as u16 i[4][4], f[4][4] (Mtx_u,
++        // uv_matrix.h), so swap per u16: host Mtx = 32 host-order u16s.
++        PW64_SWAP(tempSp98->unk4, sp7B, Mtx, "32h");
+ 
+         uvConsumeBytes(&tempSp98->modelId, &src, sizeof(tempSp98->modelId));
+         uvConsumeBytes(&tempSp98->unk8, &src, sizeof(tempSp98->unk8));
+@@ -668,7 +688,7 @@ ParsedUVCT* _uvParseUVCT(u8* src) {
+             } else {
+                 uvConsumeBytes(&sp7A, &src, sizeof(sp7A));
+                 tempVtx = &vtxTable[elem & 0x3FFF];
+-                gSPVertex(&dlist[j], (u32)OS_PHYSICAL_TO_K0(tempVtx), ((sp7A & 0xF0) >> 4) + 1, sp7A & 0xF);
++                gSPVertex(&dlist[j], PW64_U32(OS_PHYSICAL_TO_K0(tempVtx)), ((sp7A & 0xF0) >> 4) + 1, sp7A & 0xF);
+             }
+         }
+ 
+@@ -760,6 +780,7 @@ ParsedUVTX* _uvExpandTexture(u8* src) {
+     dlist = (Gfx*)_uvMemAlloc(gfxCount * sizeof(Gfx), 8);
+ 
+     uvConsumeBytes(dlist, &src, gfxCount * sizeof(Gfx));
++    PW64_SWAP(dlist, gfxCount, Gfx, "2w"); // PW64: BE Gfx words
+ 
+     temp_v0 = (ParsedUVTX*)_uvMemAlloc(sizeof(ParsedUVTX), 4);
+     uvConsumeBytes(&temp_v0->width, &src, sizeof(temp_v0->width));
+@@ -800,16 +821,18 @@ ParsedUVTX* _uvExpandTexture(u8* src) {
+     var_a0 = 0;
+     temp_v0_2 = 0;
+ 
+-    temp_t0 = (u32)sp6C;
++    temp_t0 = PW64_U32(sp6C);
+     for (i = 0; i < gfxCount; i++) {
+         gfxCmd = &dlist[i];
+ 
+-        temp_v0_2 = gfxCmd->setimg.cmd;
++        // PW64: gbi.h's bitfields assume MSB-first allocation; the opcode is
++        // the top byte of w0.
++        temp_v0_2 = gfxCmd->words.w0 >> 24;
+         if (temp_v0_2 == G_SETTIMG) {
+             if (var_a0 == 0) {
+-                gfxCmd->setimg.dram |= (u32)OS_PHYSICAL_TO_K0(temp_t0);
++                gfxCmd->setimg.dram |= PW64_U32(OS_PHYSICAL_TO_K0(temp_t0));
+             } else {
+-                gfxCmd->setimg.dram |= (u32)OS_PHYSICAL_TO_K0(D_802B6E30[temp_v0->unk14]);
++                gfxCmd->setimg.dram |= PW64_U32(OS_PHYSICAL_TO_K0(D_802B6E30[temp_v0->unk14]));
+             }
+             var_a0++;
+         }
+@@ -853,6 +876,7 @@ ParsedUVLV* _uvExpandTextureCpy(u8* src) {
+         _uvDebugPrintf("bump up NLV_E\n");
+     }
+     _uvMediaCopy(level->terraIds, src, level->terraCount * sizeof(u16));
++    PW64_SWAP16(level->terraIds, level->terraCount); // PW64: BE u16 ids (same below)
+     src += level->terraCount * sizeof(u16);
+ 
+     uvConsumeBytes(&level->lightCount, &src, sizeof(level->lightCount));
+@@ -863,6 +887,7 @@ ParsedUVLV* _uvExpandTextureCpy(u8* src) {
+         _uvDebugPrintf("bump up NLV_E\n");
+     }
+     _uvMediaCopy(level->lightIds, src, level->lightCount * sizeof(u16));
++    PW64_SWAP16(level->lightIds, level->lightCount);
+     src += level->lightCount * sizeof(u16);
+ 
+     uvConsumeBytes(&level->environmentCount, &src, sizeof(level->environmentCount));
+@@ -873,6 +898,7 @@ ParsedUVLV* _uvExpandTextureCpy(u8* src) {
+         _uvDebugPrintf("bump up NLV_E\n");
+     }
+     _uvMediaCopy(level->environmentIds, src, level->environmentCount * sizeof(u16));
++    PW64_SWAP16(level->environmentIds, level->environmentCount);
+     src += level->environmentCount * sizeof(u16);
+ 
+     uvConsumeBytes(&level->modelCount, &src, sizeof(level->modelCount));
+@@ -883,6 +909,7 @@ ParsedUVLV* _uvExpandTextureCpy(u8* src) {
+         _uvDebugPrintf("bump up NLV_E\n");
+     }
+     _uvMediaCopy(level->modelIds, src, level->modelCount * sizeof(u16));
++    PW64_SWAP16(level->modelIds, level->modelCount);
+     src += level->modelCount * sizeof(u16);
+ 
+     uvConsumeBytes(&level->contourCount, &src, sizeof(level->contourCount));
+@@ -893,6 +920,7 @@ ParsedUVLV* _uvExpandTextureCpy(u8* src) {
+         _uvDebugPrintf("bump up NLV_E\n");
+     }
+     _uvMediaCopy(level->contourIds, src, level->contourCount * sizeof(u16));
++    PW64_SWAP16(level->contourIds, level->contourCount);
+     src += level->contourCount * sizeof(u16);
+ 
+     uvConsumeBytes(&level->textureCount, &src, sizeof(level->textureCount));
+@@ -903,6 +931,7 @@ ParsedUVLV* _uvExpandTextureCpy(u8* src) {
+         _uvDebugPrintf("bump up NLV_E\n");
+     }
+     _uvMediaCopy(level->textureIds, src, level->textureCount * sizeof(u16));
++    PW64_SWAP16(level->textureIds, level->textureCount);
+     src += level->textureCount * sizeof(u16);
+ 
+     uvConsumeBytes(&level->sequenceCount, &src, sizeof(level->sequenceCount));
+@@ -913,6 +942,7 @@ ParsedUVLV* _uvExpandTextureCpy(u8* src) {
+         _uvDebugPrintf("bump up NLV_E\n");
+     }
+     _uvMediaCopy(level->sequenceIds, src, level->sequenceCount * sizeof(u16));
++    PW64_SWAP16(level->sequenceIds, level->sequenceCount);
+     src += level->sequenceCount * sizeof(u16);
+ 
+     uvConsumeBytes(&level->animationCount, &src, sizeof(level->animationCount));
+@@ -923,6 +953,7 @@ ParsedUVLV* _uvExpandTextureCpy(u8* src) {
+         _uvDebugPrintf("bump up NLV_E\n");
+     }
+     _uvMediaCopy(level->animationIds, src, level->animationCount * sizeof(u16));
++    PW64_SWAP16(level->animationIds, level->animationCount);
+     src += level->animationCount * sizeof(u16);
+ 
+     uvConsumeBytes(&level->fontCount, &src, sizeof(level->fontCount));
+@@ -933,6 +964,7 @@ ParsedUVLV* _uvExpandTextureCpy(u8* src) {
+         _uvDebugPrintf("bump up NLV_E\n");
+     }
+     _uvMediaCopy(level->fontIds, src, level->fontCount * sizeof(u16));
++    PW64_SWAP16(level->fontIds, level->fontCount);
+     src += level->fontCount * sizeof(u16);
+ 
+     uvConsumeBytes(&level->blitCount, &src, sizeof(level->blitCount));
+@@ -943,6 +975,7 @@ ParsedUVLV* _uvExpandTextureCpy(u8* src) {
+         _uvDebugPrintf("bump up NLV_E\n");
+     }
+     _uvMediaCopy(level->blitIds, src, level->blitCount * sizeof(u16));
++    PW64_SWAP16(level->blitIds, level->blitCount);
+     src += level->blitCount * sizeof(u16);
+ 
+     return level;
+@@ -976,6 +1009,7 @@ ParsedUVTR* _uvParseUVTR(u8* src) {
+ 
+     temp_v0 = (ParsedUVTR*)_uvMemAlloc(sizeof(ParsedUVTR), 4);
+     uvConsumeBytes(&temp_v0->unk0, &src, sizeof(temp_v0->unk0));
++    PW64_SWAP(&temp_v0->unk0, 1, uvUnkTeraStruct, "6w"); // PW64: BE f32[6]
+     uvConsumeBytes(&temp_v0->unk18, &src, sizeof(temp_v0->unk18));
+     uvConsumeBytes(&temp_v0->unk19, &src, sizeof(temp_v0->unk19));
+     uvConsumeBytes(&temp_v0->unk1C, &src, sizeof(temp_v0->unk1C));
+@@ -991,6 +1025,7 @@ ParsedUVTR* _uvParseUVTR(u8* src) {
+             uvMemSet(ptr, 0, sizeof(uvUnkTileStruct));
+         } else {
+             uvConsumeBytes(&ptr->unk0, &src, sizeof(ptr->unk0));
++            PW64_SWAP(&ptr->unk0, 1, Mtx4F, "16w"); // PW64: BE f32[16]
+             uvConsumeBytes(&ptr->unk44, &src, sizeof(ptr->unk44));
+             uvConsumeBytes(&sp44, &src, sizeof(sp44));
+             ptr->unk40 = gLevelData.contours[sp44];
+@@ -1023,25 +1058,25 @@ ParsedUVBT* _uvParseUVBT(u8* src) {
+     remainder1 = 0;
+ 
+     _uvMediaCopy(&sp80, src, 4);
+-    sp80 >>= 32;
++    sp80 = __builtin_bswap32((u32)sp80); // PW64: was `>>= 32` (BE bytes into the u64's top half)
+     sp9A = (sp80 & 0xFFFF0000) >> 16;
+     sp98 = sp80;
+     src += 4;
+ 
+     _uvMediaCopy(&sp80, src, 4);
+-    sp80 >>= 32;
++    sp80 = __builtin_bswap32((u32)sp80); // PW64: was `>>= 32` (BE bytes into the u64's top half)
+     sp96 = (sp80 & 0xFFFF0000) >> 16;
+     sp94 = sp80;
+     src += 4;
+ 
+     _uvMediaCopy(&sp80, src, 4);
+-    sp80 >>= 32;
++    sp80 = __builtin_bswap32((u32)sp80); // PW64: was `>>= 32` (BE bytes into the u64's top half)
+     sp92 = (sp80 & 0xFFFF0000) >> 16;
+     sp90 = sp80;
+     src += 4;
+ 
+     _uvMediaCopy(&sp80, src, 4);
+-    sp80 >>= 32;
++    sp80 = __builtin_bswap32((u32)sp80); // PW64: was `>>= 32` (BE bytes into the u64's top half)
+     temp = (sp80 & 0xFFFF0000) >> 16;
+     // fake, probably used to assign sp8C here as well
+     sp8E = temp & 0xFFFF & 0xFFFF & 0xFFFF;

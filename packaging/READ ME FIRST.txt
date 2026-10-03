@@ -1,0 +1,25 @@
+READ ME FIRST - Birdman64
+
+PLAY: Birdman64 needs your own copy of the Pilotwings 64 (US) ROM: a
+.z64, .n64 or .v64 file, or a .zip containing one. It cannot give you
+one. Put the file next to Birdman64.exe and it is found automatically,
+or choose it when the game asks. Only the US version works.
+
+FIRST START: the game downloads the open-source code (about 1 MB) and
+builds it on your PC. This usually takes under a minute; next time the
+game starts right away.
+
+KEYS: move with W A S D. A = Space, B = Left Shift, Z = Z,
+Start = Enter. C buttons (camera): I J K L. F11 toggles fullscreen.
+
+SETTINGS: press Esc or F10 (pad: Select, Create or Capture). Changes
+save when you leave the settings screen.
+
+YOUR SAVES: by default they live in %APPDATA%\Birdman64
+(pw64.eep = progress, pw64.toml = settings, crash.log = bug reports)
+and the build cache in %LOCALAPPDATA%\Birdman64\cache. Updating does
+not lose them. To keep everything next to the exe instead, put an
+empty portable.txt file in the exe's folder.
+(Linux: ~/.local/share/birdman64 and ~/.cache/birdman64)
+
+PROBLEMS: see the Troubleshooting section of README.md, in this folder.

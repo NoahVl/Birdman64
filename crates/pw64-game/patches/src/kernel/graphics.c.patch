@@ -1,0 +1,59 @@
+--- a/src/kernel/graphics.c
++++ b/src/kernel/graphics.c
+@@ -102,9 +102,9 @@ void uvGfxInit(void) {
+     gGfxNumTxtLoads[0] = gGfxNumTxtLoads[1] = 0;
+     gGfxNumMtxLoads[0] = gGfxNumMtxLoads[1] = 0;
+     gGfxNumMtxLoadMults[0] = gGfxNumMtxLoadMults[1] = 0;
+-    gGfxFbPtrs[0] = 0x800DA800;
+-    gGfxFbPtrs[1] = 0x80100000;
+-    D_80299278 = 0x803DA800;
++    gGfxFbPtrs[0] = (u8*)0x800DA800;
++    gGfxFbPtrs[1] = (u8*)0x80100000;
++    D_80299278 = (u8*)0x803DA800;
+     gGfxFbIndex = 0;
+     gGfxDisplayListHead = gGfxDisplayListBase[gGfxFbIndex];
+     gGfxFbCurrPtr = gGfxFbPtrs[gGfxFbIndex];
+@@ -125,6 +125,7 @@ void uvGfxInit(void) {
+     gGfxTaskOutputBufferEnd = gGfxTaskOutputBufferStart + TASK_OUTPUT_BUFFER_SIZE;
+ }
+
+ void uvGfxBegin(void) {
++    pw64_fill_frame = 0;
+     if (gGfxBeginFlag == TRUE) {
+         _uvDebugPrintf("uvGfxBegin: 2 calls in a row.  Must call uvGfxEnd first\n");
+         return;
+@@ -577,7 +577,7 @@ void uvGfxEnd(void) {
+     gGfxBeginFlag = FALSE;
+     gDPFullSync(gGfxDisplayListHead++);
+     gSPEndDisplayList(gGfxDisplayListHead++);
+-    gGfxElementCount = (gGfxDisplayListHead - (gGfxDisplayListBase[gGfxFbIndex]));
++    gGfxElementCount = (s32)(gGfxDisplayListHead - (gGfxDisplayListBase[gGfxFbIndex]));
+ 
+     if (gGfxElementCount >= 4200) {
+         _uvDebugPrintf("display list overflow %d / %d\n", gGfxElementCount, 4200);
+@@ -592,7 +592,7 @@ void uvGfxEnd(void) {
+     task->t.type = M_GFXTASK;
+     task->t.flags = 0;
+     task->t.ucode_boot = (u64*)rspbootTextStart;
+-    task->t.ucode_boot_size = (uintptr_t)rspbootTextEnd - (uintptr_t)rspbootTextStart;
++    task->t.ucode_boot_size = (u32)((uintptr_t)rspbootTextEnd - (uintptr_t)rspbootTextStart);
+     task->t.ucode = (u64*)gspF3DEX_fifoTextStart;
+     task->t.ucode_data = (u64*)gspF3DEX_fifoDataStart;
+     task->t.ucode_size = SP_UCODE_SIZE;
+@@ -618,7 +618,7 @@ void uvGfxEnd(void) {
+     gGfxSyncNeeded = TRUE;
+     fb = gGfxFbPtrs[gGfxFbIndex ^ 1];
+     if (gGfxCallback != NULL) {
+-        gGfxCallback(fb, D_80299278);
++        gGfxCallback(fb, PW64_U32(D_80299278));
+         osWritebackDCache(fb, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(u16));
+     }
+     gGfxFrameTime[gGfxFbIndex] = (f32)uvClkGetSec(UV_CLKID_GFX);
+@@ -1131,4 +1131,7 @@ void uvCopyFrameBuf(s32 fb_id) {
+     src = gGfxFbPtrs[fb_id];
+     dst = gGfxFbPtrs[fb_id ^ 1];
+     _uvMediaCopy(dst, src, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(u16));
++    // Native: the HLE renderer keeps each framebuffer as a GPU target, not
++    // in RDRAM; copy those too (pw64-platform headless.rs, renderer.md).
++    pw64_fb_copy(PW64_U32(dst), PW64_U32(src));
+ }

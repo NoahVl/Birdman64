@@ -1,0 +1,27 @@
+--- a/include/kernel/uv_filesystem.h
++++ b/include/kernel/uv_filesystem.h
+@@ -7,8 +7,10 @@
+ typedef struct UnkPartStruct_Unk8 {
+     Vec4F unk0;
+     s16 unk10;
++    // PW64: IDO packs this u16 MSB-first (pw64-formats: format=(flags>>8)&7,
++    // flag=flags&0x800); MSVC packs LSB-first, so declare in reverse order.
++    u16 pad12_8 : 8;
++    u16 unk12_5 : 3;
++    u16 unk12_4 : 1;
++    u16 pad12_0 : 4;
+-    u16 pad12_0 : 4;
+-    u16 unk12_4 : 1;
+-    u16 unk12_5 : 3;
+-    u16 pad12_8 : 8;
+ } UnkPartStruct_Unk8; // size = 0x14
+@@ -49,7 +51,8 @@ typedef struct UnkCommStruct {
+     s16 unk14;
+ } UnkCommStruct;
+ 
+-s32 uvFileReadHeader(s32 addr);
++// PW64: `addr` is a RAM pointer or a ROM offset (bit 31 clear); was s32.
++s32 uvFileReadHeader(void* addr);
+ void uvFile_80223F30(s32 idx);
+ u32 uvFileGetCurLength(s32 idx);
+ u32 uvFileGetCurTag(s32 idx);

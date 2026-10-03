@@ -1,0 +1,12 @@
+[package]
+name = "pw64-rom"
+description = "Pilotwings 64 ROM loading, MIO0 decompression and UV filesystem parsing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+sha1_smol.workspace = true
+zip.workspace = true

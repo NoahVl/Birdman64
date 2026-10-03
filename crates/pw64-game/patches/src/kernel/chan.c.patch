@@ -1,0 +1,42 @@
+--- a/src/kernel/chan.c
++++ b/src/kernel/chan.c
+@@ -205,6 +205,13 @@
+     if (temp_s0->unk398 != NULL) {
+         temp_s0->unk398();
+     }
++    // PW64: widescreen culling depends on the viewport, which may be set
++    // after the frustum: refresh the planes for the current one, and mark
++    // the world view for the renderer (pw64_widescreen.c).
++    if (pw64_widescreen_aspect > 0.0f && temp_s0->unk1F8 != 0.0f) {
++        func_802061A0(temp_s0);
++    }
++    pw64_widescreen_tag(temp_s0, 1);
+     func_80206318(temp_s0);
+     uvGfxMtxProj(temp_s0->unk50);
+     uvGfxPushMtxUnk(&temp_s0->unk190);
+@@ -259,7 +266,7 @@
+         if (spC0 < uvtr->unk24) {
+             spC0 = 1e11f;
+         }
+-        uvChan_80204C94(temp_s0 - D_80261730, spBC * temp_fv1, spB8 * temp_fv1, spB4 * temp_fv1, spB0 * temp_fv1, spAC * temp_fv1, spA8);
++        uvChan_80204C94((s32)(temp_s0 - D_80261730), spBC * temp_fv1, spB8 * temp_fv1, spB4 * temp_fv1, spB0 * temp_fv1, spAC * temp_fv1, spA8);
+         uvGfxMtxProj(temp_s0->unk50);
+         uvTerra_8022EE90(temp_s0, uvtr, spC0);
+         uvGfxSetFogFactor(0.0f);
+@@ -269,7 +276,7 @@
+         uvChan_80205CE4(temp_s0, 1, spC0 - uvtr->unk24, 1e12f);
+         uvGfxResetState();
+         uvGfx_80222A98();
+-        uvChan_80204C94(temp_s0 - D_80261730, spBC, spB8, spB4, spB0, spAC, spA8);
++        uvChan_80204C94((s32)(temp_s0 - D_80261730), spBC, spB8, spB4, spB0, spAC, spA8);
+         uvGfxMtxProj(temp_s0->unk50);
+         uvTerra_8022EFB4(temp_s0, uvtr, spC0);
+         if (spA0 != D_80263058) {
+@@ -292,6 +299,7 @@
+     if (temp_s0->unk39C != NULL) {
+         temp_s0->unk39C();
+     }
++    pw64_widescreen_tag(temp_s0, 0);
+ }
+ 
+ void uvChan_80205724(s32 arg0, s32 arg1, Mtx4F* arg2) {

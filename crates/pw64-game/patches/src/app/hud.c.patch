@@ -1,0 +1,205 @@
+--- a/src/app/hud.c
++++ b/src/app/hud.c
+@@ -19,9 +19,12 @@
+ #include "task.h"
+ #include "text_data.h"
+ #include "thermals.h"
++#include <pw64_rate.h>
+ 
+ // number of frames to render for camera shutter animation
+ #define CAMERA_SHUTTER_FRAMES 3
++// PW64 rate: fraction of a REF frame of the shutter countdown.
++static f32 sPw64ShutterAcc;
+ 
+ // hang glider speeds below this value will be highlighted larger red/amber font
+ #define HIGHLIGHT_SPEED_BELOW 36
+@@ -246,6 +249,7 @@ void hudMainRender(void) {
+ 
+     hud = &sHudState;
+     if ((hud->renderFlags & HUD_RENDER_DISABLE) == 0x0) {
++        pw64_hud_tag(1); // PW64: flight-HUD bracket (OLED care)
+         if ((hud->unkC50 != 0.0f) && (hud->unkC54 < sHudState.unk14)) {
+             hud->unkC5C = !hud->unkC5C;
+             hud->unkC54 = (1.0f / hud->unkC50) + sHudState.unk14;
+@@ -308,6 +312,7 @@ void hudMainRender(void) {
+             } else if (sHudState.renderFlags & HUD_RENDER_BIRDMAN) {
+                 hudDrawBirdman(&sHudState);
+             }
++            pw64_hud_set_anchor('C'); // PW64: centred messages (widescreen)
+             hudDrawLowFuel(&sHudState);
+             hudDrawStartText(&sHudState);
+             if (sHudState.showController != 0) {
+@@ -317,6 +322,8 @@ void hudMainRender(void) {
+         sHudState.unkC++;
+         sHudState.unk14 += D_8034F854;
+         uvFontGenDlist();
++        pw64_hud_set_anchor('C'); // PW64: end of the anchored HUD
++        pw64_hud_tag(0);          // PW64: end of the flight-HUD bracket
+         uvGfxMtxViewPop();
+     }
+ }
+@@ -375,6 +382,7 @@ void hudDrawCannonball(HUDState* arg0) {
+     s32 pad3;
+ 
+     if (arg0->speed == 0.0f) {
++        pw64_hud_set_anchor2('L', 'B'); // PW64: power gauge + shots (widescreen)
+         uvGfxStatePush();
+         uvGfxSetFlags(GFX_STATE_XLU);
+         uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER);
+@@ -436,6 +444,7 @@ void hudDrawCannonball(HUDState* arg0) {
+             uvVtxEndPoly();
+             uvGfxStatePop();
+         }
++        pw64_hud_set_anchor2('C', 'B'); // PW64: heading bar
+         uvGfxStatePush();
+         uvGfxSetFlags(GFX_STATE_XLU);
+         uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER);
+@@ -572,6 +581,7 @@ void hudDrawCannonball(HUDState* arg0) {
+         uvVtx(156, 29, 0, 0, 0, 255, 0, 0, 255);
+         uvVtxEndPoly();
+         uvGfxStatePop();
++        pw64_hud_set_anchor2('R', 'B'); // PW64: elevation gauge
+         uvGfxStatePush();
+         uvGfxSetFlags(GFX_STATE_XLU);
+         uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER);
+@@ -686,6 +696,7 @@ void hudDrawBirdman(HUDState* hud) {
+ }
+ 
+ void hudDrawCamera(HUDState* hud) {
++    pw64_hud_set_anchor('C'); // PW64: stays centred (widescreen)
+     s32 x;
+ 
+     if (hud->cameraState & HUD_CAM_RENDER_RETICLE) {
+@@ -703,6 +714,7 @@ void hudDrawCamera(HUDState* hud) {
+         }
+     } else if (hud->cameraState & HUD_CAM_RENDER_SHUTTER) {
+         hud->cameraState = CAMERA_SHUTTER_FRAMES; // state now means # frames to render shutter
++        sPw64ShutterAcc = 0.0f;                   // PW64 rate
+     } else if (hud->cameraState != 0) {
+         // field is count down for rendering black rects for shutter
+         if (hud->cameraState != 0) {
+@@ -711,9 +723,23 @@ void hudDrawCamera(HUDState* hud) {
+             x = hud->cameraState * (240 / CAMERA_SHUTTER_FRAMES);
+         }
+         uvGfxBindTexture(GFX_STATE_TEXTURE_NONE);
+-        uvVtxRect(0, SCREEN_HEIGHT - 1, x, 0);
+-        uvVtxRect(SCREEN_WIDTH - 1 - x, SCREEN_HEIGHT - 1, SCREEN_WIDTH - 1, 0);
+-        hud->cameraState--;
++        // PW64 widescreen: each bar is anchored to its wide edge and grows to
++        // half the output width (240 * aspect N64 px), so the bars still meet.
++        if (pw64_widescreen_aspect > 4.0f / 3.0f) {
++            x = (s32)(x * pw64_widescreen_aspect * 0.75f);
++        }
++        pw64_hud_set_anchor('L');
++        // PW64 fill screen: the shutter must cover row 0 too (the world
++        // shows through the letterbox rows it would otherwise leave open).
++        uvVtxRect(0, pw64_fill_screen ? SCREEN_HEIGHT : SCREEN_HEIGHT - 1, x, 0);
++        pw64_hud_set_anchor('R');
++        uvVtxRect(SCREEN_WIDTH - 1 - x, pw64_fill_screen ? SCREEN_HEIGHT : SCREEN_HEIGHT - 1, SCREEN_WIDTH - 1, 0);
++        // PW64 rate: the shutter lasted CAMERA_SHUTTER_FRAMES frames -> REF frames.
++        // Never below 0: the high bits are the HUD_CAM_RENDER_* flags.
++        hud->cameraState -= pw64_ticks(&sPw64ShutterAcc);
++        if (hud->cameraState < 0) {
++            hud->cameraState = 0;
++        }
+         D_8034F914 = 0;
+     }
+ }
+@@ -918,6 +944,7 @@ void hud_8031A8E0(s32 idx) {
+ }
+ 
+ void hudDrawThrottle(s32 x, s32 y, f32 power) {
++    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
+     Mtx4F rot;
+     UNUSED s16* fakePtr;
+     s16 y1;
+@@ -979,6 +1006,7 @@ void hudDrawThrottle(s32 x, s32 y, f32 power) {
+ }
+ 
+ void hudDrawRadar(s32 x, s32 y, f32 xOff, f32 yOff, f32 heading, f32 pitch, HUDRadar* radar) {
++    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
+     Mtx4F sp108;
+     Mtx4F spC8;
+     f32 temp_fa0;
+@@ -1188,14 +1216,15 @@ void hudDrawRadar(s32 x, s32 y, f32 xOff, f32 yOff, f32 heading, f32 pitch, HUDR
+         }
+ 
+         temp_fv0_3 = radar->waypoints[idx].z - heading;
++        // PW64 rate: blink alpha stepped 50 per frame -> per REF frame.
+         if (radar->waypoints[idx].unk14 > 0) {
+-            radar->waypoints[idx].unk18 -= 50;
++            radar->waypoints[idx].unk18 -= (s32)(50.0f * pw64_scale() + 0.5f);
+             if (radar->waypoints[idx].unk18 < 0) {
+                 radar->waypoints[idx].unk14 = -1;
+                 radar->waypoints[idx].unk18 = 0;
+             }
+         } else if (radar->waypoints[idx].unk14 < 0) {
+-            radar->waypoints[idx].unk18 += 50;
++            radar->waypoints[idx].unk18 += (s32)(50.0f * pw64_scale() + 0.5f);
+             if (radar->waypoints[idx].unk18 > 0xFF) {
+                 radar->waypoints[idx].unk14 = 1;
+                 radar->waypoints[idx].unk18 = 0xFF;
+@@ -1243,6 +1272,7 @@ void hudDemoContButton(s32 spriteId, s32 x, s32 y) {
+ }
+ 
+ void hudDemoController(void) {
++    pw64_hud_set_anchor2('L', 'B'); // PW64: widescreen HUD edge anchor
+     s32 screenX;
+     s32 screenY;
+     f32 stickX;
+@@ -1299,6 +1329,7 @@ void hudDemoController(void) {
+ }
+ 
+ void hudDrawSpeed(s32 x, s32 y, s32 speed, s32 highlightLowSpeed) {
++    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
+     char str[12];
+     s32 numX;
+ 
+@@ -1327,6 +1358,7 @@ void hudDrawSpeed(s32 x, s32 y, s32 speed, s32 highlightLowSpeed) {
+ }
+ 
+ void hudDrawFuel(s32 x, s32 y, f32 fuel) {
++    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
+     s16 curX1;
+     s16 curX2;
+     s16 curY1;
+@@ -1415,6 +1447,7 @@ void hudDrawFuel(s32 x, s32 y, f32 fuel) {
+ }
+ 
+ void hudDrawAltimeter(s32 x, s32 y, s32 altitude) {
++    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
+     s32 pad32;
+     s16 sp72;
+     s16 pad16;
+@@ -1534,6 +1567,7 @@ void hudDrawAltimeter(s32 x, s32 y, s32 altitude) {
+ }
+ 
+ void hudSeaLevel(s32 x, s32 y, s32 alt) {
++    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
+     char str[12];
+ 
+     y += 8;
+@@ -1561,6 +1595,7 @@ void hudSeaLevel(s32 x, s32 y, s32 alt) {
+ }
+ 
+ void hudDrawTimer(s32 x, s32 y, f32 timeSecF) {
++    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
+     static s32 D_8034F938 = 0;
+     s32 timeMs;
+     s32 timeSec;
+@@ -1613,6 +1648,7 @@ void hudDrawTimer(s32 x, s32 y, f32 timeSecF) {
+ }
+ 
+ void hudDrawAimReticle(s32 x, s32 y, s32 flag) {
++    pw64_hud_set_anchor('C'); // PW64: stays centred (widescreen)
+     s16 centerX;
+     s16 centerY;
+ 
+@@ -2055,6 +2091,7 @@ void hudDrawRect(s32 x, s32 y, s32 width, s32 height, s32 penWidth, u8 r, u8 g,
+ }
+ 
+ void hudDrawPhotoCount(void) {
++    pw64_hud_set_anchor2('C', 'B'); // PW64: stays centred (widescreen)
+     char str[12];
+     (void)snapGetPhotoCount();
+     uvFontSet(8);

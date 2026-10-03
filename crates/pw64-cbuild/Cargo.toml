@@ -1,0 +1,34 @@
+[package]
+name = "pw64-cbuild"
+description = "Build-time helpers shared by pw64-game's build.rs and the first-run game-module builder: compiler flags, patch formats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# First-run decomp download (fetch.rs): ureq + rustls + zip. Build scripts
+# (pw64-game build.rs) don't need it; the builder example and T9 do.
+fetch = ["dep:ureq", "dep:zip"]
+
+[dependencies]
+# Decomp manifest (manifest.rs): per-file sha256 of the decomp sources,
+# CR stripped (our checkout may be CRLF, the downloaded archive is LF); also
+# the build key hash in build.rs.
+sha2 = { workspace = true }
+# Feature `fetch`: the codeload zip archive.
+zip = { workspace = true, optional = true }
+ureq = { workspace = true, optional = true }
+
+[build-dependencies]
+# kit.bin is hashed into the ABI string (kit::abi, T10).
+sha2 = { workspace = true }
+
+[[example]]
+# Needs the network fetch types (`--fetch`); --decomp-dir alone is build code.
+name = "build_module"
+required-features = ["fetch"]
+
+[[example]]
+# T13: zig download + sha256 check into tools/zig/ (dev + CI).
+name = "get_zig"
+required-features = ["fetch"]

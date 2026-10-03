@@ -1,0 +1,35 @@
+--- a/src/app/hang_glider2.c
++++ b/src/app/hang_glider2.c
+@@ -15,6 +15,10 @@
+ #include "snd.h"
+ #include "task.h"
+ #include "text_data.h"
++#include <pw64_rate.h>
++
++// PW64 rate: fraction of a REF frame for the hgData->unk90 contact counter.
++static f32 sPw64HgContactAcc;
+ 
+ typedef struct {
+     Vec2F unk0[23];
+@@ -354,7 +358,9 @@
+     if (hgData->unk18C.x < 0.0f) {
+         var_fa1 = -var_fa1;
+     }
+-    hgData->unk1D8 -= 0.005f * var_fa1;
++    // PW64 rate: sideslip yaw-rate change applied once per frame without dt
++    // (the rate is integrated with dt afterwards): per REF frame instead.
++    hgData->unk1D8 -= 0.005f * var_fa1 * pw64_scale();
+ }
+ 
+ STATIC_FUNC void hangGlider_802F2F94(HangGliderData* hgData) {
+@@ -709,7 +715,9 @@
+                 func_802DC1DC(&hgData->unk1DC, &temp_s1->unk28, &sp24C, 4.0f * sp244, 1.2f * sp244, 2.0f * sp244);
+                 func_802DC074(&hgData->unk14C, &hgData->unk18C, &hgData->unk1A4, &temp_s1->unk34, sp248);
+                 if (D_8034F850 > 2.0f) {
+-                    hgData->unk90++;
++                    // PW64 rate: +1 per contact per frame, crash at 91 (~3 s of
++                    // scraping on the N64, 0.6 s at 144 Hz): count REF frames.
++                    hgData->unk90 += pw64_ticks(&sPw64HgContactAcc);
+                 }
+                 if (hgData->unk90 >= 91) {
+                     hgData->unk8C = 2;

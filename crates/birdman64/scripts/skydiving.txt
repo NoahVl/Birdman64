@@ -1,0 +1,34 @@
+# PW64_INPUT_SCRIPT: title -> sky diving bonus game (crafted save, tmp/cannon.eep).
+# Route: title -> FILE_MENU -> VEHICLE_CLASS_SELECT (3 stick-rights onto the
+# bonus page, 2 stick-ups to row 1 = sky diving) -> PILOT_SELECT -> TEST_OVERVIEW
+# -> TEST_DETAILS ("TEST 1 Sky Dive", Start highlighted) -> TEST_SETUP (shared
+# double-clear + levelLoad, game.c gameUpdateStateTestSetup) -> TEST_UPDATE
+# freefall with the rings HUD (hud.c HUD_RENDER_SKYDIVING).
+# Needs the crafted EEP (all medal points earned -> Extra Games unlocked):
+#   PW64_EEP=tmp/cannon.eep
+# Bonus pages read the ANALOG STICK only (level_select.c func_8030EA54:
+# |stick|>0.75, one press per deflection). Bonus-page row -> vehicle:
+# veh = row + 3 (row 0 cannonball, 1 sky diving, 2 J. Hopper).
+# Format: <retrace|+delta> [A B Z START L R CU CD CL CR DU DD DL DR] [stick X,Y]
+1100 A            # title (menu up ~1000): Start game
++6
+1200 A            # file select: File 1
++6
+1310 stick 80,0   # tap right 1: hang glider -> rocket belt
+1330 stick 0,0
+1380 stick 80,0   # tap right 2: rocket belt -> gyrocopter
+1400 stick 0,0
+1430 stick 80,0   # tap right 3: gyrocopter -> bonus page
+1450 stick 0,0
+1470 stick 0,-80  # tap up 1: row 0 = cannonball
+1490 stick 0,0
+1520 stick 0,-80  # tap up 2: row 1 = sky diving
+1540 stick 0,0
+1610 A            # select sky diving -> pilot select
++6
+1770 A            # pilot select: Lark -> test overview
++6
+1910 A            # test overview -> test details
++6
+2050 A            # test details: Start -> test setup -> skydivingLoadLevel
++6

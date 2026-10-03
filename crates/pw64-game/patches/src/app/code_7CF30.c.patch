@@ -1,0 +1,27 @@
+--- a/src/app/code_7CF30.c
++++ b/src/app/code_7CF30.c
+@@ -196,6 +196,11 @@
+     shadow_80334C70();
+ }
+ 
++// PW64 rate: f64 shadow of the test timer gcData->elapsedTime (f32 `+= dt`
++// rounding bias grows with the frame count, see code_9A960.c func_80313D74).
++// Resyncs when the field was written elsewhere (load reset, shared vehicle buffer).
++static f64 sPw64TestTime;
++
+ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
+     s32 pad[2];
+     HUDState* hud;
+@@ -225,7 +230,11 @@
+         }
+ 
+         if ((gcData->elapsedTime > 0.0f) || (buttons & A_BUTTON)) {
+-            gcData->elapsedTime += D_8034F854;
++            if ((f32)sPw64TestTime != gcData->elapsedTime) {
++                sPw64TestTime = gcData->elapsedTime;
++            }
++            sPw64TestTime += D_8034F854;
++            gcData->elapsedTime = (f32)sPw64TestTime;
+         }
+ 
+         gcData->unk9C = func_80313F08(&D_80368880, ABS_NOEQ(xAxisInput));

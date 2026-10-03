@@ -1,0 +1,305 @@
+# Release builds ("build on first run", docs/notes/first-run-build.md):
+# a workflow_dispatch artifact, GitHub release assets on `v*` tags.
+#
+# Windows: Birdman64.exe (no console, no game C; the game module is built on
+# the player's machine) + the bundled zig compiler + licence notices.
+# Linux: the same as an AppImage and a tar.gz. Both run a smoke test:
+# `--build-game` downloads the pinned decomp and compiles it in CI, and the
+# dylib test runs against the result (an absolute PW64_GAME_DLL is required:
+# cargo runs tests with the crate dir as cwd).
+#
+# The zip carries READ ME FIRST.txt; the debug symbols asset
+# is renamed Birdman64-windows-x64-debug-symbols.pdb; the release body comes
+# from packaging/release-notes.md (both jobs pass the same body_path).
+#
+# The zip contains only our code + zig + licences: no ROM, no decomp files,
+# no extracted assets (CONTRIBUTING.md). The decomp's MIT licence is mentioned
+# in DECOMP-LICENSE-NOTE.txt (it ships with the download itself).
+
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # zig 0.16.0 toolchain (MIT; bundles clang/LLD 21). Only zig[.exe] is
+  # bundled; the zip also carries zig's own LICENSE and the LLVM licence
+  # (zig.exe contains LLVM/clang/LLD).
+  ZIG_WIN_URL: https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip
+  ZIG_WIN_SHA256: 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e
+  ZIG_LINUX_URL: https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+  ZIG_LINUX_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+  LLVM_LICENSE_URL: https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-21.1.0/llvm/LICENSE.TXT
+  # appimagetool 1.9.1 (stable, static x86_64 build).
+  APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+  APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+
+jobs:
+  windows:
+    name: Windows release (zip)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      # B6: static CRT so the exe needs no VC++ redistributable. Only the
+      # exe: the game module links no CRT at all (T1 thunks).
+      RUSTFLAGS: -Ctarget-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # decomp/ (read-only reference, needed by build.rs)
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build Birdman64.exe (first-run flavour, no console)
+        run: cargo build --release -p birdman64 --no-default-features --features first-run,gui-subsystem
+
+      # B6: the runners have the VC++ runtime installed, so a smoke run can't
+      # catch a dynamic CRT; check the import table instead. Players must not
+      # need any redistributable.
+      - name: exe imports no C/C++ runtime DLL
+        shell: pwsh
+        run: |
+          $dlls = & "C:\Program Files\LLVM\bin\llvm-objdump.exe" -p target/release/birdman64.exe |
+            Select-String "DLL Name: (.*)" | ForEach-Object { $_.Matches[0].Groups[1].Value }
+          $dlls
+          $bad = $dlls | Where-Object { $_ -match '^(vcruntime|msvcp|ucrtbase|api-ms-win-crt)' }
+          if ($bad) { Write-Error "runtime DLL imports: $bad"; exit 1 }
+
+      - name: download + verify zig
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force tmp | Out-Null
+          Invoke-WebRequest -Uri $env:ZIG_WIN_URL -OutFile tmp/zig.zip
+          $h = (Get-FileHash tmp/zig.zip -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne $env:ZIG_WIN_SHA256) { throw "zig sha256 mismatch: $h" }
+          Expand-Archive tmp/zig.zip -DestinationPath tmp/zigdl
+          New-Item -ItemType Directory -Force dist/Birdman64/toolchain/zig | Out-Null
+          Copy-Item tmp/zigdl/zig-x86_64-windows-0.16.0/zig.exe dist/Birdman64/toolchain/zig/
+          Copy-Item tmp/zigdl/zig-x86_64-windows-0.16.0/LICENSE dist/Birdman64/toolchain/zig/LICENSE
+          & dist/Birdman64/toolchain/zig/zig.exe version
+
+      - name: LLVM licence (zig bundles clang/LLD)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/Birdman64/licenses | Out-Null
+          Invoke-WebRequest -Uri $env:LLVM_LICENSE_URL -OutFile dist/Birdman64/licenses/LLVM-LICENSE.txt
+
+      - name: THIRD_PARTY_LICENSES.html (cargo-about)
+        shell: pwsh
+        run: |
+          cargo install cargo-about --locked --version 0.9.2 --features cli
+          cargo about generate about.hbs --output-file dist/Birdman64/THIRD_PARTY_LICENSES.html
+
+      - name: assemble the zip
+        shell: pwsh
+        run: |
+          Copy-Item target/release/birdman64.exe dist/Birdman64/Birdman64.exe
+          Copy-Item packaging/DECOMP-LICENSE-NOTE.txt dist/Birdman64/
+          Copy-Item 'packaging/READ ME FIRST.txt' dist/Birdman64/
+          Copy-Item README.md, LICENSE, CHANGELOG.md dist/Birdman64/
+          Compress-Archive -Path dist/Birdman64 -DestinationPath Birdman64-windows-x64.zip
+          Copy-Item target/release/birdman64.pdb Birdman64-windows-x64-debug-symbols.pdb
+
+      # Smoke test: the real first-run path on a clean data dir. No ROM is
+      # given, so it builds the module from the network decomp and exits 0.
+      - name: smoke --build-game
+        shell: pwsh
+        env:
+          PW64_DATA_DIR: ${{ github.workspace }}/tmp/first-run-data
+          PW64_NO_AUDIO: '1'
+          PW64_NO_INPUT: '1'
+          # never wait on an (invisible) message box in CI
+          PW64_NO_DIALOGS: '1'
+        run: |
+          # A windows-subsystem exe: `&` would not wait for it and its
+          # stdout/stderr go nowhere, so start it explicitly, wait, and
+          # print the captured output.
+          $p = Start-Process -FilePath dist/Birdman64/Birdman64.exe -ArgumentList '--build-game' `
+            -Wait -PassThru -NoNewWindow `
+            -RedirectStandardOutput tmp/build-game.out -RedirectStandardError tmp/build-game.err
+          Get-Content tmp/build-game.out, tmp/build-game.err
+          if ($p.ExitCode -ne 0) { throw "--build-game exited $($p.ExitCode)" }
+
+      - name: dylib test on the built module
+        shell: pwsh
+        env:
+          PW64_DATA_DIR: ${{ github.workspace }}/tmp/first-run-data
+        run: |
+          $mod = Get-ChildItem tmp/first-run-data/cache/game/*/pw64game.dll | Select-Object -First 1
+          if (-not $mod) { throw "no pw64game.dll under tmp/first-run-data/cache/game/" }
+          $env:PW64_GAME_DLL = $mod.FullName  # absolute: cargo runs tests from the crate dir
+          cargo test --release -p pw64-game --no-default-features --features dylib
+
+      - name: SHA256SUMS
+        shell: pwsh
+        run: |
+          $h1 = (Get-FileHash Birdman64-windows-x64.zip -Algorithm SHA256).Hash.ToLower()
+          $h2 = (Get-FileHash Birdman64-windows-x64-debug-symbols.pdb -Algorithm SHA256).Hash.ToLower()
+          "$h1  Birdman64-windows-x64.zip`n$h2  Birdman64-windows-x64-debug-symbols.pdb" |
+            Out-File SHA256SUMS-windows.txt -Encoding ascii
+
+      # Build provenance for the released zip (verifiable with
+      # `gh attestation verify`, see README Troubleshooting).
+      # Skipped while the repo is private: attestations are unavailable for
+      # user-owned private repos and the step would fail the release.
+      - uses: actions/attest-build-provenance@v2
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-path: Birdman64-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Birdman64-windows-x64
+          path: |
+            Birdman64-windows-x64.zip
+            Birdman64-windows-x64-debug-symbols.pdb
+            SHA256SUMS-windows.txt
+      - name: github release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: packaging/release-notes.md
+          files: |
+            Birdman64-windows-x64.zip
+            Birdman64-windows-x64-debug-symbols.pdb
+            SHA256SUMS-windows.txt
+
+  linux:
+    name: Linux release (AppImage + tar.gz)
+    # The oldest supported runner: the exe and AppImage then need only the
+    # glibc of Ubuntu 22.04 (2.35), so they start on older distros too.
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # decomp/ (read-only reference, needed by build.rs)
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: system packages (cpal ALSA, gilrs udev, btleplug BlueZ)
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          libasound2-dev libudev-dev libdbus-1-dev pkg-config
+
+      - name: build birdman64 (first-run flavour)
+        run: cargo build --release -p birdman64 --no-default-features --features first-run
+
+      - name: download + verify zig
+        run: |
+          mkdir -p tmp/zigdl dist/Birdman64/toolchain/zig
+          curl -fsSL "$ZIG_LINUX_URL" -o tmp/zig.tar.xz
+          echo "$ZIG_LINUX_SHA256  tmp/zig.tar.xz" | sha256sum -c -
+          tar -xJf tmp/zig.tar.xz -C tmp/zigdl
+          cp tmp/zigdl/zig-x86_64-linux-0.16.0/zig dist/Birdman64/toolchain/zig/
+          cp tmp/zigdl/zig-x86_64-linux-0.16.0/LICENSE dist/Birdman64/toolchain/zig/LICENSE
+          chmod +x dist/Birdman64/toolchain/zig/zig
+          dist/Birdman64/toolchain/zig/zig version
+
+      - name: LLVM licence (zig bundles clang/LLD)
+        run: |
+          mkdir -p dist/Birdman64/licenses
+          curl -fsSL "$LLVM_LICENSE_URL" -o dist/Birdman64/licenses/LLVM-LICENSE.txt
+
+      - name: THIRD_PARTY_LICENSES.html (cargo-about)
+        run: |
+          cargo install cargo-about --locked --version 0.9.2 --features cli
+          cargo about generate about.hbs --output-file dist/Birdman64/THIRD_PARTY_LICENSES.html
+
+      - name: assemble the AppDir + tar.gz
+        run: |
+          cp target/release/birdman64 dist/Birdman64/birdman64
+          chmod +x dist/Birdman64/birdman64
+          cp packaging/linux/birdman64.desktop packaging/linux/AppRun packaging/linux/birdman64.png dist/Birdman64/
+          chmod +x dist/Birdman64/AppRun
+          cp packaging/DECOMP-LICENSE-NOTE.txt "packaging/READ ME FIRST.txt" README.md LICENSE CHANGELOG.md dist/Birdman64/
+          # usr/ layout inside the AppImage (the tar.gz keeps the flat root);
+          # AppRun must sit at the AppDir root for appimagetool + the runtime.
+          mkdir -p appdir/usr/bin appdir/usr/share/applications appdir/usr/share/icons/hicolor/256x256/apps appdir/usr/lib/birdman64/toolchain/zig appdir/usr/lib/birdman64/licenses
+          cp dist/Birdman64/birdman64 appdir/usr/bin/
+          cp dist/Birdman64/toolchain/zig/zig appdir/usr/lib/birdman64/toolchain/zig/zig
+          cp dist/Birdman64/toolchain/zig/LICENSE appdir/usr/lib/birdman64/toolchain/zig/LICENSE
+          cp dist/Birdman64/licenses/LLVM-LICENSE.txt appdir/usr/lib/birdman64/licenses/
+          cp dist/Birdman64/THIRD_PARTY_LICENSES.html dist/Birdman64/DECOMP-LICENSE-NOTE.txt dist/Birdman64/README.md dist/Birdman64/LICENSE dist/Birdman64/CHANGELOG.md dist/Birdman64/READ\ ME\ FIRST.txt appdir/
+          cp packaging/linux/birdman64.desktop appdir/usr/share/applications/
+          cp packaging/linux/birdman64.png appdir/usr/share/icons/hicolor/256x256/apps/
+          cp packaging/linux/birdman64.desktop packaging/linux/birdman64.png appdir/
+          # AppDir spec: .DirIcon at the root (symlink to the icon).
+          ln -sf birdman64.png appdir/.DirIcon
+          cp packaging/linux/AppRun appdir/AppRun
+          chmod +x appdir/AppRun
+          tar -czf birdman64-linux-x64.tar.gz -C dist Birdman64
+
+      # Smoke test: the real first-run path with NO PW64_DATA_DIR set, so
+      # AppRun's own default (the per-user dir; the AppImage's own dir is
+      # read-only) drives everything, and the bundled zig is found at the
+      # AppImage's usr/lib location (find_zig candidate 2).
+      - name: smoke --build-game (AppImage layout)
+        env:
+          PW64_NO_AUDIO: '1'
+          PW64_NO_INPUT: '1'
+        run: |
+          appdir/usr/lib/birdman64/toolchain/zig/zig version
+          appdir/AppRun --build-game   # exit 0 = download + build + load ok
+          # The module must be in the per-user cache, not the AppDir:
+          test -d "$HOME/.cache/birdman64/game"
+
+      - name: dylib test on the built module
+        run: |
+          mod=$(find "$HOME/.cache/birdman64/game" -name libpw64game.so | head -1)
+          test -n "$mod" || { echo "no libpw64game.so under ~/.cache/birdman64/game/"; exit 1; }
+          export PW64_GAME_DLL="$(readlink -f "$mod")"  # absolute: cargo runs tests from the crate dir
+          cargo test --release -p pw64-game --no-default-features --features dylib
+
+      # appimagetool validates the AppDir and packs it (zstd: smaller than
+      # the default gzip, still supported by every linux kernel that mounts
+      # squashfs). No fuse needed: appimagetool 1.9.1 is a static build.
+      - name: build the AppImage
+        env:
+          APPIMAGETOOL_APP_NAME: Birdman64
+        run: |
+          curl -fsSL "$APPIMAGETOOL_URL" -o tmp/appimagetool
+          echo "$APPIMAGETOOL_SHA256  tmp/appimagetool" | sha256sum -c -
+          chmod +x tmp/appimagetool
+          # --comp zstd: smaller than the default gzip, supported by every
+          # kernel that mounts squashfs.
+          tmp/appimagetool --comp zstd appdir Birdman64-x86_64.AppImage
+
+      - name: SHA256SUMS
+        run: |
+          sha256sum Birdman64-x86_64.AppImage birdman64-linux-x64.tar.gz > SHA256SUMS-linux.txt
+
+      # Build provenance for the released AppImage + tar.gz (verifiable with
+      # `gh attestation verify`, see README Troubleshooting).
+      - uses: actions/attest-build-provenance@v2
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-path: |
+            Birdman64-x86_64.AppImage
+            birdman64-linux-x64.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Birdman64-linux-x64
+          path: |
+            Birdman64-x86_64.AppImage
+            birdman64-linux-x64.tar.gz
+            SHA256SUMS-linux.txt
+      - name: github release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: packaging/release-notes.md
+          files: |
+            Birdman64-x86_64.AppImage
+            birdman64-linux-x64.tar.gz
+            SHA256SUMS-linux.txt

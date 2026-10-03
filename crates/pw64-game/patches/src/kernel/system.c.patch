@@ -1,0 +1,58 @@
+--- a/src/kernel/system.c
++++ b/src/kernel/system.c
+@@ -39,5 +39,8 @@ OSMesg gPiMgrCmdBuf[8];
+ OSMesgQueue gPiMgrCmdQ;
+-OSContStatus gSiContStatus;
++// PW64: the osContInit stub writes MAXCONTROLLERS (4) entries through this
++// pointer (the ROM layout had UNUSED slack after it; the native linker packs
++// globals, so the extra entries would clobber gSiContPattern).
++OSContStatus gSiContStatus[4];
+ UNUSED u8 D_802C3360[0x10];
+ OSContPad gControllerPads[6];
+ u8 gSiContPattern;
+@@ -60,7 +63,8 @@ s32 osPiRawReadIo(u32 devAddr, u32* data);
+ void Thread_App(void* arg);
+ void Thread_Kernel(void* arg);
+ void Thread_Render(void* arg);
+-void app_entrypoint(s32);
++// PW64: the definition (map3d.c) takes no arguments; was (s32), called with a pointer.
++void app_entrypoint(void);
+ void func_8022E558(void);
+ 
+ void func_8020F9F4(void);
+@@ -311,7 +315,7 @@ void Thread_Render(void* arg) {
+ void Thread_App(void* arg) {
+     _uvMediaCopy(app_TEXT_START, app_ROM_START, app_ROM_END - app_ROM_START);
+     uvMemSet(app_BSS_START, 0, app_BSS_END - app_BSS_START);
+-    app_entrypoint(arg);
++    app_entrypoint();
+ }
+ 
+ void Thread_Kernel(void* arg) {
+@@ -343,3 +347,3 @@ u8 uvContMesgInit(void) {
+-    osContInit(&gSiContQ, &gSiContPattern, &gSiContStatus);
++    osContInit(&gSiContQ, &gSiContPattern, gSiContStatus); // PW64: now an array
+     temp = gSiContPattern;
+     return temp;
+@@ -416,7 +420,7 @@ void _uvDebugPrintf(char* fmt, ...) {
+ }
+
+ void _uvDMA(void* vAddr, u32 devAddr, u32 nbytes) {
+-    s32 dest = vAddr;
++    s32 dest = PW64_U32(vAddr);
+     if (gNmiAsserted == FALSE) {
+         if (dest % 8) {
+             _uvDebugPrintf("_uvDMA: RAM address not 8 byte aligned 0x%x\n", dest);
+@@ -433,9 +437,9 @@ void _uvDMA(void* vAddr, u32 devAddr, u32 nbytes) {
+         if (nbytes & 1) {
+             nbytes = (nbytes + 1) & ~1;
+         }
+-        osWritebackDCache((void*)dest, (s32)nbytes);
+-        osPiStartDma((OSIoMesg*)&gPiDmaBlockReq, 0, 0, devAddr, (void*)dest, nbytes, &gPiDmaQ);
+-        osInvalDCache((void*)dest, (s32)nbytes);
++        osWritebackDCache(PW64_PTR(dest), (s32)nbytes);
++        osPiStartDma((OSIoMesg*)&gPiDmaBlockReq, 0, 0, devAddr, PW64_PTR(dest), nbytes, &gPiDmaQ);
++        osInvalDCache(PW64_PTR(dest), (s32)nbytes);
+         uvWaitForMesg(UV_MESG_DMA);
+     }
+ }

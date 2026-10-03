@@ -1,0 +1,30 @@
+--- a/src/app/environment.c
++++ b/src/app/environment.c
+@@ -20,6 +20,7 @@
+ #include <uv_math.h>
+ #include <uv_memory.h>
+ #include <uv_texture.h>
++#include <pw64_rate.h>
+ 
+ typedef struct {
+     Vec3F unk0;
+@@ -313,7 +314,9 @@ void env_802E14E8(Vec3F* arg0, f32 arg1, f32 arg2, f32 arg3, f32 arg4) {
+ void env_802E15F0(void) {
+     f32 var_fv1;
+ 
+-    var_fv1 = (demoRandF() - 0.5f) * D_80359D80.unk18 * D_8034F854;
++    // PW64 rate: random walk with a new step per frame: spread grows as sqrt(dt)
++    // per second, i.e. less wind variation at high rates. Scale steps to REF frames.
++    var_fv1 = (demoRandF() - 0.5f) * D_80359D80.unk18 * D_8034F854 * pw64_walk();
+     if ((D_80359D80.unk20 < D_80359D80.unk10) && (var_fv1 > 0.0f)) {
+         var_fv1 = -var_fv1;
+     }
+@@ -321,7 +324,7 @@ void env_802E15F0(void) {
+         var_fv1 = -var_fv1;
+     }
+     D_80359D80.unk10 += var_fv1;
+-    var_fv1 = (demoRandF() - 0.5f) * D_80359D80.unk28 * D_8034F854;
++    var_fv1 = (demoRandF() - 0.5f) * D_80359D80.unk28 * D_8034F854 * pw64_walk(); // PW64 rate
+     if ((D_80359D80.unk30 < D_80359D80.unkC) && (var_fv1 > 0.0f)) {
+         var_fv1 = -var_fv1;
+     }

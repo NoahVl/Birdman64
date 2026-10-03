@@ -1,0 +1,17 @@
+[package]
+name = "pw64-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The lib has no unit tests, and its `uvSqrtF`/`uvSinF`/`uvCosF` externs only
+# resolve against the pw64-game C archive, which a lib-test harness here
+# can't link (pw64-game depends on this crate, not the reverse). The
+# differential proof lives in crates/pw64-game/tests/kernel_diff.rs.
+[lib]
+test = false
+doctest = false
+
+# No dependencies: the ports are pure, no_mangle extern "C" functions that
+# the decomp C links against (pw64-game depends on this crate; its build.rs
+# renames the C originals listed in ported.txt).

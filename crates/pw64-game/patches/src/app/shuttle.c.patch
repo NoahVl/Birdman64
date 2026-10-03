@@ -1,0 +1,32 @@
+--- a/src/app/shuttle.c
++++ b/src/app/shuttle.c
+@@ -12,6 +12,7 @@
+ #include <uv_matrix.h>
+ #include <uv_model.h>
+ #include <uv_vector.h>
++#include <pw64_rate.h>
+ 
+ f32 pad_D_80350480[] = { 0.0f, 0.0f, 1.0f, 0.0f };
+ s32 D_80350490 = 0;
+@@ -307,9 +308,10 @@ STATIC_FUNC void shuttle_80335700(void) {
+ STATIC_FUNC void shuttle_803358D4(void) {
+     if (sShuttleState == SHUTTLE_STATE_2) {
+         sShuttleThrust += D_8034F854 * 0.5f;
+-        sShuttleAltitude += sShuttleThrust;
++        // PW64 rate: altitude += thrust and D_803504A0 -/+= 5 were per frame.
++        sShuttleAltitude += sShuttleThrust * pw64_scale();
+         if (D_803504A0 > 0.0f) {
+-            D_803504A0 -= 5.0f;
++            D_803504A0 -= 5.0f * pw64_scale();
+         } else {
+             D_803504A0 = 0.0f;
+         }
+@@ -323,7 +325,7 @@ STATIC_FUNC void shuttle_803358D4(void) {
+         shuttle_80334CCC();
+     } else if (sShuttleState == SHUTTLE_STATE_1) {
+         sShuttleFlightTime += D_8034F854;
+-        D_803504A0 += 5.0f;
++        D_803504A0 += 5.0f * pw64_scale();
+         if (sShuttleFlightTime > 7.0) {
+             sShuttleState = SHUTTLE_STATE_2;
+         }

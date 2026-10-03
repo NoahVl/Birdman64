@@ -1,0 +1,51 @@
+--- a/src/kernel/filesystem.c
++++ b/src/kernel/filesystem.c
+@@ -15,7 +15,7 @@ Unk802B5300 D_802B5300[1];
+ extern u16 gGfxFbIndex;
+ extern u8* gGfxFbPtrs[2];
+ 
+-s32 uvFileReadHeader(s32 addr) {
++s32 uvFileReadHeader(void* addr) {
+     Unk802B5300* ptr;
+     s32 idx;
+ 
+@@ -30,7 +30,7 @@ s32 uvFileReadHeader(s32 addr) {
+         _uvDebugPrintf("Ran out of IFF file ids.  (IFF_NIFFS==%d)", 1);
+         return -1;
+     }
+-    ptr->address = addr;
++    ptr->address = PW64_U32(addr);
+     ptr->length = (u32)uvMemRead(addr + 4, 4) + 8;
+     ptr->tag = (u32)uvMemRead(addr + 8, 4);
+     uvFile_8022427C(idx);
+@@ -69,11 +69,11 @@ u32 uvFileReadBlock(s32 idx, u32* sizeOut, void** arg2, s32 arg3) {
+     if (sizeOut == NULL) {
+         sizeOut = &tmpSize;
+     }
+-    tag = (u32)uvMemRead((void*)(dataInfo->address + dataInfo->offset), 4);
+-    *sizeOut = (u32)uvMemRead((void*)(dataInfo->address + dataInfo->offset + 4), 4);
+-    *arg2 = (void*)(dataInfo->address + dataInfo->offset + 8);
++    tag = (u32)uvMemRead(PW64_PTR(dataInfo->address + dataInfo->offset), 4);
++    *sizeOut = (u32)uvMemRead(PW64_PTR(dataInfo->address + dataInfo->offset + 4), 4);
++    *arg2 = PW64_PTR(dataInfo->address + dataInfo->offset + 8);
+     if (tag == 'GZIP') { // 0x475A4950
+-        size = (u32)uvMemRead((void*)(dataInfo->address + dataInfo->offset + 0xC), 4);
++        size = (u32)uvMemRead(PW64_PTR(dataInfo->address + dataInfo->offset + 0xC), 4);
+         if (!(arg3 & 2)) {
+             scratchMem = _uvMemGetScratch(size);
+             temp_v0 = gGfxFbPtrs[gGfxFbIndex];
+@@ -81,12 +81,12 @@ u32 uvFileReadBlock(s32 idx, u32* sizeOut, void** arg2, s32 arg3) {
+             mio0_decompress(&temp_v0[8], scratchMem);
+             _uvMemFreeScratch(scratchMem);
+             *arg2 = scratchMem;
+-            tag = (u32)uvMemRead((void*)(dataInfo->address + dataInfo->offset + 8), 4);
++            tag = (u32)uvMemRead(PW64_PTR(dataInfo->address + dataInfo->offset + 8), 4);
+             dataInfo->offset += *sizeOut + 8;
+             *sizeOut = size;
+         }
+     } else {
+-        if ((((u32)*arg2 & 0x80000000) != 0) == 0 && (arg3 & 0x1)) {
++        if (((PW64_U32(*arg2) & 0x80000000) != 0) == 0 && (arg3 & 0x1)) {
+             scratchMem2 = _uvMemGetScratch(*sizeOut);
+             _uvMemFreeScratch(scratchMem2);
+             _uvMediaCopy(scratchMem2, *arg2, *sizeOut);

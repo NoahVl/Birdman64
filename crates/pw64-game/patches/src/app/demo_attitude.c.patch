@@ -1,0 +1,31 @@
+--- a/src/app/demo_attitude.c
++++ b/src/app/demo_attitude.c
+@@ -53,7 +53,7 @@ void demoAttLoadPos(void) {
+     idx = 0;
+     gotHdr = 0;
+     D_8036D328 = -1.0f;
+-    sp60 = uvFileReadHeader((s32)uvUserFileRead(sDemoUserFileIdx, MEM_ROM_OFFSET));
++    sp60 = uvFileReadHeader(uvUserFileRead(sDemoUserFileIdx, MEM_ROM_OFFSET));
+     D_8036D320 = 0;
+     D_8036D324 = 0;
+ 
+@@ -61,8 +61,9 @@ void demoAttLoadPos(void) {
+         switch (tag) {
+         case 'PHDR': // 0x50484452
+             phdr = (PHDR*)data;
+-            D_8036D320 = phdr->unk0;
+-            D_8036D324 = phdr->unk4;
++            // PW64: direct BE reads -> uvMemRead (swaps)
++            D_8036D320 = (s32)uvMemRead(&phdr->unk0, 4);
++            D_8036D324 = (s32)uvMemRead(&phdr->unk4, 4);
+             D_8034F970 = (Unk8034F970*)_uvMemAllocAlign8(D_8036D324 * sizeof(Unk8034F970));
+             if (D_8034F970 == NULL) {
+                 return;
+@@ -79,6 +80,7 @@ void demoAttLoadPos(void) {
+                 _uvDebugPrintf("Didn't get header yet\n");
+             } else if (idx < D_8036D324) {
+                 _uvMediaCopy(&D_8034F970->unk4[idx], data, size);
++                PW64_SWAP(&D_8034F970->unk4[idx], 1, PPOS, "6w"); // PW64: BE f32s
+                 idx++;
+             }
+             break;

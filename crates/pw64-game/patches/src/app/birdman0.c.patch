@@ -1,0 +1,68 @@
+--- a/src/app/birdman0.c
++++ b/src/app/birdman0.c
+@@ -17,6 +17,7 @@
+ #include "snap.h"
+ #include "snd.h"
+ #include "task.h"
++#include <pw64_rate.h>
+ 
+ Unk803599D0 D_80359390;
+ u8 D_803593E4;
+@@ -118,6 +119,13 @@
+     shadow_80334C70();
+ }
+ 
++// PW64 rate: f64 shadow of the test timer bmData->unk8 (f32 `+= dt` rounding
++// bias grows with the frame count, see code_9A960.c func_80313D74). Resyncs
++// when the field was written elsewhere (load reset, shared vehicle buffer).
++static f64 sPw64TestTime;
++// PW64 rate: decay time still to skip after the last flap press (see below).
++static f32 sPw64FlapHold;
++
+ // called every frame in a birdman stage
+ // handles controller input and motion updates
+ void birdMovementFrame(BirdmanData* bmData, u8 gameState) {
+@@ -140,7 +148,11 @@
+         return;
+     }
+     if (fdr_802E6B5C() != 4) {
+-        bmData->unk8 += D_8034F854;
++        if ((f32)sPw64TestTime != bmData->unk8) {
++            sPw64TestTime = bmData->unk8;
++        }
++        sPw64TestTime += D_8034F854;
++        bmData->unk8 = (f32)sPw64TestTime;
+         if (D_80362690->unkC[D_80362690->unk9C].unk7B == 0) {
+             func_80339E1C(bmData);
+         }
+@@ -197,13 +209,29 @@
+             bmData->unk2D4 = 1.5707f;
+         }
+         if (sp68 != 0) {
+-            bmData->unk2D0 += 9.0f * D_8034F854;
++            // PW64 rate: the flap impulse is added once, on the A/B press frame, as
++            // 9*dt: tuned at the N64 frame time, so at 60/120/144 Hz each flap added
++            // 1/2, 1/4, 1/5 as much (lift/thrust ~ unk2D0^2 -> 1/4..1/23). Add the
++            // REF frame's impulse instead.
++            bmData->unk2D0 += 9.0f * PW64_REF_DT;
+             if (bmData->unk2D0 > 3.8f) {
+                 bmData->unk2D0 = 3.8f;
+             }
++            sPw64FlapHold = PW64_REF_DT;
++        }
++        // PW64 rate: the decays below are skipped on the press frame, i.e. for one
++        // REF frame on the N64 but only 1/N s at N Hz. Skip REF_DT of decay time
++        // after each press instead (func_80313AF4 reads dt from D_8034F854).
++        if (sPw64FlapHold >= D_8034F854) {
++            sPw64FlapHold -= D_8034F854;
+         } else {
++            f32 pw64Dt = D_8034F854;
++
++            D_8034F854 -= sPw64FlapHold;
++            sPw64FlapHold = 0.0f;
+             bmData->unk2D0 = func_80313AF4(0.0f, bmData->unk2D0, 0.5f);
+             bmData->unk2D4 = func_80313AF4(0.0f, bmData->unk2D4, 0.4f);
++            D_8034F854 = pw64Dt;
+         }
+         if (gameState != GAME_STATE_RESULTS) {
+             bird_802CEDF8(bmData);

@@ -1,0 +1,15 @@
+[package]
+name = "pw64-viewer"
+description = "Standalone terrain viewer: builds Fast3D display lists from ROM assets and renders them with pw64-gfx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+png.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+pw64-rom.workspace = true
+pw64-formats.workspace = true
+pw64-gfx.workspace = true

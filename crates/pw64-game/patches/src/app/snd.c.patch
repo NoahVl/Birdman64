@@ -1,0 +1,35 @@
+--- a/src/app/snd.c
++++ b/src/app/snd.c
+@@ -5,6 +5,12 @@
+ #include <uv_audio.h>
+ #include <uv_math.h>
+ #include <uv_matrix.h>
++#include <uv_clocks.h>
++
++// PW64 rate: sndEvent flush throttle. Clock ids 0..2 are unused by the game;
++// 0.9/60 s so a 60 Hz host (jittery frame times) still flushes every frame.
++#define PW64_CLKID_SND 0
++#define PW64_SND_FLUSH_SEC (0.9 / 60.0)
+ 
+ Mtx4F D_80373E20;
+ Mtx4F D_80373E60;
+@@ -171,6 +177,19 @@ void sndEvent(s32 event, void* data, s32 eventData) {
+     if (eventData != 0) {
+         _uvAssertMsg("eventData == 0", "snd.c", 421);
+     }
++    // PW64 rate: the per-frame emitter flush (uvEmitterFlush/_uvaPlay) assumes
++    // ~30 flushes/s against the 60 Hz audio thread: a started voice (playState 2)
++    // times out after 5 flushes and is retriggered (loops restart forever at
++    // >~300 Hz), and each flush queues ~4 alSndp events per voice (256-event queue
++    // overflows at >~240 Hz). Flush at most every ~1/60 s of wall time (clock 0 is
++    // unused by the game), so the frame-end flush runs every frame up to 60 Hz and
++    // ~45-66 times/s above. Emitter changes (triggers, vol/pitch) between flushes are
++    // state and are picked up by the next one; explicit func_8033FB14 calls (menus,
++    // snap.c) stay immediate.
++    if (uvClkGetSec(PW64_CLKID_SND) < PW64_SND_FLUSH_SEC) {
++        return;
++    }
++    uvClkReset(PW64_CLKID_SND);
+     func_8033FB14();
+ }
+ 

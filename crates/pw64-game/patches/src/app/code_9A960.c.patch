@@ -1,0 +1,75 @@
+--- a/src/app/code_9A960.c
++++ b/src/app/code_9A960.c
+@@ -4,6 +4,7 @@
+ #include <uv_matrix.h>
+ #include "code_9A960.h"
+ #include "task.h"
++#include <pw64_rate.h>
+ 
+ f32 D_8034F850 = 0.0f;          // current time
+ f32 D_8034F854 = 0.1000000015f; // actual time since last frame
+@@ -154,7 +155,14 @@ f32 func_80313AF4(f32 arg0, f32 arg1, f32 arg2) {
+         return arg0;
+     }
+ 
+-    temp_ft4 = arg2 * var_fv0 * D_8034F854;
++    // PW64 rate: explicit Euler, fraction arg2*dt per frame (snap when >= 1), tuned at
++    // REF_DT: for large arg2 (k*REF_DT ~0.5) it converges faster than at small dt.
++    // Use the fraction the N64 covered in dt: 1 - (1 - k*REF_DT)^(dt/REF_DT).
++    if ((arg2 > 0.0f) && (arg2 * PW64_REF_DT < 1.0f)) {
++        temp_ft4 = var_fv0 * (1.0f - powf(1.0f - arg2 * PW64_REF_DT, pw64_scale_dt(D_8034F854)));
++    } else {
++        temp_ft4 = arg2 * var_fv0 * D_8034F854;
++    }
+     if (FABS(var_fv0) < FABS(temp_ft4)) {
+         arg1 = arg0;
+     } else {
+@@ -207,18 +215,42 @@ void func_80313C94(Vec3F* arg0, Vec3F* arg1, f32 arg2) {
+     }
+ }
+ 
++// PW64 rate: f64 shadow of D_8034F850 (see func_80313D74).
++static f64 sPw64GameTime = 0.0;
++extern f32 gGfxFrameTimeFixed;
++
+ void func_80313D74(void) {
+     f32 temp_fv0;
++    f32 real;
+ 
+     temp_fv0 = uvGfxGetFrameTime();
+-    if (temp_fv0 < 0.01f) {
+-        D_8034F854 = 0.01f;
+-    } else if (temp_fv0 > 0.1f) {
+-        D_8034F854 = 0.1f;
++    real = pw64_real_dt();
++    if ((gGfxFrameTimeFixed > 0.0f) && (temp_fv0 < 1e-4f)) {
++        // PW64 rate: "frozen" sentinels (snap.c 1e-5, replay_screen.c 1e-6 via
++        // uvGfxSetFrameTime) were clamped to 0.01 per N64 frame (~REF_DT): give the
++        // same game time per real second at any rate. Never 0 (callers divide by dt).
++        // Frame time 0 without an override = first frame: normal clamp.
++        D_8034F854 = 0.01f * real / PW64_REF_DT;
++        pw64_rate_scale = real / PW64_REF_DT;
+     } else {
+-        D_8034F854 = temp_fv0;
++        // PW64 rate: lower bound was 0.01 (100 Hz); faster hosts ran the game fast.
++        if (temp_fv0 < PW64_DT_MIN) {
++            D_8034F854 = PW64_DT_MIN;
++        } else if (temp_fv0 > PW64_DT_MAX) {
++            D_8034F854 = PW64_DT_MAX;
++        } else {
++            D_8034F854 = temp_fv0;
++        }
++        pw64_rate_scale = D_8034F854 / PW64_REF_DT;
++    }
++    // PW64 rate: f32 `+= dt` rounds each frame (more frames at high rates, and
++    // ulp(t) grows with t): accumulate in f64. Resync when someone else wrote
++    // D_8034F850 (func_80313E0C, pause-menu restore in game.c / cannonball.c).
++    if ((f32)sPw64GameTime != D_8034F850) {
++        sPw64GameTime = D_8034F850;
+     }
+-    D_8034F850 += D_8034F854;
++    sPw64GameTime += D_8034F854;
++    D_8034F850 = (f32)sPw64GameTime;
+     D_8034F858 += 1;
+ }
+ 

@@ -1,0 +1,15 @@
+[package]
+name = "pw64-gfx"
+description = "HLE Fast3D (F3D) + RDP renderer on wgpu for Pilotwings 64 display lists"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pw64-formats.workspace = true
+wgpu.workspace = true
+bytemuck.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+naga = { version = "27", features = ["wgsl-in"] }

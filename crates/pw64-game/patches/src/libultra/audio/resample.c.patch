@@ -1,0 +1,11 @@
+--- a/src/libultra/audio/resample.c
++++ b/src/libultra/audio/resample.c
+@@ -133,7 +133,7 @@ s32 alResampleParam(void *filter, s32 paramID, void *param)
+             break;
+             
+         case (AL_FILTER_SET_PITCH):
+-            data.i = (s32) param;
++            data.i = (s32) PW64_U32(param); /* PW64: an int packed into the void* param */
+             r->ratio = data.f;
+             break;
+             

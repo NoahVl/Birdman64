@@ -1,0 +1,19 @@
+#!/bin/sh
+# AppRun for the Birdman64 x86_64 AppImage (release.yml).
+#
+# The AppImage mounts its squashfs read-only, so the exe cannot keep its
+# cache (game module, downloads) or per-user files inside the AppDir. The
+# exe honours PW64_DATA_DIR above everything else (paths.rs rule 1), so
+# point it at the per-user data dir when the caller did not choose one:
+# dlopen of the built game module then happens on the user's own
+# (exec-mountable) filesystem, not on the read-only AppImage mount.
+if [ -z "$PW64_DATA_DIR" ]; then
+    export PW64_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/birdman64"
+fi
+# The AppImage launcher sets APPDIR; fall back to this script's own
+# directory (also usable for direct AppDir runs, CI smoke tests).
+if [ -z "$APPDIR" ]; then
+    APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    export APPDIR
+fi
+exec "$APPDIR/usr/bin/birdman64" "$@"

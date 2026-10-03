@@ -1,0 +1,67 @@
+--- a/src/app/birdman2.c
++++ b/src/app/birdman2.c
+@@ -9,6 +9,7 @@
+ #include "balls.h"
+ #include "environment.h"
+ #include "snd.h"
++#include <pw64_rate.h>
+ 
+ typedef struct {
+     Vec2F unk0[23];
+@@ -242,6 +243,11 @@
+     bmData->unk240 = uvVec3Len(&bmData->unk234);
+ }
+ 
++// PW64 rate: zero-order hold of the pitch control torque (see below). Starts
++// due so the first frame computes it.
++static f32 sPw64PitchAcc = 1.0f;
++static f32 sPw64PitchTq;
++
+ void bird_802CF24C(BirdmanData* bmData) {
+     f32 var_fa1;
+     f32 var_fa0;
+@@ -256,8 +262,17 @@
+         var_fa1 = bmData->unkE8 * var_fv1;
+     }
+ 
+-    bmData->unk250.x += -bmData->unk2B0 * 6.4f * var_fa1;
+-    temp_fv0 = uvSqrtF(SQ(bmData->unk10.m[0][0]) + SQ(bmData->unk10.m[0][1]));
++    // PW64 rate: this pitch torque switches between the stick term and a
++    // backward-airflow term on the sign of the forward airflow. In a stall the
++    // sign chatters: on the N64 each switch applied a whole frame of stick
++    // torque (overshoot -> |airflow| > 0.1 -> lift, bird_802CFAC8); at high
++    // rates it slides along 0 with no lift and a stall landing drops at the
++    // ~26 m/s terminal speed (crash). Sample-and-hold the term at REF frames.
++    if (pw64_ticks(&sPw64PitchAcc) > 0) {
++        sPw64PitchTq = -bmData->unk2B0 * 6.4f * var_fa1;
++    }
++    bmData->unk250.x += sPw64PitchTq;
++    temp_fv0 =uvSqrtF(SQ(bmData->unk10.m[0][0]) + SQ(bmData->unk10.m[0][1]));
+     var_fa1 = bmData->unkE4 * (temp_fv0 * 0.9f);
+ 
+     if (ABS_NOEQ(bmData->unk200.y) < 20.0f) {
+@@ -299,7 +314,9 @@
+     if (bmData->unk200.x < 0.0f) {
+         var_fa1 = -var_fa1;
+     }
+-    bmData->unk24C -= 0.005f * var_fa1;
++    // PW64 rate: sideslip yaw-rate change applied once per frame without dt
++    // (the rate is integrated with dt afterwards): per REF frame instead.
++    bmData->unk24C -= 0.005f * var_fa1 * pw64_scale();
+ }
+ 
+ void bird_802CF5B4(BirdmanData* bmData) {
+@@ -623,9 +640,10 @@
+                     return;
+                 }
+ #endif
+-                bmData->unk10.m[3][0] += 0.01f * bmData->unk174.x;
+-                bmData->unk10.m[3][1] += 0.01f * bmData->unk174.y;
+-                bmData->unk10.m[3][2] += 0.01f * bmData->unk174.z;
++                // PW64 rate: 0.01 * normal per contact frame -> per REF frame.
++                bmData->unk10.m[3][0] += 0.01f * bmData->unk174.x * pw64_scale();
++                bmData->unk10.m[3][1] += 0.01f * bmData->unk174.y * pw64_scale();
++                bmData->unk10.m[3][2] += 0.01f * bmData->unk174.z * pw64_scale();
+                 return;
+             }
+ 

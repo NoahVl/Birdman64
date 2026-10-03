@@ -1,0 +1,8 @@
+--- a/src/app/title_screen.c
++++ b/src/app/title_screen.c
+@@ -327,1 +327,4 @@
+-    while (uvClkGetSec(UV_CLKID_APP) < 1.0) { }
++    // PW64: the native scheduler is cooperative; a spin that never yields
++    // starves the scheduler/audio threads (snap.c.patch, native-build.md).
++    // No caller in the US build, patched for consistency.
++    while (uvClkGetSec(UV_CLKID_APP) < 1.0) { osYieldThread(); }

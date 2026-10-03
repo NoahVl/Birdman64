@@ -1,0 +1,19 @@
+--- a/src/app/code_AE460.c
++++ b/src/app/code_AE460.c
+@@ -11,6 +11,7 @@
+ #include "app/shadow.h"
+ #include "app/snd.h"
+ #include "app/code_7FE00.h"
++#include <pw64_rate.h>
+ 
+ Unk80371120 D_80371120;
+ Unk80371120 D_803712D0;
+@@ -245,7 +246,7 @@ void rocketBelt_803279F0(RocketBeltData* rbData) {
+     } else {
+         sp74 = ((1.0f - (demoRandF() * 0.7f)) + 0.7f + (0.5f * SQ(0.5f * (rbData->unk70 + 1.0f)))) * (0.6f * rbData->unk78);
+     }
+-    D_8034FBA8 += 1.5f * sp74;
++    D_8034FBA8 += 1.5f * sp74 * pw64_scale(); // PW64 rate: flame spin was per frame
+     uvFxProps(rbData->unk338, 3, sp74, sp74, sp74, 0);
+     uvMat4RotateAxis(&spF8, -D_8034FBA8, 'z');
+     if (rbData->unk80 == 0) {

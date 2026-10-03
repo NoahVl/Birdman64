@@ -1,0 +1,13 @@
+--- a/src/kernel/string.c
++++ b/src/kernel/string.c
+@@ -294,7 +294,9 @@ void uvSprintf(char* dest, const char* fmt, ...) {
+                 strFormatFloat(va_arg(args, f64), &destBufPos, dest);
+                 parseSpecifier = FALSE;
+             } else if (c == 's') {
+-                argStr = arg = va_arg(args, char*);
++                // PW64: was `argStr = arg = ...`: the round trip through s32 truncates
++                // and sign-extends the pointer.
++                argStr = va_arg(args, char*);
+                 parseSpecifier = FALSE;
+                 while (*argStr != 0) {
+                     dest[destBufPos] = *argStr++;

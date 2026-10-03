@@ -1,0 +1,133 @@
+# CI: fmt, clippy (-D warnings), tests and the first-run module build
+# (`firstrun` job) on every push/PR.
+#
+# The workspace builds the decomp C via pw64-game's build.rs with the
+# project's one C compiler, zig 0.16.0 (T13, docs/notes/first-run-build.md):
+# the same compiler + flags the players' first-run builder uses. Every job
+# fetches it with the get_zig example (official archive, sha256-pinned in
+# pw64-cbuild) into tools/zig/, cached per OS. No LLVM install needed.
+# The WSL reference build and the ROM/data assets are NOT part of CI
+# (rom/, data/ are gitignored and never committed, per CONTRIBUTING.md).
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental off + releasedisk? Keep it simple: debug tests are fast enough.
+  CARGO_INCREMENTAL: 0
+
+# A newer push to the same branch cancels the older run (saves runner minutes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Windows · fmt, clippy, tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # decomp/ (read-only reference, needed by build.rs)
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        id: zig
+        with:
+          path: tools/zig
+          key: zig-0.16.0-tools-${{ runner.os }}
+      - name: zig (get_zig example, sha256-checked)
+        if: steps.zig.outputs.cache-hit != 'true'
+        run: cargo run -p pw64-cbuild --example get_zig --features fetch
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: tests
+        run: cargo test --workspace
+
+  # The whole workspace on x86_64 Linux, incl. the native C build (zig clang
+  # in GNU mode, exe linked non-PIE at 0xC0000000 by rust-lld) and the OS-core
+  # tests (docs/notes/native-build.md §10). Packages: libasound2-dev (cpal
+  # ALSA), libudev-dev (gilrs), libdbus-1-dev (btleplug BlueZ), pkg-config
+  # for the -sys crates.
+  linux:
+    name: Linux · fmt, clippy, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # decomp/ (read-only reference, needed by build.rs)
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: system packages
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          libasound2-dev libudev-dev libdbus-1-dev pkg-config
+      - uses: actions/cache@v4
+        id: zig
+        with:
+          path: tools/zig
+          key: zig-0.16.0-tools-${{ runner.os }}
+      - name: zig (get_zig example, sha256-checked)
+        if: steps.zig.outputs.cache-hit != 'true'
+        run: cargo run -p pw64-cbuild --example get_zig --features fetch
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: tests
+        run: cargo test --workspace
+
+  # First-run module build (docs/notes/first-run-build.md T12), both release
+  # platforms, every push: builds the game module with zig via the
+  # pw64-cbuild example (network-free: the checked-out decomp is
+  # hash-checked against the pinned manifest, which also validates T5), then
+  # runs the dylib test on the result. New libultra imports in the C show up
+  # here as an lld "undefined symbol": add X(name) to pw64_dll_imports.h.
+  firstrun:
+    name: First-run game build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # decomp/ sources, hash-checked by the build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Same zig + cache as the test/linux jobs.
+      - uses: actions/cache@v4
+        id: zig
+        with:
+          path: tools/zig
+          key: zig-0.16.0-tools-${{ runner.os }}
+      - name: zig (get_zig example, sha256-checked)
+        if: steps.zig.outputs.cache-hit != 'true'
+        run: cargo run -p pw64-cbuild --example get_zig --features fetch
+      - name: build the game module
+        shell: pwsh
+        run: |
+          if ($IsWindows) { $exe = 'tools/zig/zig.exe' } else { $exe = 'tools/zig/zig' }
+          cargo run -p pw64-cbuild --example build_module --features fetch -- `
+            --zig $exe --decomp-dir decomp --out tmp/firstrun
+      - name: dylib test on the built module
+        shell: pwsh
+        run: |
+          $pat = if ($IsWindows) { 'tmp/firstrun/game/*/pw64game.dll' } else { 'tmp/firstrun/game/*/libpw64game.so' }
+          $mod = Get-Item $pat | Select-Object -First 1
+          if (-not $mod) { throw "no module under tmp/firstrun/game/" }
+          $env:PW64_GAME_DLL = $mod.FullName  # absolute: cargo runs tests from the crate dir
+          cargo test --release -p pw64-game --no-default-features --features dylib

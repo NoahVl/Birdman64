@@ -1,0 +1,31 @@
+--- a/src/app/demo.c
++++ b/src/app/demo.c
+@@ -171,7 +171,7 @@ void demoInit(void) {
+     idx = 0;
+     done = 0;
+     demoAllocate();
+-    temp_s4 = uvFileReadHeader((s32)uvUserFileRead(demoGetUserFileIdx(sDemoPilotId, sDemoVehicleId), 2));
++    temp_s4 = uvFileReadHeader(uvUserFileRead(demoGetUserFileIdx(sDemoPilotId, sDemoVehicleId), 2));
+     uvMemSet(sDemoRecording->entries, 0, sizeof(sDemoRecording->entries));
+     uvMemSet(&sDemoRecHeader, 0, sizeof(sDemoRecHeader));
+ 
+@@ -180,6 +180,7 @@ void demoInit(void) {
+         switch (tag) {
+         case 'RPKT': // 0x52504B54
+             _uvMediaCopy(&pkt, data, size);
++            PW64_SWAP(&pkt, 1, RPKT, "4w"); // PW64: BE f32/u32
+             sDemoRecording->entries[idx].time = pkt.time;
+             entry = &sDemoRecording->entries[idx];
+             demoPackInputs(entry, pkt.stickX, pkt.stickY, pkt.buttons);
+@@ -187,6 +188,10 @@ void demoInit(void) {
+             break;
+         case 'RHDR': // 0x52484452
+-            _uvMediaCopy(&sDemoRecHeader, data, size);
++            // PW64: every RHDR block is 24 bytes but RHDR is 20; the N64 overran
++            // into harmless bss, here it overwrote sDemoRecording (attract-demo
++            // crash at retrace ~2400). Copy at most sizeof.
++            _uvMediaCopy(&sDemoRecHeader, data, size < sizeof(sDemoRecHeader) ? size : sizeof(sDemoRecHeader));
++            PW64_SWAP(&sDemoRecHeader, 1, RHDR, "w 4b 3w"); // PW64: BE s32s
+             break;
+         case 0:
+             if (tag && tag) { } // fakematch

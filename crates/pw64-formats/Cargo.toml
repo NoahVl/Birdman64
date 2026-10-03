@@ -1,0 +1,10 @@
+[package]
+name = "pw64-formats"
+description = "Parsers for Pilotwings 64 asset formats (UVTX textures, ...) and N64 GBI/TMEM helpers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+pw64-rom.workspace = true

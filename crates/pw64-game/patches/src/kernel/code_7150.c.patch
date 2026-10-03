@@ -1,0 +1,18 @@
+--- a/src/kernel/code_7150.c
++++ b/src/kernel/code_7150.c
+@@ -19,6 +19,15 @@
+     temp_fa0 = (arg0->unk1EC / arg0->unk1F8) * arg0->unk1FC;
+     temp_ft4 = (arg0->unk1F0 / arg0->unk1F8) * arg0->unk1FC;
+     temp_ft5 = (arg0->unk1F4 / arg0->unk1F8) * arg0->unk1FC;
++    // PW64: widescreen culls with a wider frustum (pw64_widescreen.c).
++    temp_fv0 = pw64_widescreen_xscale(arg0);
++    temp_fa1 *= temp_fv0;
++    temp_fa0 *= temp_fv0;
++    // PW64: fill screen culls with a taller frustum too (same file); the
++    // same scale on both y corners, so the planes stay symmetric.
++    temp_fv0 = pw64_fill_yscale(arg0);
++    temp_ft4 *= temp_fv0;
++    temp_ft5 *= temp_fv0;
+     arg0->unk208[0].x = temp_fa0;
+     arg0->unk208[0].y = arg0->unk1FC;
+     arg0->unk208[0].z = temp_ft4;

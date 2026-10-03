@@ -1,0 +1,161 @@
+--- a/include/libultra/PR/gbi.h
++++ b/include/libultra/PR/gbi.h
+@@ -1132,7 +1132,9 @@ typedef struct {
+  * First 8 words are integer portion of the 4x4 matrix
+  * Last 8 words are the fraction portion of the 4x4 matrix
+  */
+-typedef long	Mtx_t[4][4];
++/* PW64: `long` spelled PW64_LONG32 here and below (32-bit on LP64 too,
++ * pw64_native.h): Mtx, Hilite, Gsetcolor, TexRect keep their N64 sizes. */
++typedef PW64_LONG32	Mtx_t[4][4];
+ 
+ typedef union {
+     Mtx_t		m;
+@@ -1420,7 +1422,7 @@ typedef struct {
+ 
+ typedef union {
+     Hilite_t	h;
+-    long int	force_structure_alignment[4];
++    PW64_LONG32	force_structure_alignment[4];
+ } Hilite;
+ 
+ #define gdSPDefLights0(ar,ag,ab)					\
+@@ -1501,7 +1503,9 @@ typedef struct {
+ 		int		cmd:8;
+ 		int		pad1:24;
+ 		int             pad2:24;
+-		unsigned char	param:8;
++		// PW64: MSVC gives a sub-type bitfield its own storage unit; keep the
++		// IDO 8-byte layout (the Gfx union must stay 8 bytes natively).
++		int		param:8;
+ } Gpopmtx;
+ 
+ /*
+@@ -1580,11 +1584,14 @@ typedef struct {
+ } Gsetcombine;
+ 
+ typedef struct {
+-		int		cmd:8;
+-		unsigned char	pad;
+-		unsigned char	prim_min_level;
+-		unsigned char	prim_level;
+-		unsigned long	color;
++		// PW64: as Gpopmtx above — pack cmd+pad+prim_* into one word so the
++		// Gfx union stays 8 bytes natively. Bit positions differ from IDO
++		// (LSB-first); harmless, the game only uses `words` for these.
++		unsigned int	cmd:8;
++		unsigned int	pad:8;
++		unsigned int	prim_min_level:8;
++		unsigned int	prim_level:8;
++		unsigned PW64_LONG32	color;
+ } Gsetcolor;
+ 
+ typedef struct {
+@@ -1659,8 +1666,8 @@
+ typedef struct {
+-    unsigned long w0;
+-    unsigned long w1;
+-    unsigned long w2;
+-    unsigned long w3;
++    unsigned PW64_LONG32 w0;
++    unsigned PW64_LONG32 w1;
++    unsigned PW64_LONG32 w2;
++    unsigned PW64_LONG32 w3;
+ } TexRect;
+ 
+ /*
+@@ -1709,7 +1716,7 @@ typedef union {
+ 	Gfx *_g = (Gfx *)(pkt);						\
+ 									\
+ 	_g->words.w0 = _SHIFTL((c), 24, 8) | _SHIFTL((l), 0, 24);	\
+-	_g->words.w1 = (unsigned int)(s);				\
++	_g->words.w1 = PW64_U32(s);				\
+ }
+ 
+ #define	gsDma0p(c, s, l)						\
+@@ -1723,7 +1730,7 @@ typedef union {
+ 									\
+ 	_g->words.w0 = (_SHIFTL((c), 24, 8) | _SHIFTL((p), 16, 8) |	\
+ 			_SHIFTL((l), 0, 16));				\
+-	_g->words.w1 = (unsigned int)(s);				\
++	_g->words.w1 = PW64_U32(s);				\
+ }
+ 
+ #define	gsDma1p(c, s, l, p)						\
+@@ -1738,7 +1745,7 @@ typedef union {
+ 	Gfx *_g = (Gfx *)(pkt);						\
+ 	_g->words.w0 = (_SHIFTL((c),24,8)|_SHIFTL(((len)-1)/8,19,5)|	\
+ 			_SHIFTL((ofs)/8,8,8)|_SHIFTL((idx),0,8));	\
+-	_g->words.w1 = (unsigned int)(adrs);				\
++	_g->words.w1 = PW64_U32(adrs);				\
+ }
+ #define	gsDma2p(c, adrs, len, idx, ofs)					\
+ {{									\
+@@ -1775,7 +1782,7 @@ typedef union {
+ 	Gfx *_g = (Gfx *)(pkt);						\
+ 	_g->words.w0 =							\
+ 	  _SHIFTL(G_VTX,24,8)|_SHIFTL((n),12,8)|_SHIFTL((v0)+(n),1,7);	\
+-	_g->words.w1 = (unsigned int)(v);				\
++	_g->words.w1 = PW64_U32(v);				\
+ }
+ # define	gsSPVertex(v, n, v0)					\
+ {{									\
+@@ -1845,7 +1852,7 @@ typedef union {
+ 	Gfx *_g = (Gfx *)(pkt);						\
+ 									\
+ 	_g->words.w0 = _SHIFTL((c), 24, 8);				\
+-	_g->words.w1 = (unsigned int)(p0);				\
++	_g->words.w1 = PW64_U32(p0);				\
+ }
+ 
+ #define	gsImmp1(c, p0)							\
+@@ -2332,7 +2339,7 @@ typedef union {
+ {									\
+ 	Gfx *_g = (Gfx *)(pkt);						\
+ 	_g->words.w0 = _SHIFTL(G_RDPHALF_1,24,8);			\
+-	_g->words.w1 = (unsigned int)(dl);				\
++	_g->words.w1 = PW64_U32(dl);				\
+ 	_g = (Gfx *)(pkt);						\
+ 	_g->words.w0 = (_SHIFTL(G_BRANCH_Z,24,8)|			\
+ 		        _SHIFTL((vtx)*5,12,12)|_SHIFTL((vtx)*2,0,12));	\
+@@ -2361,7 +2368,7 @@ typedef union {
+ {									\
+ 	Gfx *_g = (Gfx *)(pkt);						\
+ 	_g->words.w0 = _SHIFTL(G_RDPHALF_1,24,8);			\
+-	_g->words.w1 = (unsigned int)(dl);				\
++	_g->words.w1 = PW64_U32(dl);				\
+ 	_g = (Gfx *)(pkt);						\
+ 	_g->words.w0 = (_SHIFTL(G_BRANCH_Z,24,8)|			\
+ 		        _SHIFTL((vtx)*5,12,12)|_SHIFTL((vtx)*2,0,12));	\
+@@ -2384,11 +2391,11 @@ typedef union {
+ {									\
+ 	Gfx *_g = (Gfx *)(pkt);						\
+ 	_g->words.w0 = _SHIFTL(G_RDPHALF_1,24,8);			\
+-	_g->words.w1 = (unsigned int)(uc_dstart);			\
++	_g->words.w1 = PW64_U32(uc_dstart);			\
+ 	_g = (Gfx *)(pkt);						\
+ 	_g->words.w0 = (_SHIFTL(G_LOAD_UCODE,24,8)|			\
+ 			_SHIFTL((int)(uc_dsize)-1,0,16));		\
+-	_g->words.w1 = (unsigned int)(uc_start);			\
++	_g->words.w1 = PW64_U32(uc_start);			\
+ }
+ 
+ #define	gsSPLoadUcodeEx(uc_start, uc_dstart, uc_dsize)			\
+@@ -2420,7 +2427,7 @@ typedef union {
+ 	Gfx *_g = (Gfx *)(pkt);						\
+ 	_g->words.w0 = _SHIFTL(G_DMA_IO,24,8)|_SHIFTL((flag),23,1)|	\
+ 	  _SHIFTL((dmem)/8,13,10)|_SHIFTL((size)-1,0,12);		\
+-	_g->words.w1 = (unsigned int)(dram);				\
++	_g->words.w1 = PW64_U32(dram);				\
+ }
+ 
+ #define	gsSPDma_io(flag, dmem, dram, size)				\
+@@ -3000,7 +3007,7 @@ typedef union {
+ 									\
+ 	_g->words.w0 = _SHIFTL(cmd, 24, 8) | _SHIFTL(fmt, 21, 3) |	\
+ 		       _SHIFTL(siz, 19, 2) | _SHIFTL((width)-1, 0, 12);	\
+-	_g->words.w1 = (unsigned int)(i);				\
++	_g->words.w1 = PW64_U32(i);				\
+ }
+ 
+ #define	gsSetImage(cmd, fmt, siz, width, i)				\

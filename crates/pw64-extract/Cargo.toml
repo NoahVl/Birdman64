@@ -1,0 +1,15 @@
+[package]
+name = "pw64-extract"
+description = "Extracts Pilotwings 64 assets from a user-supplied ROM into data/"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+pw64-rom.workspace = true
+pw64-formats.workspace = true
+pw64-audio-data.workspace = true
+png.workspace = true

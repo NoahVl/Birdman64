@@ -1,0 +1,90 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.98"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+sha1_smol = "1"
+# Decomp manifest hashes (pw64-cbuild): per-file sha256 of the decomp sources.
+sha2 = "0.10"
+# Zip-wrapped ROM images (`pw64-rom/src/rom.rs`) and the first-run decomp
+# download (`pw64-cbuild` feature `fetch`): deflate is the only codec real
+# zips use; everything else (bzip2/zstd/…) stays out of the build. We only
+# READ zips: use the plain flate2 backend, not zip's `deflate` feature, which
+# also pulls the zopfli write-side compressor.
+zip = { version = "8", default-features = false, features = [
+    "deflate-flate2-zlib-rs",
+] }
+# First-run decomp download (pw64-cbuild feature `fetch`, codeload): rustls
+# with the OS root store (corporate TLS proxies); proxy env vars are honoured
+# by the default Agent config.
+ureq = { version = "3", default-features = false, features = [
+    "rustls",
+    "platform-verifier",
+] }
+pw64-rom = { path = "crates/pw64-rom" }
+pw64-formats = { path = "crates/pw64-formats" }
+pw64-audio-data = { path = "crates/pw64-audio-data" }
+pw64-gfx = { path = "crates/pw64-gfx" }
+wgpu = "27"
+winit = "0.30"
+# First-run ROM picker (`rom_setup.rs`). Default features: the native
+# IFileOpenDialog on Windows; on Linux the XDG portal (no gtk3 build dep;
+# libdbus is a runtime requirement, zenity the fallback).
+# S14 checked the alternative `gtk3` backend: it removes the ~91-crate
+# ashpd/async-std portal stack (360 -> 269 Linux crates) but costs a hard
+# gtk3-devel build dependency on every Linux dev machine and CI runner and
+# libgtk3 at runtime for players. The portal needs only D-Bus (every desktop
+# has it) and rfd falls back to zenity when no portal backend exists, so the
+# portal stays: those crates are build-time-only and Linux-only.
+rfd = "0.15"
+# Settings overlay (`settings.rs`). egui-wgpu 0.33 is the last line built
+# against our wgpu 27 (0.34+ needs wgpu 29/30, which wouldn't unify with ours);
+# its default features only add the wasm/webgl bits we don't use.
+egui = "0.33"
+egui-wgpu = { version = "0.33", default-features = false }
+# Controller drawing on the Controls page (`pad_art.rs`): rasterizes the
+# embedded SVG. No default features: no text/fonts/raster images (the SVG
+# draws its letters as paths), which keeps it small.
+resvg = { version = "0.48", default-features = false }
+gilrs = "0.11"
+cpal = "0.18"
+pw64-audio = { path = "crates/pw64-audio" }
+bytemuck = { version = "1", features = ["derive"] }
+env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
+log = "0.4"
+png = "0.18"
+# Switch 2 pads over BLE (crates/birdman64/src/ble.rs): WinRT GATT backend on Windows.
+btleplug = "0.11"
+# block_on + notification streams for btleplug (no async runtime wanted here).
+futures = "0.3"
+# GATT characteristic UUIDs (btleplug doesn't re-export its uuid).
+uuid = "1"
+cc = "1.2"
+corosensei = "0.3"
+# Shared C-build plumbing: pw64-game build.rs + the first-run builder.
+pw64-cbuild = { path = "crates/pw64-cbuild" }# Linux: mmap of the fixed-address RDRAM window / coroutine stacks, SIGSEGV tracer.
+libc = "0.2"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Threading"] }
+# Windows exe resource (icon + VERSIONINFO, crates/birdman64/pw64.rc + build.rs):
+# host-compiling MSVC rc.exe from the Windows Kits registry/vswhom, with the
+# `RC` env override; a missing rc.exe degrades to no icon (manifest_optional).
+embed-resource = "3"
+
+# Release profile: the game must hold the frame budget (≥ 144 Hz target,
+# PLAN Phase 6) on mid hardware. LTO + one CGU buy a few % throughput and
+# size over defaults; fat debug info is only a disk cost (kept so crash
+# traces from user machines still symbolize). `strip = false` on purpose.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "limited"

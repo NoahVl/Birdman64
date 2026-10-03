@@ -1,0 +1,21 @@
+--- a/src/app/code_D2B10.c
++++ b/src/app/code_D2B10.c
+@@ -24,8 +24,16 @@
+     uvGfxBindTexture(GFX_STATE_TEXTURE_NONE);
+-    uvVtxRect(0, SUBSCREEN_Y0, SCREEN_WIDTH - 1, 0);
+-    uvVtxRect(0, SCREEN_HEIGHT - 1, SCREEN_WIDTH - 1, SUBSCREEN_Y1);
+-    uvVtxRect(0, SUBSCREEN_Y1, SUBSCREEN_X0, SUBSCREEN_Y0);
+-    uvVtxRect(SUBSCREEN_X1, SUBSCREEN_Y1, SCREEN_WIDTH - 1, SUBSCREEN_Y0);
++    // PW64: fill screen shows the world in the bar rows/columns
++    // (pw64_widescreen.c); widescreen already shows it past the columns.
++    if (!pw64_fill_frame) {
++        uvVtxRect(0, SUBSCREEN_Y0, SCREEN_WIDTH - 1, 0);
++        uvVtxRect(0, SCREEN_HEIGHT - 1, SCREEN_WIDTH - 1, SUBSCREEN_Y1);
++        if (pw64_widescreen_aspect <= 0.0f) {
++            uvVtxRect(0, SUBSCREEN_Y1, SUBSCREEN_X0, SUBSCREEN_Y0);
++            uvVtxRect(SUBSCREEN_X1, SUBSCREEN_Y1, SCREEN_WIDTH - 1, SUBSCREEN_Y0);
++        }
++    }
+ }
+ 
+ void func_8034B6F8(void) {

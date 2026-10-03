@@ -1,0 +1,27 @@
+--- a/src/app/hang_glider1.c
++++ b/src/app/hang_glider1.c
+@@ -126,6 +126,11 @@
+     camera_802D45C4(hgData->camera, hgData->unk58);
+ }
+ 
++// PW64 rate: f64 shadow of the test timer hgData->unk8 (f32 `+= dt` rounding
++// bias grows with the frame count, see code_9A960.c func_80313D74). Resyncs
++// when the field was written elsewhere (load reset, shared vehicle buffer).
++static f64 sPw64TestTime;
++
+ void hangGliderMovementFrame(HangGliderData* hgData, u8 gameState) {
+     s32 pad;
+     HUDState* temp_a2;
+@@ -143,7 +148,11 @@
+         return;
+     }
+     if (fdr_802E6B5C() != 4) {
+-        hgData->unk8 += D_8034F854;
++        if ((f32)sPw64TestTime != hgData->unk8) {
++            sPw64TestTime = hgData->unk8;
++        }
++        sPw64TestTime += D_8034F854;
++        hgData->unk8 = (f32)sPw64TestTime;
+         shadow_803343D8(1);
+         func_80339C8C(hgData);
+         if (gameState == GAME_STATE_RESULTS) {

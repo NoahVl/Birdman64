@@ -1,0 +1,22 @@
+--- a/src/app/splash.c
++++ b/src/app/splash.c
+@@ -7,6 +7,7 @@
+ #include "demo.h"
+ #include "uv_vector.h"
+ #include "splash.h"
++#include <pw64_rate.h>
+ 
+ typedef struct {
+     Mtx4F unk0;
+@@ -73,8 +74,9 @@ void splashDraw(void) {
+     for (i = 0; i < ARRAY_COUNT(sSplashRipples); i++) {
+         ripple = &sSplashRipples[i];
+         if (ripple->active) {
+-            ripple->fade -= 0.02f;
+-            ripple->curSize += 0.01f;
++            // PW64 rate: fade/grow steps were per frame -> per REF frame.
++            ripple->fade -= 0.02f * pw64_scale();
++            ripple->curSize += 0.01f * pw64_scale();
+             if ((ripple->fade < 0.0) || (ripple->curSize > 1.0)) {
+                 ripple->active = FALSE;
+             } else {

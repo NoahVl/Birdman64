@@ -1,0 +1,37 @@
+--- a/src/app/spath.c
++++ b/src/app/spath.c
+@@ -71,21 +71,34 @@ s32 spathLoadFile(s32 userFile) {
+         switch (tag) {
+         case 'SCPX':
+             _uvMediaCopy(&spath->scpx, src, size);
++            // PW64: BE {u32 count, f32[2] v[]}; block holds only the used prefix
++            PW64_SWAP(&spath->scpx, 1, u32, "w");
++            PW64_SWAP(spath->scpx.v, (size - 4) / 8, PathTimeVal, "2w");
+             break;
+         case 'SCPY':
+             _uvMediaCopy(&spath->scpy, src, size);
++            PW64_SWAP(&spath->scpy, 1, u32, "w"); // PW64
++            PW64_SWAP(spath->scpy.v, (size - 4) / 8, PathTimeVal, "2w");
+             break;
+         case 'SCPZ':
+             _uvMediaCopy(&spath->scpz, src, size);
++            PW64_SWAP(&spath->scpz, 1, u32, "w"); // PW64
++            PW64_SWAP(spath->scpz.v, (size - 4) / 8, PathTimeVal, "2w");
+             break;
+         case 'SCPH':
+             _uvMediaCopy(&spath->scph, src, size);
++            PW64_SWAP(&spath->scph, 1, u32, "w"); // PW64
++            PW64_SWAP(spath->scph.v, (size - 4) / 8, PathTimeVal, "2w");
+             break;
+         case 'SCPP':
+             _uvMediaCopy(&spath->scpp, src, size);
++            PW64_SWAP(&spath->scpp, 1, u32, "w"); // PW64
++            PW64_SWAP(spath->scpp.v, (size - 4) / 8, PathTimeVal, "2w");
+             break;
+         case 'SCPR':
+             _uvMediaCopy(&spath->scpr, src, size);
++            PW64_SWAP(&spath->scpr, 1, u32, "w"); // PW64
++            PW64_SWAP(spath->scpr.v, (size - 4) / 8, PathTimeVal, "2w");
+             break;
+         }
+     }

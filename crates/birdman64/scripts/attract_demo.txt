@@ -1,0 +1,4 @@
+# PW64_INPUT_SCRIPT: no input at all — idles through the intro into the
+# attract demo (title_screen.c: 20 s timeout -> GAME_STATE_DEMO_PILOT) and
+# its controller overlay (hudDemoController). Dump frames through it.
+# Run: PW64_DUMP_FRAMES=<list> cargo run --release -p birdman64

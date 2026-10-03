@@ -1,0 +1,56 @@
+--- a/src/app/skydiving.c
++++ b/src/app/skydiving.c
+@@ -20,6 +20,7 @@
+ #include "app/code_9A960.h"
+ #include "app/code_B6580.h"
+ #include "app/code_BA190.h"
++#include <pw64_rate.h>
+ 
+ s32 D_80371960;
+ s32 D_80371964;
+@@ -27,6 +28,11 @@
+ s32 D_8037196C;
+ Unk80371970 D_80371970[4];
+ 
++// PW64 rate: held drift targets of func_803322CC, one per D_80371970 entry
++// (a static array, so the index is the key). Starts at 1 = draw at once.
++static f32 sPw64DriftAcc = 1.0f;
++static f32 sPw64Drift[ARRAY_COUNT(D_80371970)][3];
++
+ Unk8034FFD0 D_8034FFD0[] = {
+     {
+      { 0.0f, 1.5f, 0.0f },
+@@ -1096,11 +1102,13 @@
+     Mtx4F sp88;
+     Unk8034FFD0* temp_v0;
+     s32 i;
++    s32 pw64Redraw;
+ 
+     temp_v0 = sdData->unk258;
+     if (temp_v0 == NULL) {
+         return;
+     }
++    pw64Redraw = pw64_ticks(&sPw64DriftAcc) > 0;
+ 
+     for (i = 0; i < 3; i++) {
+         spC8 = &D_80371970[i];
+@@ -1119,9 +1127,16 @@
+         spC8->unk10.m[3][0] += spC8->unk4 * D_8034F854;
+         spC8->unk10.m[3][1] += spC8->unk8 * D_8034F854;
+         spC8->unk10.m[3][2] += spC8->unkC * D_8034F854;
+-        spC8->unk64 = func_80313AF4(uvRandF_RANLUX() - 0.50f, spC8->unk64, 10.0f);
+-        spC8->unk68 = func_80313AF4(uvRandF_RANLUX() - 0.50f, spC8->unk68, 10.0f);
+-        spC8->unk6C = func_80313AF4(uvRandF_RANLUX() - 0.50f, spC8->unk6C, 10.0f);
++        // PW64 rate: per-frame random drift target, low-passed (k=10) -> jitter
++        // ~sqrt(dt). Redraw once per REF frame, held per formation diver.
++        if (pw64Redraw) {
++            sPw64Drift[i][0] = uvRandF_RANLUX() - 0.50f;
++            sPw64Drift[i][1] = uvRandF_RANLUX() - 0.50f;
++            sPw64Drift[i][2] = uvRandF_RANLUX() - 0.50f;
++        }
++        spC8->unk64 = func_80313AF4(sPw64Drift[i][0], spC8->unk64, 10.0f);
++        spC8->unk68 = func_80313AF4(sPw64Drift[i][1], spC8->unk68, 10.0f);
++        spC8->unk6C = func_80313AF4(sPw64Drift[i][2], spC8->unk6C, 10.0f);
+ 
+         spC8->unk10.m[3][0] += 0.5f * spC8->unk64 * D_8034F854;
+         spC8->unk10.m[3][1] += 0.5f * spC8->unk68 * D_8034F854;

@@ -1,0 +1,96 @@
+--- a/src/app/task.c
++++ b/src/app/task.c
+@@ -596,7 +596,7 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
+ 
+     dst = &sTaskObjects;
+     sp34 = uvUserFileRead(sTaskUserFileIdxLookup[taskIdx], MEM_ROM_OFFSET);
+-    idx = uvFileReadHeader((s32)sp34);
++    idx = uvFileReadHeader(sp34);
+     uvMemSet(&sTaskObjects, 0, sizeof(sTaskObjects));
+ 
+     while ((tag = uvFileReadBlock(idx, &size, &data, 2)) != 0) {
+@@ -612,6 +612,15 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
+             break;
+         case 'COMM': // 0x434F4D4D
+             _uvMediaCopy(&dst->comm, data, sizeof(dst->comm));
++            // PW64: swap the BE multi-byte fields of comm (counts are u8)
++            PW64_SWAP(&dst->comm.unk10, 1, TaskObjects_Unk10, "7w");
++            PW64_SWAP(&dst->comm.unk2C, 1, TaskObjUnk2C, "6w");
++            PW64_SWAP(&dst->comm.unk44, 1, f32, "w");
++            PW64_SWAP(&dst->comm.unk48.unk0, 11, Unk803599D0, "21w"); // 5 named + 6 in pad1A4 (snap.c reads [5..10])
++            PW64_SWAP16(dst->comm.unk48.unk39C, 4);
++            PW64_SWAP(dst->comm.unk48.unk3A4, 4, f32, "w");
++            PW64_SWAP(&dst->comm.unk48.unk3B4, 2, s32, "w");
++            PW64_SWAP(&dst->comm.unk48.unk3BC, 4, f32, "w");
+             mem_init();
+             dst->dataTPAD = mem_get(dst->comm.countTPAD * sizeof(TaskTPAD));
+             dst->dataLPAD = mem_get(dst->comm.countLPAD * sizeof(TaskLPAD));
+@@ -632,51 +641,68 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
+             break;
+         case 'THER': // 0x54484552
+             _uvMediaCopy(dst->dataTHER, data, size);
++            PW64_SWAP(dst->dataTHER, size / sizeof(TaskTHER), TaskTHER, "10w"); // PW64
+             break;
+         case 'LWIN': // 0x4C57494E
+             _uvMediaCopy(dst->dataLWIN, data, size);
++            PW64_SWAP(dst->dataLWIN, size / sizeof(TaskLWIN), TaskLWIN, "20w 4b"); // PW64
+             break;
+         case 'TPAD': // 0x54504144
+             _uvMediaCopy(dst->dataTPAD, data, size);
++            PW64_SWAP(dst->dataTPAD, size / sizeof(TaskTPAD), TaskTPAD, "6w 4b 3w 4b w"); // PW64
+             break;
+         case 'LPAD': // 0x4C504144
+             _uvMediaCopy(dst->dataLPAD, data, size);
++            PW64_SWAP(dst->dataLPAD, size / sizeof(TaskLPAD), TaskLPAD, "6w 4b 3w 4b 4b"); // PW64
+             break;
+         case 'LSTP': // 0x4C535450
+             _uvMediaCopy(dst->dataLSTP, data, size);
++            PW64_SWAP(dst->dataLSTP, size / sizeof(TaskLSTP), TaskLSTP, "6w 4b 4b w"); // PW64
+             break;
+         case 'RNGS': // 0x524E4753
+             _uvMediaCopy(dst->dataRNGS, data, size);
++            PW64_SWAP(dst->dataRNGS, size / sizeof(TaskRNGS), TaskRNGS,
++                      "7w 4b 5w 4b 5w 4b w 4b 2w 4b 3w 4b 16b"); // PW64
+             break;
+         case 'BALS': // 0x42414C53
+             _uvMediaCopy(dst->dataBALS, data, size);
++            PW64_SWAP(dst->dataBALS, size / sizeof(TaskBALS), TaskBALS, "3w 12b 2w 4b 8w 4b 8w"); // PW64
+             break;
+         case 'PHTS': // 0x50485453
+             _uvMediaCopy(dst->dataPHTS, data, size);
++            PW64_SWAP(dst->dataPHTS, size / sizeof(TaskPHTS), TaskPHTS, "5w"); // PW64
+             break;
+         case 'HOPD': // 0x484F5044
+             _uvMediaCopy(dst->dataHOPD, data, size);
++            PW64_SWAP(dst->dataHOPD, size / sizeof(TaskHOPD), TaskHOPD, "7w 4b"); // PW64
+             break;
+         case 'TARG': // 0x54415247
+             _uvMediaCopy(dst->dataTARG, data, size);
++            PW64_SWAP(dst->dataTARG, size / sizeof(TaskTARG), TaskTARG, "6w 4b w"); // PW64
+             break;
+         case 'HPAD': // 0x48504144
+             _uvMediaCopy(dst->dataHPAD, data, size);
++            PW64_SWAP(dst->dataHPAD, size / sizeof(TaskHPAD), TaskHPAD, "6w w 4b w 4b 5w 4b"); // PW64
+             break;
+         case 'BTGT': // 0x42544754
+             _uvMediaCopy(dst->dataBTGT, data, size);
++            PW64_SWAP(dst->dataBTGT, size / sizeof(TaskBTGT), TaskBTGT, "3w 3w 2b 2b"); // PW64
+             break;
+         case 'FALC': // 0x46414C43
+             _uvMediaCopy(dst->dataFALC, data, size);
++            PW64_SWAP(dst->dataFALC, size / sizeof(TaskFALC), TaskFALC, "4w 8b 37w"); // PW64
+             break;
+         case 'CNTG': // 0x434E5447
+             _uvMediaCopy(dst->dataCNTG, data, size);
++            PW64_SWAP(dst->dataCNTG, size / sizeof(TaskCNTG), TaskCNTG, "6w 4b"); // PW64
+             break;
+         case 'SDFM': // 0x5344464D
++            // PW64: TaskSDFM is a byte pad, no swap needed
+             _uvMediaCopy(dst->dataSDFM, data, size);
+             break;
+         case 'OBSV': // 0x4F425356
+             _uvMediaCopy(dst->dataOBSV, data, size);
++            PW64_SWAP(dst->dataOBSV, size / sizeof(TaskOBSV), TaskOBSV, "4w"); // PW64
+             break;
+         }
+     }

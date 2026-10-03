@@ -1,0 +1,51 @@
+--- a/src/app/code_BA190.c
++++ b/src/app/code_BA190.c
+@@ -6,6 +6,7 @@
+ #include "app/environment.h"
+ #include "app/code_66F70.h"
+ #include "app/code_9A960.h"
++#include <pw64_rate.h>
+ 
+ Unk802D3658_Unk111C D_80371B50;
+ Unk803599D0 D_80371C58;
+@@ -14,6 +15,12 @@
+ void func_80333384(SkyDivingData*);
+ s32 func_803335D0(SkyDivingData*);
+ 
++// PW64 rate: held drift targets of func_80332FCC, per SkyDivingData. One
++// exists: the single vehicle buffer game.c D_80362748[1].
++static SkyDivingData* sPw64DriftOwner;
++static f32 sPw64DriftAcc;
++static f32 sPw64Drift[3];
++
+ void func_80332C60(SkyDivingData* sdData) {
+     Vec3F sp24 = { 0.0f, 0.0f, 0.0f };
+ 
+@@ -162,9 +169,24 @@
+         sdData->unk268 = 1.0f;
+     }
+     sdData->unk160.z = func_80313AF4(sp28, sdData->unk160.z, 3.0f);
+-    sdData->unk1B4 = func_80313AF4(uvRandF_RANLUX() - 0.50f, sdData->unk1B4, 10.0f);
+-    sdData->unk1B8 = func_80313AF4(uvRandF_RANLUX() - 0.50f, sdData->unk1B8, 10.0f);
+-    sdData->unk1BC = func_80313AF4(uvRandF_RANLUX() - 0.50f, sdData->unk1BC, 10.0f);
++    // PW64 rate: a new random drift target per frame, low-passed (k=10), jitters
++    // with amplitude ~sqrt(dt). Draw the targets once per REF frame and hold them
++    // (one draw per frame at REF rate or slower = unchanged, RNG order kept).
++    if (sPw64DriftOwner != sdData) {
++        if (sPw64DriftOwner != NULL) {
++            pw64_fatal("code_BA190.c: second SkyDivingData for the drift targets", PW64_U32(sdData));
++        }
++        sPw64DriftOwner = sdData;
++        sPw64DriftAcc = 1.0f; // draw on the first frame
++    }
++    if (pw64_ticks(&sPw64DriftAcc) > 0) {
++        sPw64Drift[0] = uvRandF_RANLUX() - 0.50f;
++        sPw64Drift[1] = uvRandF_RANLUX() - 0.50f;
++        sPw64Drift[2] = uvRandF_RANLUX() - 0.50f;
++    }
++    sdData->unk1B4 = func_80313AF4(sPw64Drift[0], sdData->unk1B4, 10.0f);
++    sdData->unk1B8 = func_80313AF4(sPw64Drift[1], sdData->unk1B8, 10.0f);
++    sdData->unk1BC = func_80313AF4(sPw64Drift[2], sdData->unk1BC, 10.0f);
+     sdData->unk10.m[3][0] += 0.5f * sdData->unk1B4 * D_8034F854;
+     sdData->unk10.m[3][1] += 0.5f * sdData->unk1B8 * D_8034F854;
+     sdData->unk10.m[3][2] += 0.5f * sdData->unk1BC * D_8034F854;

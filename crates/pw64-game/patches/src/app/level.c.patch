@@ -1,0 +1,49 @@
+--- a/src/app/level.c
++++ b/src/app/level.c
+@@ -277,7 +277,7 @@ LevelObjects* levelLoadMapObjects(u8 mapIdx) {
+     LevelObjects* temp;
+     u8 tmp8;
+ 
+-    idx = uvFileReadHeader((s32)uvUserFileRead(sLevelUserFileLookup[mapIdx], MEM_ROM_OFFSET));
++    idx = uvFileReadHeader(uvUserFileRead(sLevelUserFileLookup[mapIdx], MEM_ROM_OFFSET));
+     temp = &sLevelObjects;
+     uvMemSet((void*)temp, 0, sizeof(LevelObjects));
+     sLevelObjects.dataWOBJ = sLevelWOBJ;
+@@ -293,28 +293,37 @@ LevelObjects* levelLoadMapObjects(u8 mapIdx) {
+             for (i = 0; i < temp->countESND; i++) {
+                 _uvMediaCopy(&esnd, srcPtr, sizeof(esnd));
+                 srcPtr += sizeof(esnd);
++                // PW64: BE f32s
++                PW64_SWAP(&esnd, 1, LevelESND, "22w 4b 5w 4b w");
+                 envSoundLoad(&esnd);
+             }
+             break;
+         case 'WOBJ': // 0x574F424A
+             _uvMediaCopy(temp->dataWOBJ, srcPtr, size);
++            PW64_SWAP(temp->dataWOBJ, size / sizeof(LevelWOBJ), LevelWOBJ, "3w 4b"); // PW64
+             break;
+         case 'LPAD': // 0x4C504144
+             _uvMediaCopy(temp->dataLPAD, srcPtr, size);
++            PW64_SWAP(temp->dataLPAD, size / sizeof(LevelLPAD), LevelLPAD, "5w 4b"); // PW64
+             break;
+         case 'TOYS': // 0x544F5953
+             _uvMediaCopy(temp->dataTOYS, srcPtr, size);
++            PW64_SWAP(temp->dataTOYS, size / sizeof(LevelTOYS), LevelTOYS, "3w 4b"); // PW64
+             break;
+         case 'TPTS': // 0x54505453
+             _uvMediaCopy(temp->dataTPTS, srcPtr, size);
++            PW64_SWAP(temp->dataTPTS, size / sizeof(LevelTPTS), LevelTPTS, "4b 12w"); // PW64
+             break;
+         case 'APTS': // 0x41505453
+             _uvMediaCopy(temp->dataAPTS, srcPtr, size);
++            PW64_SWAP(temp->dataAPTS, size / sizeof(LevelAPTS), LevelAPTS, "8w"); // PW64
+             break;
+         case 'BNUS': // 0x424E5553
+             _uvMediaCopy(temp->dataBNUS, srcPtr, size);
++            PW64_SWAP(temp->dataBNUS, size / sizeof(LevelBNUS), LevelBNUS, "7w"); // PW64
+             break;
+         case 'LEVL': // 0x4C45564C
++            // PW64: LevelLEVL is all u8 counts, no swap needed
+             ptr = (LevelLEVL*)srcPtr;
+             temp->countESND = ptr->countESND;
+             if (temp->countESND >= 255) {
