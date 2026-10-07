@@ -458,7 +458,7 @@ pub fn frame_hash_pre_lod(f: &Frame) -> u64 {
 }
 
 /// Strips the fill view's placement fields (`stretch_y`, default `vanchor`)
-/// and the OLED-care flag (default `hud`) from a draw's `Debug` text: like
+/// the OLED-care flag (default `hud`) and the split-screen view (`None`) from a draw's `Debug` text: like
 /// `lodp`/`filt` they are renderer-side placement inputs, not interpreter
 /// output, so the identity constants stay.
 fn strip_placement(mut s: String) -> String {
@@ -471,6 +471,9 @@ fn strip_placement(mut s: String) -> String {
     }
     if let Some(a) = s.find(", hud: false") {
         s.replace_range(a..a + ", hud: false".len(), "");
+    }
+    if let Some(a) = s.find(", split: None") {
+        s.replace_range(a..a + ", split: None".len(), "");
     }
     s
 }

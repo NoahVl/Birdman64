@@ -139,7 +139,7 @@ int pw64_hud_vanchor = 'M';
 #define PW64_VANCHOR_TAG 0x50575600u
 
 void pw64_hud_emit_anchor(int anchor) {
-    if (pw64_widescreen_aspect <= 0.0f) {
+    if (pw64_widescreen_aspect <= 0.0f && pw64_level_players <= 1) {
         return;
     }
     gGfxDisplayListHead->words.w0 = (u32)G_NOOP << 24;
@@ -148,9 +148,10 @@ void pw64_hud_emit_anchor(int anchor) {
 }
 
 /* The vertical anchor matters on a fill view (with or without
- * widescreen: 4:3 + fill shifts HUD rows too). */
+ * widescreen: 4:3 + fill shifts HUD rows too) and in split-screen views
+ * (both anchors: pw64_hud_split_tag). */
 void pw64_hud_emit_vanchor(int anchor) {
-    if (pw64_widescreen_aspect <= 0.0f && !pw64_fill_screen) {
+    if (pw64_widescreen_aspect <= 0.0f && !pw64_fill_screen && pw64_level_players <= 1) {
         return;
     }
     gGfxDisplayListHead->words.w0 = (u32)G_NOOP << 24;
@@ -200,5 +201,41 @@ void pw64_hud_anchor_xy(int x, int y) {
 void pw64_hud_tag(int on) {
     gGfxDisplayListHead->words.w0 = (u32)G_NOOP << 24;
     gGfxDisplayListHead->words.w1 = on ? PW64_HUD_TAG_ON : PW64_HUD_TAG_OFF;
+    gGfxDisplayListHead++;
+}
+
+/*
+ * Split-screen HUD (splitscreen.md "HUD per view"). Each player's HUD is
+ * drawn in their channel's callback, still for the full 320x240 screen;
+ * hudMainRender brackets it with this tag carrying the view (the current
+ * player's channel viewport, top-down rows) and the renderer lays the
+ * HUD's subscreen frame out inside it (pw64-gfx `split_placement`: one
+ * uniform scale, each element kept at its L/C/R + T/M/B anchor, which
+ * pw64_hud_emit_anchor/vanchor also emit in split-screen). One tag covers
+ * every draw path (sprites, uvVtx gauges, queued text); the HUD scissor
+ * stays full screen in the display list. Only with 2+ players in the test.
+ */
+
+/* Must match pw64-gfx `interp::SPLIT_TAG` ("PWS" + 'X'/'Y'/'0'). */
+#define PW64_SPLIT_TAG 0x50575300u
+
+void pw64_hud_split_tag(int on) {
+    const UnkStruct_80204D94* c;
+    if (pw64_level_players <= 1) {
+        return;
+    }
+    if (!on) {
+        gGfxDisplayListHead->words.w0 = (u32)G_NOOP << 24;
+        gGfxDisplayListHead->words.w1 = PW64_SPLIT_TAG | '0';
+        gGfxDisplayListHead++;
+        return;
+    }
+    c = &D_80261730[pw64_player_cur];
+    gGfxDisplayListHead->words.w0 = ((u32)G_NOOP << 24) | ((u32)c->viewX0 << 12) | (u32)c->viewX1;
+    gGfxDisplayListHead->words.w1 = PW64_SPLIT_TAG | 'X';
+    gGfxDisplayListHead++;
+    gGfxDisplayListHead->words.w0 = ((u32)G_NOOP << 24) | ((u32)(SCREEN_HEIGHT - c->viewY1) << 12) |
+                                    (u32)(SCREEN_HEIGHT - c->viewY0);
+    gGfxDisplayListHead->words.w1 = PW64_SPLIT_TAG | 'Y';
     gGfxDisplayListHead++;
 }

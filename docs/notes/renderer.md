@@ -364,6 +364,13 @@ PW64_NO_INPUT=1 PW64_NO_AUDIO=1 PW64_AUDIO_VIRTUAL=1` (host CPU: laptop i7/RTX 3
   `font.c` stores `pw64_hud_anchor` per message and re-emits it there. Anchor back to C after the HUD, so menus,
   briefing and results are untouched.
 
+- **Split-screen HUD** (`DrawCall::split`, `Renderer::split_placement`): G_NOOP "PWS"+`X`/`Y` (rect in w0's
+  low 24 bits: `a<<12|b`, x then top-down rows; `0` = off) tags draws with their view. Non-Extend draws map
+  `Wide::SUBSCREEN` into the view: uniform k = view_h/214 (≤ 1:1) per axis at the `Anchor`/`VAnchor`;
+  `Stretch` fills spanning the subscreen stretch onto the view; full-screen scissors become the view, others
+  move, all clipped to it. The view takes the Hor+ width when it spans `MAIN_VIEW`. `split: None` = old path
+  (stripped from the identity hash like `hud: false`).
+
 ## Fill screen (`PW64_FILL_SCREEN`)
 Option: remove the game's own black bars around world views (flight, demo, replay, title, class summary,
 briefing, results, credits) by showing the 3D there too; HUD moves to the true top/bottom edges. Name it

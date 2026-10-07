@@ -13,11 +13,12 @@
  
  // hang glider speeds below this value will be highlighted larger red/amber font
  #define HIGHLIGHT_SPEED_BELOW 36
-@@ -246,6 +249,7 @@ void hudMainRender(void) {
- 
+@@ -246,6 +249,8 @@ void hudMainRender(void) {
+
      hud = &sHudState;
      if ((hud->renderFlags & HUD_RENDER_DISABLE) == 0x0) {
-+        pw64_hud_tag(1); // PW64: flight-HUD bracket (OLED care)
++        pw64_hud_tag(1);       // PW64: flight-HUD bracket (OLED care)
++        pw64_hud_split_tag(1); // PW64 split-screen: laid out in this player's view
          if ((hud->unkC50 != 0.0f) && (hud->unkC54 < sHudState.unk14)) {
              hud->unkC5C = !hud->unkC5C;
              hud->unkC54 = (1.0f / hud->unkC50) + sHudState.unk14;
@@ -29,11 +30,12 @@
              hudDrawLowFuel(&sHudState);
              hudDrawStartText(&sHudState);
              if (sHudState.showController != 0) {
-@@ -317,6 +322,8 @@ void hudMainRender(void) {
+@@ -317,6 +323,9 @@ void hudMainRender(void) {
          sHudState.unkC++;
          sHudState.unk14 += D_8034F854;
          uvFontGenDlist();
 +        pw64_hud_set_anchor('C'); // PW64: end of the anchored HUD
++        pw64_hud_split_tag(0);    // PW64 split-screen: end of the view's HUD
 +        pw64_hud_tag(0);          // PW64: end of the flight-HUD bracket
          uvGfxMtxViewPop();
      }
@@ -208,8 +210,8 @@
      sHudState.showController = enable;
  }
 +
-+// PW64 split-screen: the HUD state is per player (pw64_players.c); only
-+// player 1's is drawn for now (game.c.patch).
++// PW64 split-screen: the HUD state is per player (pw64_players.c); each
++// player's HUD is drawn in their view's channel callback.
 +void pw64_reg_hud(void) {
 +    PW64_REG(sHudState);
 +    PW64_REG(D_8034F910);

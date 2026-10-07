@@ -150,6 +150,10 @@ pub struct Interpreter {
     vanchor: VAnchor,
     /// Inside the flight HUD (`HUD_TAG_ON/OFF` brackets); reset per run.
     hud: bool,
+    /// Split-screen HUD view (`SPLIT_TAG` markers): the pending x range of
+    /// an 'X' marker and the active rect; reset per run.
+    split_x: [f32; 2],
+    split: Option<[f32; 4]>,
     /// Commands executed by the last run (TEXRECT + its halves count once).
     commands: usize,
     /// Bumped by every TMEM load (see [`BindMemo`]).
@@ -186,6 +190,11 @@ pub const VANCHOR_TAG: u32 = 0x5057_5600;
 /// unless OLED care is on.
 pub const HUD_TAG_ON: u32 = 0x5057_4831;
 pub const HUD_TAG_OFF: u32 = 0x5057_4830;
+/// `G_NOOP` split-screen HUD view marker ("PWS" + low byte, `pw64_hud_split_tag`
+/// in `pw64_widescreen.c`): `X` carries the view's N64 x range in w0
+/// (`x0 << 12 | x1`), `Y` its top-down rows (`row0 << 12 | row1`) and turns
+/// the view on for the following draws ([`crate::DrawCall::split`]); `0` off.
+pub const SPLIT_TAG: u32 = 0x5057_5300;
 
 /// The anchor an `ANCHOR_TAG` marker word selects (`None`: not a marker).
 pub fn anchor_tag(w1: u32) -> Option<Anchor> {
@@ -278,6 +287,8 @@ impl Interpreter {
             anchor: Anchor::Centre,
             vanchor: VAnchor::Middle,
             hud: false,
+            split_x: [0.0; 2],
+            split: None,
             commands: 0,
             tmem_gen: 0,
             bind_memo: [None; 8],
@@ -429,6 +440,15 @@ impl Interpreter {
             // draws so the renderer can drift + dim them (OLED care).
             op::G_NOOP if w1 == HUD_TAG_ON || w1 == HUD_TAG_OFF => {
                 self.hud = w1 == HUD_TAG_ON;
+            }
+            // Split-screen HUD view (pw64_hud_split_tag).
+            op::G_NOOP if w1 & 0xFFFF_FF00 == SPLIT_TAG => {
+                let (a, b) = (((w0 >> 12) & 0xFFF) as f32, (w0 & 0xFFF) as f32);
+                match w1 as u8 {
+                    b'X' => self.split_x = [a, b],
+                    b'Y' => self.split = Some([self.split_x[0], a, self.split_x[1], b]),
+                    _ => self.split = None,
+                }
             }
             op::G_SPNOOP
             | op::G_NOOP
@@ -1015,6 +1035,7 @@ impl Interpreter {
             && last.anchor == self.anchor
             && last.vanchor == self.vanchor
             && last.hud == self.hud
+            && last.split == self.split
         {
             last.vertex_count += count;
             if let (Wide::Stretch(a), Wide::Stretch(b)) = (&mut last.wide, wide) {
@@ -1035,6 +1056,7 @@ impl Interpreter {
             vanchor: self.vanchor,
             stretch_y,
             hud: self.hud,
+            split: self.split,
         });
     }
 
@@ -1538,6 +1560,26 @@ mod tests {
         assert_eq!(vanchor_tag(HUD_TAG_ON), None);
         assert_eq!(anchor_tag(HUD_TAG_OFF), None);
         assert_eq!(vanchor_tag(HUD_TAG_OFF), None);
+
+        // Split-screen view ("PWS"): X then Y sets the rect (w0 data), 0
+        // clears it; resets per run; not an anchor tag.
+        let mut cmds = vec![
+            (0xC000_0000 | (10 << 12) | 310, SPLIT_TAG | b'X' as u32),
+            (0xC000_0000 | (116 << 12) | 222, SPLIT_TAG | b'Y' as u32),
+        ];
+        cmds.extend(tri(ident));
+        cmds.push((0xC000_0000, SPLIT_TAG | b'0' as u32));
+        cmds.extend(tri(ident));
+        cmds.push((0xB800_0000, 0));
+        let split = mem.push_words(&words(&cmds));
+        let f = Interpreter::new().run(&mem, split);
+        let v = Some([10.0, 116.0, 310.0, 222.0]);
+        let got: Vec<_> = f.draws.iter().map(|d| d.split).collect();
+        assert_eq!(got, [v, v, None, None]);
+        let f = it.run(&mem, main);
+        assert!(f.draws.iter().all(|d| d.split.is_none()));
+        assert_eq!(anchor_tag(SPLIT_TAG | b'X' as u32), None);
+        assert_eq!(vanchor_tag(SPLIT_TAG | b'Y' as u32), None);
     }
 
     /// TEXRECT consumes exactly the two following half commands; the command

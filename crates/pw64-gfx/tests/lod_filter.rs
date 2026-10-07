@@ -125,6 +125,7 @@ fn frame(
         vanchor: pw64_gfx::frame::VAnchor::Middle,
         stretch_y: [0.0; 2],
         hud: false,
+        split: None,
     };
     Frame {
         vertices: verts,
