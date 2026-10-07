@@ -987,7 +987,6 @@ impl P2Input {
     }
 
     /// The config / env spelling of this value (inverse of [`P2Input::parse`]).
-    #[allow(dead_code)] // the settings screen's Controls page wires this later
     pub fn to_config(&self) -> String {
         match self {
             P2Input::Keyboard => "keyboard".into(),
@@ -1007,6 +1006,13 @@ static P2: Mutex<Option<P2Input>> = Mutex::new(None);
 pub fn set_p2(p: Option<P2Input>) {
     *P2.lock().unwrap() = p;
     publish(&mut SOURCES.lock().unwrap());
+}
+
+/// The player-2 routing in force right now (`None` = split-screen off:
+/// everything goes to player 1). The settings screen stages its
+/// Player-2 controller row from this while split-screen runs.
+pub fn p2_input() -> Option<P2Input> {
+    p2_setting()
 }
 
 /// The player-2 routing in force right now (`None` = split-screen off).
@@ -1033,10 +1039,24 @@ pub fn splitscreen_enabled() -> bool {
     crate::opts::precedence(env_enabled(), config::get().splitscreen.enabled, false)
 }
 
+/// The names of the connected gilrs pads, in order (the settings screen's
+/// Player-2 controller choices, one per pad).
+pub fn connected_pad_names() -> Vec<String> {
+    SOURCES
+        .lock()
+        .unwrap()
+        .gamepads
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 /// Player 2's input method: `PW64_P2_INPUT` > `[splitscreen] p2_input` >
 /// `"gamepad"` (every gilrs pad). An unparsable value warns and falls back
-/// to `"gamepad"`.
-fn resolve_p2() -> P2Input {
+/// to `"gamepad"`. `pub(crate)`: the settings screen reads the configured
+/// value (before any live change) to stage its Player-2 controller row
+/// while split-screen is off.
+pub(crate) fn resolve_p2() -> P2Input {
     let cfg = config::get().splitscreen.p2_input.clone();
     let raw = std::env::var("PW64_P2_INPUT")
         .ok()

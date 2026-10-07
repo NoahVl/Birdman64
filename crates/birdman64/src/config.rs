@@ -679,6 +679,11 @@ pub struct SavedSettings {
     pub pause_in_background: Option<bool>,
     /// Switch 2 pads over BLE (`[input.ble] enabled`; None = leave as-is).
     pub ble: Option<bool>,
+    /// Split-screen 2 players (`[splitscreen] enabled`; None = leave as-is).
+    pub splitscreen_enabled: Option<bool>,
+    /// Player 2's controller routing (`[splitscreen] p2_input`, the
+    /// `P2Input` config spelling; None = leave as-is).
+    pub p2_input: Option<String>,
 }
 
 /// Writes the screen's settings into `pw64.toml`. The file is round-tripped
@@ -826,6 +831,9 @@ fn builtin_default(section: &str, key: &str, low_end: bool) -> Option<toml::Valu
         ("ui", "pause_in_background") => Some(Ui::default().pause_in_background.into()),
         // Switch 2 pads over BLE: off unless the player switches them on.
         ("input.ble", "enabled") => Some(crate::ble::DEFAULT.into()),
+        // Split-screen: off / every gamepad to player 2 unless changed.
+        ("splitscreen", "enabled") => Some(false.into()),
+        ("splitscreen", "p2_input") => Some("gamepad".into()),
         _ => None,
     }
 }
@@ -976,6 +984,31 @@ pub(crate) fn apply(
             oput("brightness", float(v));
         }
     }
+    // Split-screen (`[splitscreen]`, the settings Controls page): its own
+    // table.
+    if u.splitscreen_enabled.is_some() || u.p2_input.is_some() {
+        let ss = table
+            .entry("splitscreen")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let toml::Value::Table(ss) = ss else {
+            return Err("[splitscreen] is not a table in pw64.toml; not saved".to_string());
+        };
+        // Same rule as [graphics] (U18): the default is removed, not
+        // written.
+        let mut sput = |k: &str, v: toml::Value| {
+            if builtin_default("splitscreen", k, low_end).as_ref() == Some(&v) {
+                ss.remove(k);
+            } else {
+                ss.insert(k.into(), v);
+            }
+        };
+        if let Some(v) = u.splitscreen_enabled {
+            sput("enabled", v.into());
+        }
+        if let Some(v) = &u.p2_input {
+            sput("p2_input", v.clone().into());
+        }
+    }
     // Input maps (R1): a Save that includes bindings replaces the
     // sub-tables wholesale; an empty map means "back to the defaults" and
     // removes the sub-table. A map equal to the full built-in default
@@ -1114,6 +1147,42 @@ mod tests {
         let c = parse(&text).unwrap();
         assert!(c.oled.drift);
         assert_eq!(c.oled.brightness, 0.8, "the written step parses back");
+    }
+
+    /// The `[splitscreen]` keys the settings screen saves: written into
+    /// their own table, defaults removed, unrelated keys survive, and
+    /// everything parses back through `from_table`.
+    #[test]
+    fn splitscreen_keys_round_trip() {
+        let mut table: toml::Table = toml::from_str("[graphics]\nmsaa = 4\n").unwrap();
+        apply(
+            &mut table,
+            &SavedSettings {
+                splitscreen_enabled: Some(true),
+                p2_input: Some("keyboard".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(table["splitscreen"]["enabled"].as_bool(), Some(true));
+        assert_eq!(table["splitscreen"]["p2_input"].as_str(), Some("keyboard"));
+        // Unrelated keys survive.
+        assert_eq!(table["graphics"]["msaa"].as_integer(), Some(4));
+        let c = parse(&toml::to_string_pretty(&table).unwrap()).unwrap();
+        assert_eq!(c.splitscreen.enabled, Some(true));
+        assert_eq!(c.splitscreen.p2_input.as_deref(), Some("keyboard"));
+        // The defaults (off / every gamepad) remove the keys again.
+        let off = SavedSettings {
+            splitscreen_enabled: Some(false),
+            p2_input: Some("gamepad".into()),
+            ..Default::default()
+        };
+        apply(&mut table, &off).unwrap();
+        assert!(table["splitscreen"].get("enabled").is_none());
+        assert!(table["splitscreen"].get("p2_input").is_none());
+        let c = parse(&toml::to_string_pretty(&table).unwrap()).unwrap();
+        assert_eq!(c.splitscreen.enabled, None);
+        assert_eq!(c.splitscreen.p2_input, None);
     }
 
     /// `[input.ble] enabled` (settings Controls row): On is written and

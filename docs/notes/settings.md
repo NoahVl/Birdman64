@@ -553,7 +553,23 @@ Code: `crates/birdman64/src/settings.rs` (overlay + nav + config write), hooks i
 
 ## Switch 2 (BLE) row on the Controls page
 
-- `Opt::Ble` row between "Reset gamepad" and Back: "Switch 2 controllers (Bluetooth): On/Off (experimental)". Live like Volume: `change` calls `ble::set_enabled`; staged as `SavedSettings::ble` → `[input.ble] enabled` (default false removed, empty `[input.ble]` dropped).
+- `Opt::Ble` row on the Controls page (after the split-screen section, still
+  above Back): "Switch 2 controllers (Bluetooth): On/Off (experimental)". Live like Volume: `change` calls `ble::set_enabled`; staged as `SavedSettings::ble` → `[input.ble] enabled` (default false removed, empty `[input.ble]` dropped).
 - Env precedent: locked (disabled row, no toggle, never saved) when `ble::locked_by()` is `PW64_BLE` (env wins) or `PW64_NO_INPUT` (BLE unavailable); the status lines say why. Status lines under the row: `ble_status_lines`, redrawn every overlay frame.
 - Disabled rows now also scroll into view when nav selects them (`opt_row`), else the last-row BLE lock was invisible.
-- Check: `PW64_SETTINGS_SHOT=200 PW64_WIN_SHOT=1 PW64_SETTINGS_KEYS=Down,Enter,Up,Up[,Enter] PW64_DATA_DIR=<scratch>` (Up from the first Controls row wraps to Back, then BLE). Without `PW64_NO_INPUT`, Enter really starts a BLE scan.
+- Check: `PW64_SETTINGS_SHOT=200 PW64_WIN_SHOT=1 PW64_SETTINGS_KEYS=Down,Enter,Up,Up[,Enter] PW64_DATA_DIR=<scratch>` (Up from the first Controls row wraps to Back). Without `PW64_NO_INPUT`, Enter really starts a BLE scan.
+
+## Split-screen rows on the Controls page (SS-UI)
+
+- `Opt::Split` (restart row, like Fill screen; → `[splitscreen] enabled`) and
+  `Opt::P2Input` (live while split-screen runs via `input::set_p2`; greyed while staged
+  Split is Off; → `[splitscreen] p2_input`), between the gamepad reset and the BLE row.
+- P2 choices (pure `p2_choices`): All gamepads, each connected pad by name, Keyboard,
+  Switch 2 (Bluetooth). A saved pad that isn't connected stays listed as
+  "<name> (not connected)" so cycling doesn't lose it.
+- Fade-in scroll gotcha (fixed): a nav move on the overlay's first frame queued its scroll
+  into the still-fading (tiny) panel and the one-shot `follow_sel` was lost; it is now
+  consumed only after `FADE_FOLLOW` (500 ms).
+- Screenshot: `PW64_SETTINGS_SHOT=300 PW64_SETTINGS_KEYS=Down,Enter,Up
+  PW64_DATA_DIR=<scratch>` → `tmp/win_settings.png` (window run: not with
+  `PW64_MAX_RETRACES`, which implies headless; kill the process after the shot).

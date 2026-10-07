@@ -96,8 +96,10 @@ keyboard = P1 and a Joy-Con 2 pair (BLE) = P2. That needs a setting.
   (L+R Joy-Con merged), script, script2); pure `route()` splits them by `P2Input`
   (`[splitscreen] p2_input` / `PW64_P2_INPUT`; default `"gamepad"` = every gilrs pad → P2,
   keyboard → P1). `PW64_INPUT_SCRIPT_P2` drives controller 2 for tests. Details: input.md.
-- **Open:** Settings > Controls: per player "Controller: Keyboard / <pad name> / Joy-Con 2 / none",
-  plus a "press a button on the controller for player 2" capture (reuse `start_pad_capture`).
+- **Done (settings):** Controls page rows "Split-screen (2 players)" (needs a restart) and
+  "Player 2 controller" (live). Details: settings.md "Split-screen rows on the Controls page".
+- **Open:** a "press a button on the controller for player 2" capture
+  (reuse `start_pad_capture`).
   Persist in `pw64.toml` by device name/kind (gilrs ids are not stable across runs);
   an unassigned new device goes to P1.
 - Bindings: the keyboard table is already its own; a shared gamepad table is fine at first.
