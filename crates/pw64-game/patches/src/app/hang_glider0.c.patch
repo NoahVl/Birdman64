@@ -1,0 +1,40 @@
+--- a/src/app/hang_glider0.c
++++ b/src/app/hang_glider0.c
+@@ -147,9 +147,13 @@ void func_802EE640(HangGliderData* hgData) {
+     uvDobjPosm(hgData->objId, hgData->unk2E4, &sp34);
+ }
+ 
++// PW64 split-screen: hoisted from func_802EEB00 / func_802EEF0C so they can
++// be registered as per-player state (pw64_reg_hang_glider0).
++static f32 D_8034F1B0 = 0.0f;
++static f32 D_8034F1B4 = 1.0f;
++static f32 D_80367F50;
++
+ void func_802EEB00(HangGliderData* hgData, u8 arg1) {
+-    static f32 D_8034F1B0 = 0.0f;
+-    static f32 D_8034F1B4 = 1.0f;
+     Mtx4F spB8;
+     Mtx4F sp78;
+     Mtx4F sp38;
+@@ -235,7 +239,6 @@ void func_802EEB00(HangGliderData* hgData, u8 arg1) {
+ }
+ 
+ void func_802EEF0C(HangGliderData* hgData) {
+-    static f32 D_80367F50;
+     f32 var_fa0;
+     f32 var_fa1;
+     f32 var_fv0;
+@@ -288,3 +291,13 @@ void func_802EF058(HangGliderData* hgData, Unk80371120* arg1, s32 partId, Mtx4F*
+     uvModelGetPosm(hgData->modelId, partId, arg3);
+     uvMat4SetQuaternionRotation(arg3, arg1->unk0[sp2C].unk0, arg1->unk0[sp2C].unk4, arg1->unk0[sp2C].unk8, arg1->unk0[sp2C].unkC);
+ }
++
++// PW64 split-screen: per-player hang glider pose/anim state (pw64_players.c).
++void pw64_reg_hang_glider0(void) {
++    PW64_REG(D_80367A40);
++    PW64_REG(D_80367BF0);
++    PW64_REG(D_80367DA0);
++    PW64_REG(D_8034F1B0);
++    PW64_REG(D_8034F1B4);
++    PW64_REG(D_80367F50);
++}

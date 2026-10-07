@@ -1,0 +1,18 @@
+--- a/src/app/shadow.c
++++ b/src/app/shadow.c
+@@ -296,3 +296,15 @@ void shadow_80334C70(void) {
+     D_80350468 = 0xFFFF;
+     D_8035046C = 0xFFFF;
+ }
++
++// PW64 split-screen: the shadow dobj and its state are per player, so
++// player 2's vehicle load allocates its own shadow dobj (pw64_players.c).
++void pw64_reg_shadow(void) {
++    PW64_REG(D_80350460);
++    PW64_REG(D_80350464);
++    PW64_REG(D_80350468);
++    PW64_REG(D_8035046C);
++    PW64_REG(D_80350470);
++    PW64_REG(D_80350474);
++    PW64_REG(D_80350478);
++}

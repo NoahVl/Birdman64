@@ -8,7 +8,16 @@
  
  // TODO: Unk802D472C_SP60 needs to be merged with some combination of Unk802D3658_Unk1224/8
  typedef struct {
-@@ -245,10 +247,11 @@ STATIC_FUNC void camera_802D3790(Camera* camera) {
+@@ -27,6 +28,8 @@ s32 pad_D_8034E9E8 = 0;
+ 
+ // .bss
+ Unk803599D0 D_803599D0;
++// PW64 split-screen: hoisted from camera_802D4274 (pw64_reg_camera).
++static f32 D_80359A24;
+ 
+ // forward declarations
+ STATIC_FUNC s32 camera_802D408C(Camera* camera);
+@@ -245,10 +248,11 @@ STATIC_FUNC void camera_802D3790(Camera* camera) {
              var_fv0 = -camera->unk1378;
          }
          temp_fv1_2 = camera->unk1380;
@@ -24,7 +33,15 @@
          }
          camera->unk1380 = var_fv0;
          spA4.z = (-uvSinF(var_fv0 * 0.0174533f) * camera->unk1374) + spBC.z; // almost DEG_TO_RAD(1)
-@@ -955,8 +957,9 @@ STATIC_FUNC void camera_802D559C(Camera* camera) {
+@@ -452,7 +456,6 @@ STATIC_FUNC void camera_802D41D8(Camera* camera) {
+ }
+ 
+ STATIC_FUNC void camera_802D4274(Camera* camera) {
+-    static f32 D_80359A24;
+     Mtx4F sp70; // 70:AF
+     f32 sp6C;
+     f32 sp68;
+@@ -955,8 +958,9 @@ STATIC_FUNC void camera_802D559C(Camera* camera) {
      uvMat4UnkOp6(&camera->unk108, &camera->unk80, &sp48);
      temp_v0 = camera_802D472C(camera, &sp48);
      if (temp_v0 != 0) {
@@ -36,10 +53,7 @@
          uvMat4UnkOp6(&camera->unk108, &camera->unk80, &sp48);
      }
  }
-@@ -998,6 +1001,54 @@
-     if (sp30.z > 0.0f) {
-         var_fa0 = -var_fa0;
-     }
+@@ -1001,3 +1005,40 @@ STATIC_FUNC void camera_802D58EC(Camera* camera, Mtx4F* arg1) {
      camera->unk220 = func_80313AF4(var_fa0, camera->unk220, 1.0f);
      uvMat4RotateAxis(arg1, camera->unk220 * 0.01745329f, 'x'); // almost DEG_TO_RAD(1)
  }
@@ -72,22 +86,11 @@
 +    cam->clipY0 = -cam->clipY1;
 +}
 +
-+// PW64 split-screen spike: channel 1 shows player 1's camera turned 180
-+// degrees about its up axis (rows 0 and 1 negated over the rotation
-+// columns; Z is up). Frustum = camera1's clip planes, near/far of
-+// camera0's (func_8034B624 has already driven channel 0 this frame).
-+void pw64_split_draw_rear(void* camera0, void* camera1) {
-+    Camera* c0 = camera0;
-+    Camera* c1 = camera1;
-+    Mtx4F m = c0->unk108;
-+    s32 i;
-+    for (i = 0; i < 3; i++) {
-+        m.m[0][i] = -m.m[0][i];
-+        m.m[1][i] = -m.m[1][i];
-+    }
-+    uvChan_80204C94(1, c1->clipX0, c1->clipX1, c1->clipY0, c1->clipY1, 1.0f, c0->clipFar);
-+    uvChan_80204B34(1, &m);
-+    uvChan_80204BD4(1, 1, c0->unk20);
-+    uvChan_80204BD4(1, 0, c0->unk20);
-+    uvChan_80204FC4(1);
++// PW64 split-screen: camera-only file state, per player (pw64_players.c).
++// Camera i only runs while player i is live (update and draw pass), so
++// swapping them is the same as indexing them by camera->unk22C.
++void pw64_reg_camera(void) {
++    PW64_REG(D_8034E9E0);
++    PW64_REG(D_8034E9E4);
++    PW64_REG(D_80359A24);
 +}

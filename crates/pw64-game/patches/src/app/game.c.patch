@@ -1,25 +1,66 @@
 --- a/src/app/game.c
 +++ b/src/app/game.c
-@@ -46,6 +46,6 @@
+@@ -45,9 +45,11 @@
+ 
  Unk80362690* D_80362690;
  Unk80362690 D_80362698;
- u8 D_80362748[1][0x740]; // vehicle data buffer
+-u8 D_80362748[1][0x740]; // vehicle data buffer
 -Camera D_80362E88[1];
-+Camera D_80362E88[2]; // PW64: split-screen, storage for camera 1
- Unk80364210 D_80364210[1];
+-Unk80364210 D_80364210[1];
++// PW64 split-screen: one vehicle buffer, camera and results struct per
++// player; with one player only [0] is used.
++u8 D_80362748[PW64_MAX_PLAYERS][0x740]; // vehicle data buffer
++Camera D_80362E88[PW64_MAX_PLAYERS];
++Unk80364210 D_80364210[PW64_MAX_PLAYERS];
  HangGliderData* D_803676F0;
-@@ -149,6 +149,10 @@
-         temp_s0->unk8B = 0;
-         cameraInit(i, &D_80362E88[i]);
+ GyrocopterData* D_803676F4;
+ RocketBeltData* D_803676F8;
+@@ -62,6 +64,28 @@ Unk80367868 D_80367868;
+ s32 D_8034F160 = -1;
+ s32 D_8034F164 = 0;
+ 
++// PW64 split-screen (splitscreen.md "M2"): pw64_level_players
++// (pw64_players.c) = players in the current test, 1 unless pw64_players > 1
++// and the test supports it (hang glider only so far). Every split path
++// below is gated on it; 1 = the original code.
++extern Unk80364210* D_8034FBD0; // code_B2900.c: current player's results
++void pw64_task_world_update(Mtx4F* arg0, f32 arg1);  // task.c.patch
++s32 pw64_task_player_update(Mtx4F* arg0, f32 arg1); // task.c.patch
++
++// Per-player state owned by game.c (pw64_players.c). unkC[0] is the live
++// player's Unk80362690_Unk0 (unk9C stays 0).
++void pw64_reg_game(void) {
++    PW64_REG(D_80362698.unkC[0]);
++    PW64_REG(D_803676F0);
++    PW64_REG(D_803676F4);
++    PW64_REG(D_803676F8);
++    PW64_REG(D_803676FC);
++    PW64_REG(D_80367700);
++    PW64_REG(D_80367704);
++    PW64_REG(D_80367708);
++    PW64_REG(D_8034FBD0);
++}
++
+ typedef s32 (*GameStateUpdateFunc)(Unk80362690*);
+ 
+ s32 gameUpdateStateTitle(Unk80362690*);
+@@ -151,6 +175,14 @@ void gameInit(void) {
          func_8032B3D0(&D_80364210[i]);
          func_8034B5E0(temp_s0->unk70->unk22C, temp_s0->unk70);
      }
-+    // PW64 split-screen: a second camera on kernel channel 1.
-+    if (pw64_split) {
++    // PW64 split-screen: player 2 = camera/kernel channel 1, its own
++    // results struct; then register the per-player state.
++    pw64_players = pw64_split ? 2 : 1;
++    if (pw64_players > 1) {
 +        cameraInit(1, &D_80362E88[1]);
++        func_8032B3D0(&D_80364210[1]);
++        pw64_players_init();
 +    }
  }
-@@ -179,4 +183,23 @@
+ 
+ void func_802EBBB8(void) {
+@@ -178,7 +210,24 @@ void gameUpdate(void) {
+ 
  s32 gameUpdateStateTitle(Unk80362690* arg0) {
      s32 gameState;
 +    int spF, spC, spV, spT, spP; // PW64: int, as pw64_direct_start takes
@@ -41,38 +82,236 @@
 +        return GAME_STATE_TEST_SETUP;
 +    }
      if (uvControllerCheckInserted(0) == 0) {
-@@ -460,11 +483,21 @@
-     uvChanTerra(temp_s0->unk70->unk22C, arg0->terraId);
-     uvEnvFunc(arg0->envId, 0, env_802E0CF0);
-     arg0->unkA0 = 1;
-     taskLoad();
-     windObjLoad();
-     if (arg0->unkA2 == 0) {
-         func_8034B5E0(temp_s0->unk70->unk22C, temp_s0->unk70);
+         func_8032D90C();
+     }
+@@ -428,6 +477,68 @@ s32 gameUpdateStatePilotSelect(Unk80362690* arg0) {
+     return GAME_STATE_TEST_OVERVIEW;
+ }
+ 
++// PW64 split-screen: per-player part of the test setup for players 2..n
++// (hang glider only), after player 1's. Each player i: kernel channel i =
++// camera i in its viewport, own vehicle buffer + results struct, pad i.
++// Only player 1's HUD is drawn for now: both HUDs use the same screen
++// positions (per-view HUD layout comes later).
++static void pw64_setup_players(Unk80362690* arg0) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    HangGliderData* hg;
++    Mtx4F start;
++    s32 i;
++
++    for (i = 1; i < pw64_level_players; i++) {
++        pw64_player_switch(i);
++        p->unk70 = &D_80362E88[i];
++        p->unk74 = &D_80364210[i];
++        p->vehicleData = D_80362748[i];
++        func_8034B5E0(i, p->unk70);
++        uvChan_80204AB0(i, 1, NULL);
++        uvChanTerra(i, arg0->terraId);
++        uvChanEnv(i, arg0->envId);
++        pw64_split_viewport(p->unk70, i);
++        D_803676F0 = hg = (HangGliderData*)p->vehicleData;
++        hangGliderLoadLevel(i, p->pilot, hg, p->unk70);
++        hangGliderEnterLeave(hg);
++        // Same start point as player 1, 10 m further along its right axis.
++        uvMat4Copy(&start, &hg->unk10);
++        start.m[3][0] += 10.0f * i * start.m[0][0];
++        start.m[3][1] += 10.0f * i * start.m[0][1];
++        start.m[3][2] += 10.0f * i * start.m[0][2];
++        func_802EDDEC(&start);
++        func_802EDD9C(p, &hg->unk10);
++        hudInit();
++        camera_802D4DE8(p->unk70, 0);
++        if (arg0->unkA2 == 0) {
++            hudText_8031D8E0(TEXT_START, 1.5f, 8.0f);
++        }
++        func_8032B508(p->unk74);
++    }
++    pw64_player_switch(0);
++}
++
++// PW64 split-screen: undo pw64_setup_players (func_802ECE94, player 1's
++// vehicle is left by the original code).
++static void pw64_leave_players(void) {
++    Unk80362690_Unk0* p = &D_80362690->unkC[0];
++    s32 i;
++
++    for (i = 1; i < pw64_level_players; i++) {
++        pw64_player_switch(i);
++        if (p->vehicleData != NULL) {
++            hangGliderEnterLeave(p->vehicleData);
++            func_802EF328(p->vehicleData);
++        }
++        hud_8031DAA8(0, 0.0f);
++        hudGetState()->renderFlags = 0;
++        p->unk7C = 0;
++        p->unk80 = 0.0f;
++    }
++    pw64_player_switch(0);
++    pw64_level_players = 1;
++}
++
+ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
+     Unk80362690_Unk0* temp_s0;
+     f32 sp28;
+@@ -467,6 +578,23 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
      } else {
          D_8034F160 = -1;
      }
-+    // PW64 split-screen: channel 1 = a second camera (rear view for now).
-+    if (pw64_split) {
-+        Camera* c1 = &D_80362E88[1];
-+        uvChanTerra(1, arg0->terraId);
-+        uvChanEnv(1, arg0->envId);
-+        uvChan_80204A8C(1, 3);
-+        uvChan_80204AB0(1, 1, NULL);
++    // PW64 split-screen: hang glider tests (not the attract demo) take a
++    // second pilot; other vehicles stay single-player for now. Player 2
++    // starts as a copy of player 1's state before the vehicle load (HUD
++    // reset, radar waypoints from taskLoad), see pw64_setup_players.
++    pw64_level_players = 1;
++    if ((pw64_players > 1) && !arg0->unkA4) {
++        if (temp_s0->veh == VEHICLE_HANG_GLIDER) {
++            pw64_level_players = pw64_players;
++        } else {
++            // _uvDebugPrintf is compiled out; PW64_TRACE_OS shows this.
++            PW64_LOGF("split-screen: this vehicle is single-player for now, veh", temp_s0->veh);
++        }
++    }
++    if (pw64_level_players > 1) {
 +        pw64_split_viewport(temp_s0->unk70, 0);
-+        pw64_split_viewport(c1, 1);
++        pw64_players_sync();
 +    }
      switch (temp_s0->veh) {
-@@ -946,3 +979,8 @@
+     case VEHICLE_HANG_GLIDER:
+         D_803676F0 = (HangGliderData*)temp_s0->vehicleData;
+@@ -541,6 +669,9 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
+         sndSetMusicState(MUS_STATE_PLAY_SEQ);
+         func_8033FCD0(temp_s0->veh);
+     }
++    if (pw64_level_players > 1) {
++        pw64_setup_players(arg0);
++    }
+     uvEventPost(0xB, 0);
+     return GAME_STATE_TEST_UPDATE;
+ }
+@@ -714,6 +845,9 @@ void func_802ECE94(Unk80362690* arg0) {
+             bird_802CC51C(temp_s0->vehicleData);
+             break;
+         }
++        if (pw64_level_players > 1) { // PW64 split-screen
++            pw64_leave_players();
++        }
+         taskDeinitLevel();
+         windObjDeinit();
+         level_8030BA60();
+@@ -740,6 +874,8 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
+     f32 sp48;
+     f32 sp44;
+     GyrocopterData* sp40;
++    s32 pw64I;     // PW64 split-screen: player loop index
++    s32 pw64Saved; // PW64 split-screen: gameState before player pw64I
+ 
+     sp6C = &arg0->unkC[arg0->unk9C];
+     gameState = GAME_STATE_TEST_UPDATE;
+@@ -770,6 +906,12 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
+     func_802F89A0(D_80362E88);
+     windObjFrameUpdate();
+ 
++    // PW64 split-screen: vehicle + status update per player, with that
++    // player's state live (sp6C = &unkC[0] = the live player). One player:
++    // a single pass, switch(0) is a no-op. The loop body is not reindented.
++    for (pw64I = 0; pw64I < pw64_level_players; pw64I++) {
++    pw64_player_switch(pw64I);
++    pw64Saved = gameState;
+     switch (sp6C->veh) {
+     case VEHICLE_HANG_GLIDER:
+         D_803676F0 = (HangGliderData*)sp6C->vehicleData;
+@@ -938,13 +1080,33 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
+         gameState = GAME_STATE_RESULTS;
+         break;
+     }
++    if (pw64_level_players > 1) {
++        if (pw64_task_player_update(&sp6C->unk2C, sp6C->unk20) == 1) {
++            gameState = GAME_STATE_RESULTS;
++        }
++        // Only player 1 ends the test for now; player 2 just stops.
++        if (pw64I > 0) {
++            gameState = pw64Saved;
++        }
++    }
++    }
++    pw64_player_switch(0);
+     uvEventPost(0x16, 0);
+-    if (taskFrameUpdate(&sp6C->unk2C, sp6C->unk20) == 1) {
++    if (pw64_level_players > 1) {
++        pw64_task_world_update(&sp6C->unk2C, sp6C->unk20); // PW64 split-screen
++    } else if (taskFrameUpdate(&sp6C->unk2C, sp6C->unk20) == 1) {
+         gameState = GAME_STATE_RESULTS;
+     }
+     func_8033F6F8(&sp6C->unk2C, &sp6C->unk2C);
      uvGfxBegin();
      func_8034B624(sp6C->unk70);
-+    // PW64 split-screen: a second world pass on kernel channel 1, the rear
-+    // view of the same camera (spike: no second pilot or HUD yet).
-+    if (pw64_split) {
-+        pw64_split_draw_rear(sp6C->unk70, &D_80362E88[1]);
++    // PW64 split-screen: one world pass per further player, on its own
++    // camera/channel/viewport with its state live (camera code runs here).
++    for (pw64I = 1; pw64I < pw64_level_players; pw64I++) {
++        pw64_player_switch(pw64I);
++        func_8034B624(sp6C->unk70);
 +    }
++    pw64_player_switch(0);
      uvGfxEnd();
-@@ -1181,7 +1219,7 @@ void func_802EE14C(u16 veh) {
+     func_80313D74();
+     // pause menu
+@@ -1111,15 +1273,17 @@ void func_802EDDEC(Mtx4F* arg0) {
+     u16 i;
+     Vec3F sp40;
+ 
++    // PW64 split-screen: the live player's vehicleData, not buffer [unk9C]
++    // (unk9C stays 0; same buffer with one player).
+     switch (D_80362690->unkC[D_80362690->unk9C].veh) {
+     case VEHICLE_HANG_GLIDER:
+-        D_803676F0 = (HangGliderData*)D_80362748[D_80362690->unk9C];
++        D_803676F0 = (HangGliderData*)D_80362690->unkC[D_80362690->unk9C].vehicleData;
+         sp54 = &D_803676F0->unk10;
+         sp50 = &D_803676F0->unk308;
+         sp4E = D_803676F0->objId;
+         break;
+     case VEHICLE_GYROCOPTER:
+-        D_803676F4 = (GyrocopterData*)D_80362748[D_80362690->unk9C];
++        D_803676F4 = (GyrocopterData*)D_80362690->unkC[D_80362690->unk9C].vehicleData;
+         sp54 = &D_803676F4->unk10;
+         sp50 = &D_803676F4->unk668;
+         sp4E = D_803676F4->objId;
+@@ -1131,31 +1295,31 @@ void func_802EDDEC(Mtx4F* arg0) {
+         }
+         break;
+     case VEHICLE_ROCKET_BELT:
+-        D_803676F8 = (RocketBeltData*)D_80362748[D_80362690->unk9C];
++        D_803676F8 = (RocketBeltData*)D_80362690->unkC[D_80362690->unk9C].vehicleData;
+         sp54 = &D_803676F8->unk10;
+         sp50 = &D_803676F8->unk374;
+         sp4E = D_803676F8->objId;
+         break;
+     case VEHICLE_CANNONBALL:
+-        D_803676FC = (CannonballData*)D_80362748[D_80362690->unk9C];
++        D_803676FC = (CannonballData*)D_80362690->unkC[D_80362690->unk9C].vehicleData;
+         sp54 = &D_803676FC->unk14;
+         sp50 = &D_803676FC->unk294;
+         sp4E = D_803676FC->objId;
+         break;
+     case VEHICLE_SKY_DIVING:
+-        D_80367700 = (SkyDivingData*)D_80362748[D_80362690->unk9C];
++        D_80367700 = (SkyDivingData*)D_80362690->unkC[D_80362690->unk9C].vehicleData;
+         sp54 = &D_80367700->unk10;
+         sp50 = &D_80367700->unk230;
+         sp4E = D_80367700->objId;
+         break;
+     case VEHICLE_JUMBLE_HOPPER:
+-        D_80367708 = (JumbleHopperData*)D_80362748[D_80362690->unk9C];
++        D_80367708 = (JumbleHopperData*)D_80362690->unkC[D_80362690->unk9C].vehicleData;
+         sp54 = &D_80367708->unk74;
+         sp50 = &D_80367708->unk670;
+         sp4E = D_80367708->objId;
+         break;
+     case VEHICLE_BIRDMAN:
+-        D_80367704 = (BirdmanData*)D_80362748[D_80362690->unk9C];
++        D_80367704 = (BirdmanData*)D_80362690->unkC[D_80362690->unk9C].vehicleData;
+         sp54 = &D_80367704->unk10;
+         sp50 = &D_80367704->unk400;
+         sp4E = D_80367704->objId;
+@@ -1181,7 +1345,7 @@ void func_802EE14C(u16 veh) {
      if (veh == temp_s0->veh) {
          return;
      }

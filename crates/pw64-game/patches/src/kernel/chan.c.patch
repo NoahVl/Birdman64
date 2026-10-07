@@ -1,6 +1,6 @@
 --- a/src/kernel/chan.c
 +++ b/src/kernel/chan.c
-@@ -205,6 +205,13 @@
+@@ -205,6 +205,13 @@ void uvChan_80204FE4(s32 arg0) {
      if (temp_s0->unk398 != NULL) {
          temp_s0->unk398();
      }
@@ -14,7 +14,20 @@
      func_80206318(temp_s0);
      uvGfxMtxProj(temp_s0->unk50);
      uvGfxPushMtxUnk(&temp_s0->unk190);
-@@ -259,7 +266,7 @@
+@@ -213,6 +220,12 @@ void uvChan_80204FE4(s32 arg0) {
+     if (!(temp_s0->unk0 & 4)) {
+         uvGfx_80222A98();
+     }
++    // PW64 split-screen: the z clear leaves a full-screen scissor; restore
++    // this view's (uvGfxViewport), or near geometry and screen-space quads
++    // (lens flare) of one view spill into the other.
++    if (pw64_level_players > 1) {
++        uvGfxViewport(arg0);
++    }
+ 
+     gSPClipRatio(gGfxDisplayListHead++, FRUSTRATIO_1);
+ 
+@@ -259,7 +272,7 @@ void uvChan_80204FE4(s32 arg0) {
          if (spC0 < uvtr->unk24) {
              spC0 = 1e11f;
          }
@@ -23,16 +36,19 @@
          uvGfxMtxProj(temp_s0->unk50);
          uvTerra_8022EE90(temp_s0, uvtr, spC0);
          uvGfxSetFogFactor(0.0f);
-@@ -269,7 +276,7 @@
+@@ -269,7 +282,10 @@ void uvChan_80204FE4(s32 arg0) {
          uvChan_80205CE4(temp_s0, 1, spC0 - uvtr->unk24, 1e12f);
          uvGfxResetState();
          uvGfx_80222A98();
 -        uvChan_80204C94(temp_s0 - D_80261730, spBC, spB8, spB4, spB0, spAC, spA8);
++        if (pw64_level_players > 1) { // PW64 split-screen: as above
++            uvGfxViewport(arg0);
++        }
 +        uvChan_80204C94((s32)(temp_s0 - D_80261730), spBC, spB8, spB4, spB0, spAC, spA8);
          uvGfxMtxProj(temp_s0->unk50);
          uvTerra_8022EFB4(temp_s0, uvtr, spC0);
          if (spA0 != D_80263058) {
-@@ -292,6 +299,7 @@
+@@ -292,6 +308,7 @@ void uvChan_80204FE4(s32 arg0) {
      if (temp_s0->unk39C != NULL) {
          temp_s0->unk39C();
      }

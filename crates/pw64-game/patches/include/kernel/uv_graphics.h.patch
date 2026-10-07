@@ -1,0 +1,16 @@
+--- a/include/kernel/uv_graphics.h
++++ b/include/kernel/uv_graphics.h
+@@ -20,8 +20,11 @@
+ #define SUBSCREEN_X1 (SCREEN_WIDTH - OVERSCAN_RIGHT)
+ #define SUBSCREEN_Y1 (SCREEN_HEIGHT - OVERSCAN_TOP)
+ 
+-#define UV_GFX_NUM_MATRICES 0x15E
+-#define UV_GFX_NUM_LOOKS 0x1E
++// PW64: per-frame budgets (was 0x15E / 0x1E), shared by every world pass of
++// a frame: split-screen draws two (one per player), which overflowed the
++// matrix stack (pushes past it are dropped: garbage matrices in pass 2).
++#define UV_GFX_NUM_MATRICES 0x400
++#define UV_GFX_NUM_LOOKS 0x60
+ 
+ #define GFX_STATE_GOURAUD       (1 << 17) // gouraud / smooth shading
+ #define GFX_STATE_40000         (1 << 18) // unused

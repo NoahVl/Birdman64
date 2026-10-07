@@ -1,0 +1,17 @@
+--- a/src/app/hang_glider_sound.c
++++ b/src/app/hang_glider_sound.c
+@@ -258,5 +258,13 @@ STATIC_FUNC void hgSoundEvent13(HangGliderData* hg) {
+     hg->unk322 = func_8033F8CC(hg->unk322);
+     hg->unk323 = func_8033F8CC(hg->unk323);
+     hg->unk321 = func_8033F8CC(hg->unk321);
+-    uvEventRemoveCb(sHgSoundEventCbInfo, 1, 0xD, 0x12, 0x13, 0x10, 0xC, 0x16, 0x24);
++    // PW64 split-screen: remove this glider's own callback (cb + arg), not
++    // the last-registered one in the static: with two gliders the static
++    // holds player 2's. Same as the static with one glider.
++    {
++        EventCallbackInfo info = sHgSoundEventCbInfo;
++        info.cb = hgSoundEventHandler;
++        info.arg = hg;
++        uvEventRemoveCb(info, 1, 0xD, 0x12, 0x13, 0x10, 0xC, 0x16, 0x24);
++    }
+ }

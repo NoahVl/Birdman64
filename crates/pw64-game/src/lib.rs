@@ -76,8 +76,9 @@ pub fn set_fill_screen(fill: bool) {
 }
 
 /// Split-screen layout for the C side (splitscreen.md): 0 = off, 1 =
-/// top/bottom (the spike draws channel 1 as a rear view). Call before
-/// `bootproc`, on the thread that runs the game.
+/// top/bottom. On means two players (`pw64_players = 2`, set from this in
+/// gameInit): hang glider tests run a second pilot on controller 2 in the
+/// bottom view. Call before `bootproc`, on the thread that runs the game.
 pub fn set_split(layout: u8) {
     // SAFETY: plain C global; the game (the only reader) runs on this
     // thread and hasn't started yet.

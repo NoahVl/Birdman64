@@ -1,6 +1,6 @@
 --- a/src/app/hang_glider1.c
 +++ b/src/app/hang_glider1.c
-@@ -126,6 +126,11 @@
+@@ -126,6 +126,11 @@ void hangGliderEnterLeave(HangGliderData* hgData) {
      camera_802D45C4(hgData->camera, hgData->unk58);
  }
  
@@ -12,7 +12,7 @@
  void hangGliderMovementFrame(HangGliderData* hgData, u8 gameState) {
      s32 pad;
      HUDState* temp_a2;
-@@ -143,7 +148,11 @@
+@@ -143,9 +148,17 @@ void hangGliderMovementFrame(HangGliderData* hgData, u8 gameState) {
          return;
      }
      if (fdr_802E6B5C() != 4) {
@@ -23,5 +23,21 @@
 +        sPw64TestTime += D_8034F854;
 +        hgData->unk8 = (f32)sPw64TestTime;
          shadow_803343D8(1);
-         func_80339C8C(hgData);
+-        func_80339C8C(hgData);
++        // PW64 split-screen: the photo shutter state (snap.c) is shared;
++        // only player 1 takes photos for now.
++        if (pw64_player_cur == 0) {
++            func_80339C8C(hgData);
++        }
          if (gameState == GAME_STATE_RESULTS) {
+             fdr_802E65AC(&hgData->unk10, &D_80362690->terraId, &stickX, &stickY, &buttons);
+         } else {
+@@ -828,3 +841,8 @@ void hangGliderLoadPilot(u8 pilot, HangGliderData* hgData) {
+         break;
+     }
+ }
++
++// PW64 split-screen: per-player rate state (pw64_players.c).
++void pw64_reg_hang_glider1(void) {
++    PW64_REG(sPw64TestTime);
++}

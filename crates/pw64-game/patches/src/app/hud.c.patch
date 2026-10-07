@@ -203,3 +203,16 @@
      char str[12];
      (void)snapGetPhotoCount();
      uvFontSet(8);
+@@ -2075,3 +2112,12 @@ void hudDrawPhotoCount(void) {
+ void hudDemoControllerEn(u8 enable) {
+     sHudState.showController = enable;
+ }
++
++// PW64 split-screen: the HUD state is per player (pw64_players.c); only
++// player 1's is drawn for now (game.c.patch).
++void pw64_reg_hud(void) {
++    PW64_REG(sHudState);
++    PW64_REG(D_8034F910);
++    PW64_REG(D_8034F914);
++    PW64_REG(sPw64ShutterAcc);
++}

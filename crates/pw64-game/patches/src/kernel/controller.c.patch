@@ -1,0 +1,39 @@
+--- a/src/kernel/controller.c
++++ b/src/kernel/controller.c
+@@ -74,11 +74,15 @@ s32 uvControllerUpdate(s32 contIdx) {
+     return 1;
+ }
+ 
++// PW64 split-screen: PW64_CONT maps pad 0 to the current player's pad
++// (pw64_native.h); identity with one player.
+ f32 uvControllerGetStick(s32 contIdx, s32 axis) {
++    contIdx = PW64_CONT(contIdx);
+     return gControllerInfo[contIdx].stickAxes[axis];
+ }
+ 
+ s32 uvControllerButtonCheck(s32 idx, s32 mask) {
++    idx = PW64_CONT(idx);
+     if (gControllerInfo[idx].button & mask) {
+         return 1;
+     }
+@@ -86,10 +90,12 @@ s32 uvControllerButtonCheck(s32 idx, s32 mask) {
+ }
+ 
+ s32 uvControllerGetButton(s32 idx) {
++    idx = PW64_CONT(idx);
+     return gControllerInfo[idx].button;
+ }
+ 
+ s32 uvControllerButtonPress(s32 idx, s32 button) {
++    idx = PW64_CONT(idx);
+     if ((gControllerInfo[idx].button & button) && !(gControllerInfo[idx].prevButton & button)) {
+         return 1;
+     }
+@@ -97,6 +103,7 @@ s32 uvControllerButtonPress(s32 idx, s32 button) {
+ }
+ 
+ s32 uvControllerButtonRelease(s32 idx, s32 button) {
++    idx = PW64_CONT(idx);
+     if (!(gControllerInfo[idx].button & button) && (gControllerInfo[idx].prevButton & button)) {
+         return 1;
+     }

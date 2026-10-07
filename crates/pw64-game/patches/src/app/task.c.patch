@@ -1,6 +1,89 @@
 --- a/src/app/task.c
 +++ b/src/app/task.c
-@@ -596,7 +596,7 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
+@@ -393,6 +393,82 @@ s32 taskFrameUpdate(Mtx4F* arg0, f32 arg1) {
+     return sp18;
+ }
+ 
++// PW64 split-screen: taskFrameUpdate in two halves (game.c.patch, used only
++// with 2 players; one player keeps calling taskFrameUpdate). World ticks
++// run once per frame (else they'd advance twice and consume RNG twice);
++// called with player 1 live, so effects, smoke and ambient sound follow
++// player 1's pose.
++void pw64_task_world_update(Mtx4F* arg0, f32 arg1) {
++    therm_8034695C();
++    wind_8034D548();
++    env_802E15F0();
++    ballsFrameUpdate();
++    falcoFrameUpdate();
++    func_802EB424(arg0, arg1);
++    envSoundFrameUpdate(arg0);
++}
++
++// PW64 split-screen: the current player's checks. Objectives (targets,
++// hover pads, bonus stars, ball targets, rings, teleports, "all done")
++// keep shared hit state: player 1 only until they become per player.
++// Landing pads write the current player's results (func_8032BE10).
++s32 pw64_task_player_update(Mtx4F* arg0, UNUSED f32 arg1) {
++    u16 veh;
++    s32 sp18;
++    s32 temp_v0;
++
++    veh = D_80362690->unkC[D_80362690->unk9C].veh;
++    sp18 = 0;
++    padsFrameUpdate(arg0);
++    if (pw64_player_cur != 0) {
++        return 0;
++    }
++    targetsFrameUpdate(arg0);
++    hoverPadFrameUpdate(arg0);
++    if ((veh != VEHICLE_CANNONBALL) && (veh != VEHICLE_SKY_DIVING)) {
++        bonusFrameUpdate(arg0);
++    }
++    if (ballTgtInGoal() == 1) {
++        D_803507A4 = 1;
++        sp18 = 1;
++        D_80362690->unkC[0].veh = VEHICLE_ROCKET_BELT;
++        if (D_80362690->unkC[0].veh != VEHICLE_HANG_GLIDER) {
++            sndSetMusic(BGM_ROCKET_BELT_LAND_OK);
++            sndSetMusicState(MUS_STATE_PLAY_SEQ);
++            func_8033FCD0(D_80362690->unkC[0].veh);
++        }
++    }
++    if (rings_803243D8(arg0) == 1) {
++        D_803507A4 = 1;
++        sp18 = 1;
++        D_80362690->unkC[0].veh = VEHICLE_ROCKET_BELT;
++        if (D_80362690->unkC[0].veh != VEHICLE_HANG_GLIDER) {
++            sndSetMusic(BGM_ROCKET_BELT_LAND_OK);
++            sndSetMusicState(MUS_STATE_PLAY_SEQ);
++            func_8033FCD0(D_80362690->unkC[0].veh);
++        }
++    }
++    if ((D_80362690->unkC[D_80362690->unk9C].veh == VEHICLE_JUMBLE_HOPPER) && (func_802FB308(D_80362690->unkC[D_80362690->unk9C].vehicleData) == 1)) {
++        sp18 = 1;
++    }
++    temp_v0 = task_803456D8(arg0);
++    switch (temp_v0) {
++    case 1:
++        taskUpdateState();
++        func_802EDDEC(arg0);
++        break;
++    case 2:
++        func_802EDDEC(arg0);
++        break;
++    }
++    if ((D_80362690->unkA0 != 0) && (taskGet_80346364() == 3) && (func_8032C080(NULL) != 0)) {
++        D_803507A0 = TRUE;
++        taskDeinit();
++        D_80362690->unkA0 = 0;
++    }
++    return sp18;
++}
++
+ s32 task_803456D8(Mtx4F* arg0) {
+     LevelTPTS* sp8C;
+     f32 temp_fv0;
+@@ -596,7 +672,7 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
  
      dst = &sTaskObjects;
      sp34 = uvUserFileRead(sTaskUserFileIdxLookup[taskIdx], MEM_ROM_OFFSET);
@@ -9,7 +92,7 @@
      uvMemSet(&sTaskObjects, 0, sizeof(sTaskObjects));
  
      while ((tag = uvFileReadBlock(idx, &size, &data, 2)) != 0) {
-@@ -612,6 +612,15 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
+@@ -612,6 +688,15 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
              break;
          case 'COMM': // 0x434F4D4D
              _uvMediaCopy(&dst->comm, data, sizeof(dst->comm));
@@ -25,7 +108,7 @@
              mem_init();
              dst->dataTPAD = mem_get(dst->comm.countTPAD * sizeof(TaskTPAD));
              dst->dataLPAD = mem_get(dst->comm.countLPAD * sizeof(TaskLPAD));
-@@ -632,51 +641,68 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
+@@ -632,51 +717,68 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
              break;
          case 'THER': // 0x54484552
              _uvMediaCopy(dst->dataTHER, data, size);

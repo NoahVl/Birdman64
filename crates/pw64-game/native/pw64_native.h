@@ -104,7 +104,35 @@ int pw64_present_active(void);
  * is force-included before camera.h exists. */
 extern int pw64_split;
 void pw64_split_viewport(void* camera, int i);
-void pw64_split_draw_rear(void* camera0, void* camera1);
+/* Split-screen players (native/src/pw64_players.c, splitscreen.md "M2"):
+ * per-player state lives in the game's ordinary globals; only the current
+ * player's copy is live. Registered regions are swapped on a switch
+ * (live -> slot[cur], slot[i] -> live). Registration is explicit (no
+ * constructors: the game module also builds as a dylib with our CRT
+ * replacement) and runs from gameInit when pw64_players > 1. */
+#define PW64_MAX_PLAYERS 2
+extern int pw64_players;    /* 1; 2 with split-screen (gameInit: pw64_split ? 2 : 1) */
+extern int pw64_player_cur; /* whose state is live in the globals */
+/* Players in the current test (game.c.patch test setup): pw64_players for
+ * a split-capable test, else 1. Gates every split path (1 = original). */
+extern int pw64_level_players;
+void pw64_player_register(void* addr, unsigned int size); /* current bytes -> every slot */
+void pw64_player_switch(int i);                           /* no-op if i == cur */
+void pw64_players_sync(void);                             /* live bytes -> every other slot */
+#define PW64_REG(sym) pw64_player_register(&(sym), (unsigned int)sizeof(sym))
+/* One per patched file that owns per-player statics; pw64_players_init
+ * calls them all (gameInit, only if pw64_players > 1). */
+void pw64_reg_game(void);
+void pw64_reg_camera(void);
+void pw64_reg_hud(void);
+void pw64_reg_shadow(void);
+void pw64_reg_hang_glider0(void);
+void pw64_reg_hang_glider1(void);
+void pw64_reg_hang_glider2(void);
+void pw64_players_init(void);
+/* Kernel controller reads (controller.c.patch): with 2+ players, pad 0
+ * means "the current player's pad", so hardcoded-0 sites follow the swap. */
+#define PW64_CONT(i) ((pw64_players > 1 && (i) == 0) ? pw64_player_cur : (i))
 /* World display-list buffer length (kernel/graphics.c.patch): two world
  * passes per frame with split-screen on nearly double the command count. */
 #define PW64_DL_LEN 16384
