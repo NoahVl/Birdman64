@@ -98,5 +98,15 @@ void pw64_fb_pixels(unsigned int fb, const unsigned PW64_LONG32* idx, int count,
  * whether present ticks (not retraces) latch swaps and start gfx. */
 void pw64_present_set_event(void* mq, void* msg);
 int pw64_present_active(void);
+/* Split-screen spike (native/src/pw64_split.c): 0 = off, 1 = top/bottom
+ * (set by Rust before boot, pw64_game::set_split). The helpers live in
+ * camera.c.patch; they take the game's Camera as void* because this header
+ * is force-included before camera.h exists. */
+extern int pw64_split;
+void pw64_split_viewport(void* camera, int i);
+void pw64_split_draw_rear(void* camera0, void* camera1);
+/* World display-list buffer length (kernel/graphics.c.patch): two world
+ * passes per frame with split-screen on nearly double the command count. */
+#define PW64_DL_LEN 16384
 
 #endif

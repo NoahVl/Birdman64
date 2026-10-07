@@ -1,5 +1,13 @@
 --- a/src/kernel/graphics.c
 +++ b/src/kernel/graphics.c
+@@ -27,5 +27,5 @@
+ u32 gGfxStateStackData;
+ u32 gGfxBoundTexture;
+ u8* gGfxFbPtrs[2];
+ u8* D_80299278;
+-Gfx gGfxDisplayListBase[2][4200];
++Gfx gGfxDisplayListBase[2][PW64_DL_LEN]; // PW64: enlarged, split-screen draws two world passes
+ uvGfxViewport_t gGfxViewports[4];
 @@ -102,9 +102,9 @@ void uvGfxInit(void) {
      gGfxNumTxtLoads[0] = gGfxNumTxtLoads[1] = 0;
      gGfxNumMtxLoads[0] = gGfxNumMtxLoads[1] = 0;
@@ -16,7 +24,7 @@
 @@ -125,6 +125,7 @@ void uvGfxInit(void) {
      gGfxTaskOutputBufferEnd = gGfxTaskOutputBufferStart + TASK_OUTPUT_BUFFER_SIZE;
  }
-
+ 
  void uvGfxBegin(void) {
 +    pw64_fill_frame = 0;
      if (gGfxBeginFlag == TRUE) {
@@ -29,8 +37,10 @@
 -    gGfxElementCount = (gGfxDisplayListHead - (gGfxDisplayListBase[gGfxFbIndex]));
 +    gGfxElementCount = (s32)(gGfxDisplayListHead - (gGfxDisplayListBase[gGfxFbIndex]));
  
-     if (gGfxElementCount >= 4200) {
-         _uvDebugPrintf("display list overflow %d / %d\n", gGfxElementCount, 4200);
+-    if (gGfxElementCount >= 4200) {
++    if (gGfxElementCount >= PW64_DL_LEN) {
+-        _uvDebugPrintf("display list overflow %d / %d\n", gGfxElementCount, 4200);
++        _uvDebugPrintf("display list overflow %d / %d\n", gGfxElementCount, PW64_DL_LEN);
 @@ -592,7 +592,7 @@ void uvGfxEnd(void) {
      task->t.type = M_GFXTASK;
      task->t.flags = 0;

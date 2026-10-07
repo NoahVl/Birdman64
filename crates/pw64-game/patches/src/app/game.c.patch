@@ -1,6 +1,25 @@
 --- a/src/app/game.c
 +++ b/src/app/game.c
-@@ -179,4 +179,23 @@
+@@ -46,6 +46,6 @@
+ Unk80362690* D_80362690;
+ Unk80362690 D_80362698;
+ u8 D_80362748[1][0x740]; // vehicle data buffer
+-Camera D_80362E88[1];
++Camera D_80362E88[2]; // PW64: split-screen, storage for camera 1
+ Unk80364210 D_80364210[1];
+ HangGliderData* D_803676F0;
+@@ -149,6 +149,10 @@
+         temp_s0->unk8B = 0;
+         cameraInit(i, &D_80362E88[i]);
+         func_8032B3D0(&D_80364210[i]);
+         func_8034B5E0(temp_s0->unk70->unk22C, temp_s0->unk70);
+     }
++    // PW64 split-screen: a second camera on kernel channel 1.
++    if (pw64_split) {
++        cameraInit(1, &D_80362E88[1]);
++    }
+ }
+@@ -179,4 +183,23 @@
  s32 gameUpdateStateTitle(Unk80362690* arg0) {
      s32 gameState;
 +    int spF, spC, spV, spT, spP; // PW64: int, as pw64_direct_start takes
@@ -22,7 +41,38 @@
 +        return GAME_STATE_TEST_SETUP;
 +    }
      if (uvControllerCheckInserted(0) == 0) {
-@@ -1181,7 +1200,7 @@ void func_802EE14C(u16 veh) {
+@@ -460,11 +483,21 @@
+     uvChanTerra(temp_s0->unk70->unk22C, arg0->terraId);
+     uvEnvFunc(arg0->envId, 0, env_802E0CF0);
+     arg0->unkA0 = 1;
+     taskLoad();
+     windObjLoad();
+     if (arg0->unkA2 == 0) {
+         func_8034B5E0(temp_s0->unk70->unk22C, temp_s0->unk70);
+     } else {
+         D_8034F160 = -1;
+     }
++    // PW64 split-screen: channel 1 = a second camera (rear view for now).
++    if (pw64_split) {
++        Camera* c1 = &D_80362E88[1];
++        uvChanTerra(1, arg0->terraId);
++        uvChanEnv(1, arg0->envId);
++        uvChan_80204A8C(1, 3);
++        uvChan_80204AB0(1, 1, NULL);
++        pw64_split_viewport(temp_s0->unk70, 0);
++        pw64_split_viewport(c1, 1);
++    }
+     switch (temp_s0->veh) {
+@@ -946,3 +979,8 @@
+     uvGfxBegin();
+     func_8034B624(sp6C->unk70);
++    // PW64 split-screen: a second world pass on kernel channel 1, the rear
++    // view of the same camera (spike: no second pilot or HUD yet).
++    if (pw64_split) {
++        pw64_split_draw_rear(sp6C->unk70, &D_80362E88[1]);
++    }
+     uvGfxEnd();
+@@ -1181,7 +1219,7 @@ void func_802EE14C(u16 veh) {
      if (veh == temp_s0->veh) {
          return;
      }

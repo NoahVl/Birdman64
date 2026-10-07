@@ -36,6 +36,8 @@ unsafe extern "C" {
     static mut pw64_widescreen_aspect: f32;
     /// native/src/pw64_widescreen.c: fill screen, 0 = off.
     static mut pw64_fill_screen: i32;
+    /// native/src/pw64_split.c: split-screen layout, 0 = off.
+    static mut pw64_split: i32;
 }
 
 /// Hor+ widescreen for the C side: widens the CPU culling frustum of the
@@ -70,6 +72,23 @@ pub fn set_fill_screen(fill: bool) {
     #[cfg(feature = "dylib")]
     unsafe {
         *dylib::game().fill_screen = fill as i32
+    };
+}
+
+/// Split-screen layout for the C side (splitscreen.md): 0 = off, 1 =
+/// top/bottom (the spike draws channel 1 as a rear view). Call before
+/// `bootproc`, on the thread that runs the game.
+pub fn set_split(layout: u8) {
+    // SAFETY: plain C global; the game (the only reader) runs on this
+    // thread and hasn't started yet.
+    #[cfg(feature = "static")]
+    unsafe {
+        pw64_split = layout as i32
+    };
+    // SAFETY: same global, exported by the loaded game module.
+    #[cfg(feature = "dylib")]
+    unsafe {
+        *dylib::game().split = layout as i32
     };
 }
 

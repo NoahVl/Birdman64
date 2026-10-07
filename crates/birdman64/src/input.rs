@@ -1028,7 +1028,8 @@ fn env_enabled() -> Option<bool> {
     }
 }
 
-fn enabled() -> bool {
+/// Whether split-screen is on (also read by main to set the C flag).
+pub fn splitscreen_enabled() -> bool {
     crate::opts::precedence(env_enabled(), config::get().splitscreen.enabled, false)
 }
 
@@ -1056,7 +1057,7 @@ fn resolve_p2() -> P2Input {
 /// controller 2 is reported present and `p2_input` is routed to it.
 /// Without it nothing happens (defaults = single-player).
 pub fn apply_splitscreen() {
-    if enabled() {
+    if splitscreen_enabled() {
         pw64_platform::headless::set_controllers_present(2);
         set_p2(Some(resolve_p2()));
     }

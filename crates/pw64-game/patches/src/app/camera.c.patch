@@ -8,7 +8,7 @@
  
  // TODO: Unk802D472C_SP60 needs to be merged with some combination of Unk802D3658_Unk1224/8
  typedef struct {
-@@ -245,10 +246,11 @@ STATIC_FUNC void camera_802D3790(Camera* camera) {
+@@ -245,10 +247,11 @@ STATIC_FUNC void camera_802D3790(Camera* camera) {
              var_fv0 = -camera->unk1378;
          }
          temp_fv1_2 = camera->unk1380;
@@ -36,3 +36,58 @@
          uvMat4UnkOp6(&camera->unk108, &camera->unk80, &sp48);
      }
  }
+@@ -998,6 +1001,54 @@
+     if (sp30.z > 0.0f) {
+         var_fa0 = -var_fa0;
+     }
+     camera->unk220 = func_80313AF4(var_fa0, camera->unk220, 1.0f);
+     uvMat4RotateAxis(arg1, camera->unk220 * 0.01745329f, 'x'); // almost DEG_TO_RAD(1)
+ }
++
++// PW64 split-screen: viewport rect for player `i` of 2 (top/bottom).
++// N64 viewport y runs bottom-up (SUBSCREEN_Y0 is the bottom row).
++void pw64_split_viewport(void* camera, int i) {
++    Camera* cam = camera;
++    s16 mid = (SUBSCREEN_Y0 + SUBSCREEN_Y1) / 2;
++    f32 w, h, aspect;
++    if (i == 0) {
++        cameraSetViewport(cam, SUBSCREEN_X0, SUBSCREEN_X1, mid + 1, SUBSCREEN_Y1);
++    } else {
++        cameraSetViewport(cam, SUBSCREEN_X0, SUBSCREEN_X1, SUBSCREEN_Y0, mid - 1);
++    }
++    // Keep the frustum's shape = the viewport's: the game's 4:3 frustum is
++    // x +/-0.4906542, y +/-0.35 for the 300x214 subscreen. A wider view
++    // keeps x and shrinks y; a taller view keeps y and shrinks x.
++    w = cam->viewX1 - cam->viewX0;
++    h = cam->viewY1 - cam->viewY0;
++    aspect = w / h;
++    if (aspect >= 0.4906542f / 0.35f) {
++        cam->clipX1 = 0.4906542f;
++        cam->clipY1 = 0.4906542f / aspect;
++    } else {
++        cam->clipY1 = 0.35f;
++        cam->clipX1 = 0.35f * aspect;
++    }
++    cam->clipX0 = -cam->clipX1;
++    cam->clipY0 = -cam->clipY1;
++}
++
++// PW64 split-screen spike: channel 1 shows player 1's camera turned 180
++// degrees about its up axis (rows 0 and 1 negated over the rotation
++// columns; Z is up). Frustum = camera1's clip planes, near/far of
++// camera0's (func_8034B624 has already driven channel 0 this frame).
++void pw64_split_draw_rear(void* camera0, void* camera1) {
++    Camera* c0 = camera0;
++    Camera* c1 = camera1;
++    Mtx4F m = c0->unk108;
++    s32 i;
++    for (i = 0; i < 3; i++) {
++        m.m[0][i] = -m.m[0][i];
++        m.m[1][i] = -m.m[1][i];
++    }
++    uvChan_80204C94(1, c1->clipX0, c1->clipX1, c1->clipY0, c1->clipY1, 1.0f, c0->clipFar);
++    uvChan_80204B34(1, &m);
++    uvChan_80204BD4(1, 1, c0->unk20);
++    uvChan_80204BD4(1, 0, c0->unk20);
++    uvChan_80204FC4(1);
++}

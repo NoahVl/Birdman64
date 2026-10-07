@@ -1,6 +1,52 @@
 # Split-screen (2-player local): feasibility notes
 
-Status: research only, nothing implemented. Paths are under `decomp/src` unless noted.
+Status: **rendering spike (SS-S1) landed** behind the C flag `pw64_split`
+(`native/src/pw64_split.c`, set by `pw64_game::set_split`; input side was
+already wired). With it on: one player still, flight view drawn twice per
+frame — channel 0 = normal camera (top half), channel 1 = rear view from the
+same spot (bottom half). Proves two channels, two viewports, two world passes,
+DL budget. Paths are under `decomp/src` unless noted.
+
+## Spike (SS-S1, what landed where)
+- `Camera D_80362E88[1]` → `[2]` (`game.c.patch`): camera-1 storage; BSS symbols
+  resolve by name in the native build, so the following `D_80364210` just moves.
+  No `sizeof` on it anywhere; `gameInit`'s loop stays `i < 1`, the flag adds
+  `cameraInit(1, &D_80362E88[1])`. The other per-player arrays (`D_80362748`
+  vehicle data, `D_80364210` task state) and `Unk80362690.unkC` stay `[1]`:
+  one player, no second pilot state. Note: the build system only patches
+  `.c` files under `src/` (build.rs rejects a src-header patch — unpatched
+  TUs would silently include the decomp copy) and a `native/include` shadow
+  can't win because quoted includes search the includer's directory first —
+  so `game.h` is unpatchable. Plan: don't grow `unkC`; the context swap copies
+  each player's `Unk80362690_Unk0` in/out of `unkC[0]` (`unk9C` stays 0), with
+  the per-player copies in a native array. Arrays defined in `.c` files
+  (`D_80362748`, `D_80364210`) can grow in their patches.
+- `pw64_split_viewport` (camera.c.patch): halves the subscreen (top = cam 0,
+  bottom = cam 1; N64 y is bottom-up) and reshapes each camera's clip
+  frustum to the viewport's aspect (Hor+: keep x, shrink y). Called once per
+  level load; `cameraSetViewport` is only ever called from `cameraInit`, and
+  nothing in the flight frame resets a camera's `viewX0..`/`clipX0..` after
+  that (`camera_802D50D0` rebuilds the channel clip *from* them each frame —
+  that's the design, not a reset).
+- `pw64_split_draw_rear` (camera.c.patch): runs `func_8034B624`'s kernel
+  sequence for channel 1 with cam 0's `unk108` matrix, rows 0/1 of the
+  rotation columns negated (180° turn about up). Chan 1 has no HUD callback
+  (`uvChan_80204AB0(1, 1, NULL)`).
+- DL buffer `gGfxDisplayListBase[2][PW64_DL_LEN]` with `PW64_DL_LEN 16384`
+  (pw64_native.h; was 4200) — two world passes nearly double the count; on
+  overflow `uvGfxEnd` silently skips the frame (prints "display list
+  overflow"), so watch for a frozen image.
+- Rust: `pw64_game::set_split(u8)` (static + dylib paths), `main.rs` sets it
+  before boot from `input::splitscreen_enabled()` (renamed from `enabled`).
+- Verified: channel 1 draws terrain (a temporary 90° side view showed the coast; the rear view
+  just faces the sea at the hang-glider start). Cost: DL interp 0.42 ms/gfx task averaged
+  over a whole split run, no overflow.
+- Bug: facing the sun, translucent screen-space quads (likely the sun lens flare) draw over
+  the whole screen, not clipped to their view: they show in the other half too. Needs a
+  per-view scissor or clip.
+- Not handled: the birdman change-vehicle path (`func_802EE14C`, game.c
+  ~1215) reloads a level without re-running the split block, so chan 1's
+  terra/env go stale there (spike: acceptable, one player).
 
 ## What the original code already has
 - The game singleton `Unk80362690` (`app/game.h:94`) is shaped for N players: `unkC[1]`
@@ -26,7 +72,7 @@ Status: research only, nothing implemented. Paths are under `decomp/src` unless 
 - One game-state machine / pause / results flow. Engine sounds read the current player
   (`bmsound.c:132`, `cbsound.c:151`).
 - DL buffer `gGfxDisplayListBase[2][4200]` (`graphics.c:31`): two world passes need more room
-  (easy to enlarge with a native patch).
+  (done in the spike: `PW64_DL_LEN 16384`, graphics.c.patch).
 - Our side: `crates/pw64-platform/src/headless.rs` `osContInit` reports only pad 1, pads 2-4
   return `CONT_NO_RESPONSE_ERROR`; `crates/birdman64/src/input.rs` merges every device into
   pad 1. `pw64-gfx` already honours per-draw viewport + scissor, so two viewports inside one
