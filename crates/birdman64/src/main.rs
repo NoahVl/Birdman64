@@ -161,6 +161,11 @@ fn main() {
     #[cfg(not(feature = "first-run"))]
     let setup = false;
     input::load_script_from_env();
+    // Split-screen input (`[splitscreen]`): with it on, controller 2 is
+    // reported present and a second input method is routed to it. Must run
+    // before the game boots (`osContInit` reads the pattern once) and also
+    // without the input thread (a headless script can drive controller 2).
+    input::apply_splitscreen();
     // Gamepads → controller 1 (`PW64_NO_INPUT`: no gamepad thread); the BLE
     // thread (`ble.rs`) feeds its virtual pads through the same merge; it
     // starts once BLE is switched on (here or later in the settings).

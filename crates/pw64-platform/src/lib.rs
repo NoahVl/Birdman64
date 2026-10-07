@@ -5,7 +5,8 @@
 //! - [`pi`]: cartridge ROM access and `mio0_decompress`.
 //! - [`ai`]: audio interface over an emulated DAC clock, samples → host sink.
 //! - [`headless`]: SP/SI backends: gfx/audio tasks → host hooks,
-//!   controller 1 from host input (`set_controller1`), `.eep`-file EEPROM.
+//!   controllers from host input (`set_controller` / `set_controller1`,
+//!   presence count via `set_controllers_present`), `.eep`-file EEPROM.
 //! - [`stubs`]: remaining data placeholders.
 //! - [`crt`]: CRT replacements bound into the dylib game module (first-run
 //!   build, docs/notes/first-run-build.md).

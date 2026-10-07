@@ -43,6 +43,10 @@
 //! [input.ble]              # Switch 2 pads over Bluetooth LE (`PW64_BLE`)
 //! enabled = true
 //!
+//! [splitscreen]            # second controller routed to player 2
+//! enabled = true           # (`PW64_SPLITSCREEN`)
+//! p2_input = "keyboard"    # "keyboard" | "gamepad" | "gamepad:<name>" | "ble" (`PW64_P2_INPUT`)
+//!
 //! [oled]                   # OLED care (settings screen): HUD drift + dim
 //! drift = false            # `PW64_OLED`
 //! brightness = 1.0         # 1.0, 0.85, 0.8, 0.75 or 0.7
@@ -72,6 +76,8 @@ fn path() -> std::path::PathBuf {
 pub struct Config {
     pub graphics: Graphics,
     pub input: InputMaps,
+    /// `[splitscreen]`: second controller / player-2 input routing.
+    pub splitscreen: Splitscreen,
     /// `[oled]`: OLED care for the flight HUD (drift + brightness).
     pub oled: Oled,
     pub rom: Rom,
@@ -189,6 +195,20 @@ pub struct InputMaps {
     /// `[input.ble] enabled` — Switch 2 pads over BLE; `ble::enabled()` resolves
     /// it against the `PW64_BLE` env var and the default (off).
     pub ble: Option<bool>,
+}
+
+/// `[splitscreen]`: a second controller reaching the game as N64 controller
+/// 2, with the player choosing which input method is player 2
+/// (`input::P2Input`). The split-screen view itself is not implemented yet;
+/// off (the default), the game behaves exactly as single-player.
+#[derive(Debug, Default)]
+pub struct Splitscreen {
+    /// `enabled` — report controller 2 as present and route a second input
+    /// method to it (`PW64_SPLITSCREEN`).
+    pub enabled: Option<bool>,
+    /// `p2_input` — player 2's input method (`PW64_P2_INPUT`): `P2Input`'s
+    /// config spelling, `"keyboard" | "gamepad" | "gamepad:<name>" | "ble"`.
+    pub p2_input: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -526,6 +546,18 @@ fn from_table(table: &toml::Table) -> Config {
                 }
             }
             None => ignore(&mut ignored, "input", v, "must be an [input] table"),
+        }
+    }
+
+    if let Some(v) = table.get("splitscreen") {
+        match v.as_table() {
+            Some(ss) => {
+                cfg.splitscreen.enabled =
+                    opt_bool_of(ss, "enabled", "splitscreen.enabled", &mut ignored);
+                cfg.splitscreen.p2_input =
+                    string_of(ss, "p2_input", "splitscreen.p2_input", &mut ignored);
+            }
+            None => ignore(&mut ignored, "splitscreen", v, "must be a [splitscreen] table"),
         }
     }
 

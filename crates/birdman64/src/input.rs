@@ -1,4 +1,4 @@
-//! Host input → N64 controller 1 (docs/notes/input.md).
+//! Host input → N64 controllers (docs/notes/input.md).
 //!
 //! A background thread polls `gilrs` (Xbox via XInput/WGI, DualShock 4 /
 //! DualSense / Switch Pro via WGI raw controllers + the SDL mapping DB) and
@@ -11,6 +11,13 @@
 //! parsed against winit / gilrs names below); unlisted slots keep their
 //! defaults. Keyboard stick directions are slots too (`STICK_UP` …), bound
 //! the same way.
+//!
+//! Split-screen input ([`P2Input`], `[splitscreen]` in `pw64.toml`): with
+//! split-screen enabled a second controller is reported as present and the
+//! input sources are routed between players — each gilrs pad, the BLE pads,
+//! the keyboard and the scripts all go to player 1 or player 2 per the
+//! `p2_input` choice. Without it everything merges into controller 1, as
+//! above.
 
 use crate::config;
 use gilrs::{Axis, Button, Gilrs};
@@ -913,36 +920,29 @@ pub fn keyboard_pad(held: &[KeyCode]) -> Pad {
     }
 }
 
-/// Current sources; every update re-merges and publishes.
+/// Current sources; every update re-routes and publishes.
 struct Sources {
-    gamepads: Pad,
+    /// One entry per connected gilrs pad (name, pad) — per-player routing
+    /// needs the pads apart (a gamepad can be player 2 while another stays
+    /// player 1).
+    gamepads: Vec<(String, Pad)>,
     held_keys: Vec<KeyCode>,
     /// `PW64_INPUT_SCRIPT` state for the current retrace.
     script: Pad,
+    /// `PW64_INPUT_SCRIPT_P2` state for the current retrace (player 2).
+    script2: Pad,
     /// Virtual pads from BLE (`ble.rs`); updated from the poll loop.
     ble: Pad,
-    /// Buttons still held when the settings overlay closed (e.g. the A or
-    /// Start that closed it): masked from the game until released, so the
-    /// closing press doesn't leak into it as a fresh press.
-    suppressed: u16,
+    /// Per player: buttons still held when the settings overlay closed
+    /// (e.g. the A or Start that closed it): masked from the game until
+    /// released, so the closing press doesn't leak into it as a fresh press.
+    suppressed: [u16; 2],
     /// The gamepads' settings-overlay navigation state (W3: fixed physical
     /// buttons, `gamepad_nav_pad`), independent of the bindings.
     nav: Pad,
 }
 
 impl Sources {
-    fn merged(&self) -> Pad {
-        // W7: unfocused, real pads are ignored; a script still drives (a
-        // scripted window run may sit in the background).
-        if !FOCUSED.load(Ordering::Relaxed) {
-            return keyboard_pad(&self.held_keys).merge(self.script);
-        }
-        self.gamepads
-            .merge(self.ble)
-            .merge(keyboard_pad(&self.held_keys))
-            .merge(self.script)
-    }
-
     /// The overlay's navigation pad: the physical gamepad state plus the
     /// BLE pads (fixed, label-based mapping; not rebindable). The keyboard
     /// reaches the overlay through the window's key events instead.
@@ -951,6 +951,114 @@ impl Sources {
             return IDLE;
         }
         self.nav.merge(self.ble)
+    }
+}
+
+/// Which input method drives player 2 in split-screen (`[splitscreen]
+/// p2_input` / `PW64_P2_INPUT`). Player 1 gets everything not assigned to
+/// player 2.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum P2Input {
+    /// The keyboard.
+    Keyboard,
+    /// gilrs pads: every connected one (`None`), or only the first whose
+    /// name contains the substring (case-insensitive) — the rest stay
+    /// player 1.
+    Gamepad(Option<String>),
+    /// The virtual BLE pads (`ble.rs`).
+    Ble,
+}
+
+impl P2Input {
+    /// Parses a `p2_input` value: `"keyboard"`, `"gamepad"` (every gilrs
+    /// pad), `"gamepad:<name substring>"` or `"ble"`. `None` if not
+    /// understood.
+    pub fn parse(s: &str) -> Option<P2Input> {
+        let s = s.trim();
+        let lower = s.to_ascii_lowercase();
+        match lower.as_str() {
+            "keyboard" => Some(P2Input::Keyboard),
+            "gamepad" => Some(P2Input::Gamepad(None)),
+            "ble" => Some(P2Input::Ble),
+            _ => lower
+                .strip_prefix("gamepad:")
+                .map(|_| P2Input::Gamepad(Some(s["gamepad:".len()..].trim().to_string()))),
+        }
+    }
+
+    /// The config / env spelling of this value (inverse of [`P2Input::parse`]).
+    #[allow(dead_code)] // the settings screen's Controls page wires this later
+    pub fn to_config(&self) -> String {
+        match self {
+            P2Input::Keyboard => "keyboard".into(),
+            P2Input::Gamepad(None) => "gamepad".into(),
+            P2Input::Gamepad(Some(n)) => format!("gamepad:{n}"),
+            P2Input::Ble => "ble".into(),
+        }
+    }
+}
+
+/// Player 2's input method (`set_p2`); `None` = split-screen off, every
+/// source goes to player 1 (single-player behaviour).
+static P2: Mutex<Option<P2Input>> = Mutex::new(None);
+
+/// Assigns player 2's input method (split-screen on). Re-publishes so the
+/// routing takes effect at once. `None` = split-screen off.
+pub fn set_p2(p: Option<P2Input>) {
+    *P2.lock().unwrap() = p;
+    publish(&mut SOURCES.lock().unwrap());
+}
+
+/// The player-2 routing in force right now (`None` = split-screen off).
+fn p2_setting() -> Option<P2Input> {
+    P2.lock().unwrap().clone()
+}
+
+/// Splitscreen on/off: `PW64_SPLITSCREEN` > `[splitscreen] enabled` >
+/// default off (the usual option precedence).
+fn env_enabled() -> Option<bool> {
+    match std::env::var("PW64_SPLITSCREEN").as_deref().map(str::trim) {
+        Ok("1" | "true" | "yes" | "on") => Some(true),
+        Ok("0" | "false" | "no" | "off") => Some(false),
+        Ok(other) => {
+            eprintln!("[input] PW64_SPLITSCREEN={other:?} not understood (use 1 or 0); ignoring");
+            None
+        }
+        Err(_) => None,
+    }
+}
+
+fn enabled() -> bool {
+    crate::opts::precedence(env_enabled(), config::get().splitscreen.enabled, false)
+}
+
+/// Player 2's input method: `PW64_P2_INPUT` > `[splitscreen] p2_input` >
+/// `"gamepad"` (every gilrs pad). An unparsable value warns and falls back
+/// to `"gamepad"`.
+fn resolve_p2() -> P2Input {
+    let cfg = config::get().splitscreen.p2_input.clone();
+    let raw = std::env::var("PW64_P2_INPUT")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or(cfg);
+    match raw {
+        None => P2Input::Gamepad(None),
+        Some(s) => P2Input::parse(&s).unwrap_or_else(|| {
+            eprintln!("[input] PW64_P2_INPUT={s:?} not understood (use keyboard, gamepad, \
+                gamepad:<name> or ble); using gamepad");
+            P2Input::Gamepad(None)
+        }),
+    }
+}
+
+/// Called once from `main` before the game boots: with split-screen enabled,
+/// controller 2 is reported present and `p2_input` is routed to it.
+/// Without it nothing happens (defaults = single-player).
+pub fn apply_splitscreen() {
+    if enabled() {
+        pw64_platform::headless::set_controllers_present(2);
+        set_p2(Some(resolve_p2()));
     }
 }
 
@@ -974,11 +1082,12 @@ const IDLE: Pad = Pad {
 };
 
 static SOURCES: Mutex<Sources> = Mutex::new(Sources {
-    gamepads: IDLE,
+    gamepads: Vec::new(),
     held_keys: Vec::new(),
     script: IDLE,
+    script2: IDLE,
     ble: IDLE,
-    suppressed: 0,
+    suppressed: [0; 2],
     nav: IDLE,
 });
 
@@ -987,21 +1096,82 @@ static SOURCES: Mutex<Sources> = Mutex::new(Sources {
 /// overlay is open the game sees an idle pad instead.
 static OVERLAY_PAD: Mutex<Pad> = Mutex::new(IDLE);
 
+/// Where every input source goes: `[player 1, player 2]`. `p2` None
+/// (split-screen off): everything merges into player 1 — today's single-
+/// player merge order (pads, BLE, keyboard, script).
+fn route(s: &Sources, p2: Option<&P2Input>, focused: bool) -> [Pad; 2] {
+    let kb = keyboard_pad(&s.held_keys);
+    let mut p = [IDLE, IDLE];
+    // W7: unfocused, real pads are ignored; a script still drives (a
+    // scripted window run may sit in the background). The keyboard goes to
+    // whichever player owns it.
+    if focused {
+        // Each gilrs pad: to P2 if p2 is Gamepad(None), or Gamepad(Some(n))
+        // and its name contains n (case-insensitive; only the FIRST
+        // matching pad goes to P2, the rest to P1); else P1.
+        let mut p2_pad_taken = false;
+        for (name, pad) in &s.gamepads {
+            let to_p2 = match p2 {
+                Some(P2Input::Gamepad(None)) => true,
+                Some(P2Input::Gamepad(Some(n))) => {
+                    !p2_pad_taken && name.to_ascii_lowercase().contains(&n.to_ascii_lowercase())
+                }
+                _ => false,
+            };
+            if to_p2 {
+                p2_pad_taken = true;
+                p[1] = p[1].merge(*pad);
+            } else {
+                p[0] = p[0].merge(*pad);
+            }
+        }
+        // ble pad: P2 if p2 == Ble, else P1.
+        if matches!(p2, Some(P2Input::Ble)) {
+            p[1] = p[1].merge(s.ble);
+        } else {
+            p[0] = p[0].merge(s.ble);
+        }
+        // keyboard: P2 if p2 == Keyboard, else P1.
+        if matches!(p2, Some(P2Input::Keyboard)) {
+            p[1] = p[1].merge(kb);
+        } else {
+            p[0] = p[0].merge(kb);
+        }
+    } else if matches!(p2, Some(P2Input::Keyboard)) {
+        p[1] = kb;
+    } else {
+        p[0] = p[0].merge(kb);
+    }
+    // Script: always P1; script2: always P2.
+    p[0] = p[0].merge(s.script);
+    p[1] = p[1].merge(s.script2);
+    p
+}
+
 fn publish(s: &mut Sources) {
-    let p = s.merged();
+    let p2 = p2_setting();
+    let [p, p2_pad] = route(s, p2.as_ref(), FOCUSED.load(Ordering::Relaxed));
     // Always kept current: the first-run setup screen (firstrun.rs, U13)
     // polls it too, before the game or the overlay exist.
     *OVERLAY_PAD.lock().unwrap() = s.nav();
     if crate::settings::is_open() {
         // The overlay owns input: the game sees an idle pad while paused.
         pw64_platform::headless::set_controller1(0, 0, 0);
+        if p2.is_some() {
+            pw64_platform::headless::set_controller(1, 0, 0, 0);
+        }
         if let Some(r) = RECORD.lock().unwrap().as_mut() {
             r.pad = IDLE;
         }
     } else {
-        s.suppressed &= p.button; // released buttons reach the game again
-        let button = p.button & !s.suppressed;
+        s.suppressed[0] &= p.button; // released buttons reach the game again
+        let button = p.button & !s.suppressed[0];
         pw64_platform::headless::set_controller1(button, p.stick_x, p.stick_y);
+        if p2.is_some() {
+            s.suppressed[1] &= p2_pad.button;
+            let button2 = p2_pad.button & !s.suppressed[1];
+            pw64_platform::headless::set_controller(1, button2, p2_pad.stick_x, p2_pad.stick_y);
+        }
         if let Some(r) = RECORD.lock().unwrap().as_mut() {
             r.pad = Pad { button, ..p };
         }
@@ -1072,7 +1242,9 @@ pub fn release_all_keys() {
 pub fn overlay_toggled(open: bool) {
     let mut s = SOURCES.lock().unwrap();
     if !open {
-        s.suppressed = s.merged().button;
+        let pads = route(&s, p2_setting().as_ref(), FOCUSED.load(Ordering::Relaxed));
+        s.suppressed[0] = pads[0].button;
+        s.suppressed[1] = pads[1].button;
     }
     publish(&mut s);
 }
@@ -1147,9 +1319,28 @@ pub fn parse_script(text: &str) -> Result<Vec<ScriptStep>, String> {
 
 /// Loaded script + index of the next step to apply.
 static SCRIPT: Mutex<(Vec<ScriptStep>, usize)> = Mutex::new((Vec::new(), 0));
+/// Player-2 script (`PW64_INPUT_SCRIPT_P2`, same format): drives controller 2.
+static SCRIPT2: Mutex<(Vec<ScriptStep>, usize)> = Mutex::new((Vec::new(), 0));
 
-/// Loads `PW64_INPUT_SCRIPT` if set (exits on a bad script: it's a test tool)
-/// and opens `PW64_RECORD_INPUT`.
+/// Loads one script file (exits on a bad script: it's a test tool).
+fn load_script(env: &str, path: &std::path::PathBuf) -> Option<Vec<ScriptStep>> {
+    let steps = std::fs::read_to_string(path)
+        .map_err(|e| e.to_string())
+        .and_then(|t| parse_script(&t));
+    match steps {
+        Ok(steps) => {
+            eprintln!("[script] {}: {} steps", path.display(), steps.len());
+            Some(steps)
+        }
+        Err(e) => {
+            eprintln!("error: {env} {}: {e}", path.display());
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Loads `PW64_INPUT_SCRIPT` / `PW64_INPUT_SCRIPT_P2` if set (exits on a bad
+/// script: it's a test tool) and opens `PW64_RECORD_INPUT`.
 pub fn load_script_from_env() {
     if let Some(path) = std::env::var_os("PW64_RECORD_INPUT") {
         match std::fs::File::create(&path) {
@@ -1164,25 +1355,12 @@ pub fn load_script_from_env() {
             Err(e) => eprintln!("[record] can't create {}: {e}", path.display()),
         }
     }
-    let Some(path) = std::env::var_os("PW64_INPUT_SCRIPT") else {
-        return;
-    };
-    let steps = std::fs::read_to_string(&path)
-        .map_err(|e| e.to_string())
-        .and_then(|t| parse_script(&t));
-    match steps {
-        Ok(steps) => {
-            eprintln!(
-                "[script] {}: {} steps",
-                std::path::Path::new(&path).display(),
-                steps.len()
-            );
-            *SCRIPT.lock().unwrap() = (steps, 0);
-        }
-        Err(e) => {
-            eprintln!("error: PW64_INPUT_SCRIPT {}: {e}", path.display());
-            std::process::exit(2);
-        }
+    if let Some(path) = std::env::var_os("PW64_INPUT_SCRIPT").map(std::path::PathBuf::from) {
+        *SCRIPT.lock().unwrap() = (load_script("PW64_INPUT_SCRIPT", &path).unwrap_or_default(), 0);
+    }
+    if let Some(path) = std::env::var_os("PW64_INPUT_SCRIPT_P2").map(std::path::PathBuf::from) {
+        *SCRIPT2.lock().unwrap() =
+            (load_script("PW64_INPUT_SCRIPT_P2", &path).unwrap_or_default(), 0);
     }
 }
 
@@ -1200,8 +1378,14 @@ pub fn script_tick(retrace: u64) {
     }
 }
 
-fn apply_script_steps(retrace: u64) {
-    let mut sc = SCRIPT.lock().unwrap();
+/// Applies one script's steps now due, logging the changes; returns the pad
+/// when a step became due (so the caller re-publishes).
+fn apply_steps(
+    script: &Mutex<(Vec<ScriptStep>, usize)>,
+    label: &str,
+    retrace: u64,
+) -> Option<Pad> {
+    let mut sc = script.lock().unwrap();
     let (steps, next) = &mut *sc;
     let mut changed = None;
     while *next < steps.len() && steps[*next].retrace <= retrace {
@@ -1211,11 +1395,24 @@ fn apply_script_steps(retrace: u64) {
     drop(sc);
     if let Some(pad) = changed {
         eprintln!(
-            "[script] retrace {retrace}: buttons {:#06x} stick {},{}",
+            "[script{label}] retrace {retrace}: buttons {:#06x} stick {},{}",
             pad.button, pad.stick_x, pad.stick_y
         );
+    }
+    changed
+}
+
+fn apply_script_steps(retrace: u64) {
+    let p1 = apply_steps(&SCRIPT, "", retrace);
+    let p2 = apply_steps(&SCRIPT2, " P2", retrace);
+    if p1.is_some() || p2.is_some() {
         let mut s = SOURCES.lock().unwrap();
-        s.script = pad;
+        if let Some(pad) = p1 {
+            s.script = pad;
+        }
+        if let Some(pad) = p2 {
+            s.script2 = pad;
+        }
         publish(&mut s);
     }
 }
@@ -1331,10 +1528,13 @@ pub fn spawn() {
                     }
                 }
                 let pads: Vec<_> = gilrs.gamepads().filter(|(_, g)| g.is_connected()).collect();
-                let pad = pads
+                // One entry per connected pad: per-player routing picks
+                // single pads out by name (split-screen), else they merge
+                // into controller 1.
+                let gamepads: Vec<(String, Pad)> = pads
                     .iter()
-                    .map(|(_, g)| gamepad_pad(g))
-                    .fold(Pad::default(), Pad::merge);
+                    .map(|(_, g)| (g.name().to_string(), gamepad_pad(g)))
+                    .collect();
                 let nav = pads
                     .iter()
                     .map(|(_, g)| gamepad_nav_pad(g))
@@ -1358,8 +1558,10 @@ pub fn spawn() {
                     }
                 }
                 let mut s = SOURCES.lock().unwrap();
-                if (s.gamepads, s.ble, s.nav) != (pad, ble, nav) {
-                    (s.gamepads, s.ble, s.nav) = (pad, ble, nav);
+                if s.gamepads != gamepads || s.ble != ble || s.nav != nav {
+                    s.gamepads = gamepads;
+                    s.ble = ble;
+                    s.nav = nav;
                     publish(&mut s);
                 }
                 drop(s);
@@ -1860,24 +2062,28 @@ mod tests {
     fn closing_press_is_suppressed_until_released() {
         let _lock = TEST_LOCK.lock().unwrap();
         let mut s = Sources {
-            gamepads: Pad {
-                button: CONT_START | CONT_A,
-                ..IDLE
-            },
+            gamepads: vec![(
+                "Xbox Controller".into(),
+                Pad {
+                    button: CONT_START | CONT_A,
+                    ..IDLE
+                },
+            )],
             held_keys: Vec::new(),
             script: IDLE,
+            script2: IDLE,
             ble: IDLE,
-            suppressed: CONT_START | CONT_A, // as set by `overlay_toggled(false)`
+            suppressed: [CONT_START | CONT_A, 0], // as set by `overlay_toggled(false)`
             nav: IDLE,
         };
         publish(&mut s);
-        assert_eq!(s.suppressed, CONT_START | CONT_A);
-        s.gamepads.button = CONT_A; // Start released
+        assert_eq!(s.suppressed[0], CONT_START | CONT_A);
+        s.gamepads[0].1.button = CONT_A; // Start released
         publish(&mut s);
-        assert_eq!(s.suppressed, CONT_A);
-        s.gamepads.button = CONT_START | CONT_A; // a fresh Start press
+        assert_eq!(s.suppressed[0], CONT_A);
+        s.gamepads[0].1.button = CONT_START | CONT_A; // a fresh Start press
         publish(&mut s);
-        assert_eq!(s.suppressed, CONT_A, "a new press is not suppressed");
+        assert_eq!(s.suppressed[0], CONT_A, "a new press is not suppressed");
     }
 
     /// Every default key and button round trips through its `Debug` name
@@ -2140,5 +2346,146 @@ mod tests {
         start_pad_capture();
         cancel_pad_capture();
         assert!(take_captured_button().is_none(), "cancel drops");
+    }
+
+    /// Test-only `Sources`: keyboard input as `held_keys` (Space = A),
+    /// devices given directly.
+    fn sources(
+        gamepads: &[(&str, Pad)],
+        ble: Pad,
+        script: Pad,
+        script2: Pad,
+        held_keys: Vec<KeyCode>,
+    ) -> Sources {
+        Sources {
+            gamepads: gamepads
+                .iter()
+                .map(|(n, p)| (n.to_string(), *p))
+                .collect(),
+            held_keys,
+            script,
+            script2,
+            ble,
+            suppressed: [0; 2],
+            nav: IDLE,
+        }
+    }
+
+    fn pad(button: u16) -> Pad {
+        Pad {
+            button,
+            stick_x: 0,
+            stick_y: 0,
+        }
+    }
+
+    /// Split-screen off: everything merges into player 1, player 2 idle.
+    #[test]
+    fn route_without_p2_merges_into_player_1() {
+        let s = sources(
+            &[("Xbox Controller", pad(CONT_B))],
+            pad(CONT_L),
+            pad(CONT_A),
+            IDLE,
+            vec![KeyCode::Space], // keyboard = CONT_A
+        );
+        assert_eq!(
+            route(&s, None, true),
+            [pad(CONT_A | CONT_B | CONT_L), IDLE],
+            "pads + BLE + keyboard + script → player 1, player 2 idle"
+        );
+    }
+
+    /// Player 2 owns the keyboard: it alone leaves player 1.
+    #[test]
+    fn route_keyboard_p2() {
+        let s = sources(
+            &[("Xbox Controller", pad(CONT_B))],
+            pad(CONT_L),
+            pad(CONT_A),
+            IDLE,
+            vec![KeyCode::Space],
+        );
+        assert_eq!(
+            route(&s, Some(&P2Input::Keyboard), true),
+            [pad(CONT_A | CONT_B | CONT_L), pad(CONT_A)]
+        );
+    }
+
+    /// Player 2 owns the first pad whose name matches the substring.
+    #[test]
+    fn route_gamepad_name_p2() {
+        let s = sources(
+            &[
+                ("Xbox Controller", pad(CONT_B)),
+                ("Joy-Con (L/R)", pad(CONT_R)),
+            ],
+            IDLE,
+            IDLE,
+            IDLE,
+            Vec::new(),
+        );
+        assert_eq!(
+            route(&s, Some(&P2Input::Gamepad(Some("joy".into()))), true),
+            [pad(CONT_B), pad(CONT_R)],
+            "case-insensitive substring, second pad to player 2"
+        );
+        // A name that matches nothing: everything stays player 1.
+        assert_eq!(
+            route(&s, Some(&P2Input::Gamepad(Some("ps5".into()))), true),
+            [pad(CONT_B | CONT_R), IDLE]
+        );
+        // Every gilrs pad to player 2.
+        assert_eq!(
+            route(&s, Some(&P2Input::Gamepad(None)), true),
+            [IDLE, pad(CONT_B | CONT_R)]
+        );
+    }
+
+    /// Player 2 owns the BLE pads.
+    #[test]
+    fn route_ble_p2() {
+        let s = sources(&[("Xbox Controller", pad(CONT_B))], pad(CONT_L), IDLE, IDLE, Vec::new());
+        assert_eq!(
+            route(&s, Some(&P2Input::Ble), true),
+            [pad(CONT_B), pad(CONT_L)]
+        );
+        // Unfocused: real pads are ignored (scripts still drive).
+        let s2 = sources(&[], IDLE, pad(CONT_A), pad(CONT_R), vec![KeyCode::Space]);
+        assert_eq!(
+            route(&s2, Some(&P2Input::Ble), false),
+            [pad(CONT_A), pad(CONT_R)],
+            "unfocused: keyboard (player 1, p2=Ble) + scripts only"
+        );
+    }
+
+    /// The P2 script always drives player 2.
+    #[test]
+    fn route_script2_p2() {
+        let s = sources(&[], IDLE, pad(CONT_A), pad(CONT_R), Vec::new());
+        assert_eq!(
+            route(&s, None, false),
+            [pad(CONT_A), pad(CONT_R)],
+            "script2 reaches player 2 even with split-screen routing off"
+        );
+    }
+
+    /// `p2_input` parse / config round trip.
+    #[test]
+    fn p2_input_parse_round_trip() {
+        for s in ["keyboard", "gamepad", "ble", "gamepad:Xbox"] {
+            assert_eq!(
+                P2Input::parse(s).unwrap().to_config(),
+                s,
+                "{s:?} round trips"
+            );
+        }
+        assert_eq!(P2Input::parse("KEYBOARD"), Some(P2Input::Keyboard));
+        assert_eq!(
+            P2Input::parse("Gamepad:Joy-Con"),
+            Some(P2Input::Gamepad(Some("Joy-Con".into())))
+        );
+        assert_eq!(P2Input::parse("mouse"), None);
+        assert_eq!(P2Input::parse("gamepad:"), Some(P2Input::Gamepad(Some("".into()))));
     }
 }
