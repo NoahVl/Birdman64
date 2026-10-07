@@ -73,3 +73,16 @@
                      }
                  }
              }
+@@ -1953,6 +1968,12 @@
+                 return;
+             }
+         }
+     }
+     gcData->unk90 = 0.0f;
+ }
++
++// PW64 split-screen: per-player rate trim state (pw64_players.c).
++void pw64_reg_gyrocopter(void) {
++    PW64_REG(sPw64GcTrimAcc);
++    PW64_REG(sPw64GcTrimFresh);
++}

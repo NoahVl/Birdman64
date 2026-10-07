@@ -85,6 +85,9 @@ void pw64_hud_anchor_xy(int x, int y);
  * hud.c.patch brackets the HUD branch of hudMainRender with it; the
  * renderer only uses the tag when OLED care is on. */
 void pw64_hud_tag(int on);
+/* Split-screen HUD view ("PWS", same file, pw64-gfx interp::SPLIT_TAG):
+ * hudMainRender brackets the HUD with the current player's view. */
+void pw64_hud_split_tag(int on);
 /* uvCopyFrameBuf (graphics.c.patch): copy the HLE renderer's framebuffer
  * target `src` into `dst` (N64 fb addresses; pw64-platform headless.rs). */
 void pw64_fb_copy(unsigned int dst, unsigned int src);
@@ -133,6 +136,10 @@ void pw64_reg_rocket_belt(void);
 void pw64_reg_rocket_belt_sound(void);
 void pw64_reg_rocket_belt_poses(void); /* code_AE460.c */
 void pw64_reg_rocket_belt_move(void);  /* code_AC1A0.c */
+void pw64_reg_gyrocopter(void);        /* gyrocopter.c: rate trim */
+void pw64_reg_gyrocopter_sound(void);  /* gyrocopter_sound.c */
+void pw64_reg_gyrocopter_poses(void);  /* code_7C4C0.c */
+void pw64_reg_gyrocopter_move(void);   /* code_7CF30.c */
 void pw64_players_init(void);
 /* Kernel controller reads (controller.c.patch): with 2+ players, pad 0
  * means "the current player's pad", so hardcoded-0 sites follow the swap. */

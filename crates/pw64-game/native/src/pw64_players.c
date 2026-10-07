@@ -101,4 +101,8 @@ void pw64_players_init(void) {
     pw64_reg_rocket_belt_sound();
     pw64_reg_rocket_belt_poses();
     pw64_reg_rocket_belt_move();
+    pw64_reg_gyrocopter();
+    pw64_reg_gyrocopter_sound();
+    pw64_reg_gyrocopter_poses();
+    pw64_reg_gyrocopter_move();
 }

@@ -1,6 +1,6 @@
 # Split-screen (2-player local)
 
-Status: two pilots (hang glider or rocket belt) fly the same test (top view = player 1,
+Status: two pilots (hang glider, gyrocopter or rocket belt) fly the same test (top view = player 1,
 bottom = player 2), each on its own controller and camera, seeing each other. Other
 vehicles fall back to one player. Everything is gated: `pw64_level_players == 1` runs the
 original code paths.
@@ -28,7 +28,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   (`PW64_CONT`) in the five read functions, so every hard-wired "controller 0"/`unk9C`/
   `contIdx` read means the current player (menus run with player 0 live).
 - **Level load:** world once (levelLoad, terra, env, taskLoad); then `pw64_setup_players`:
-  per player switch(i), `func_8034B5E0(i)` (chan HUD callback NULL for P2), terra/env on
+  per player switch(i), `func_8034B5E0(i)` (chan i + HUD callback), terra/env on
   channel i, `pw64_split_viewport`, vehicle load with `contIdx = i`, P2 offset 10 m along the
   start frame's x (`func_802EDDEC`, patched to use `unkC[].vehicleData`). Teardown
   `pw64_leave_players` (from func_802ECE94); Retry sets up a fresh 2-pilot test.
@@ -38,6 +38,15 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   switch(i). `taskFrameUpdate` = both parts, original order, when single-player.
 - **Viewports:** `pw64_split_viewport` (camera.c.patch) halves the subscreen (N64 y is
   bottom-up) and reshapes the camera's clip frustum to the view's aspect (wider: keep x).
+- **HUD per view:** every player's channel keeps the HUD callback (`func_8034B6F8`), so each
+  HUD draws for 320×240 inside its own channel pass. `hudMainRender` brackets it with
+  `pw64_hud_split_tag` (G_NOOP "PWS": view rect from `D_80261730[pw64_player_cur]`) and the
+  anchor tags are emitted in split too; pw64-gfx lays the subscreen frame out in the view at
+  scale view_h/214 (= an exact miniature vertically, so the right column radar/altimeter/sea
+  level never overlaps), each element at its L/C/R anchor. C-side moves can't work (the 2D
+  texrects don't scale; the 0..320 HUD scissor). font.c advanced its sprite-DL offset by the
+  message count only: the 2nd flush per frame overwrote P1's text (patched, split only).
+  splash.c ripples step in P1's pass only (drawn per view). Shutter bars don't close fully.
 - **Budgets** (shared by both world passes): DL `PW64_DL_LEN 16384` (was 4200; overflow
   silently skips the frame), `UV_GFX_NUM_MATRICES 0x400` (0x15E), `LOOKS 0x60` (0x1E),
   `UV_GEOM_NUM_VERTICES 0x800` (0x320). Also apply to single-player (headroom only).
@@ -49,12 +58,11 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   re-issues `uvGfxViewport(arg0)` after both z clears when split.
 - fdr.c flight recorder is P1-only, else its clock runs 2×. Photo shutter is P1-only.
 - `hgSoundEvent13` removed the last-registered sound callback (P2's): now removes its own.
-  Same fix for the rocket belt (`rbSoundEvent13`).
+  Same fix for the rocket belt (`rbSoundEvent13`) and the gyro (`gyrocopter_sound.c`
+  func_8030B168: static D_80369E50 rebuilt per gyro with the caller's `gcData`).
 - At the start the other glider is just outside the FOV (camera ~18 m back, 10 m apart).
 
 ## Remaining work (from the per-player statics audit)
-- **HUD per view:** only P1's HUD is drawn and its bottom row is hidden by P2's view. Plan:
-  tag each view's 2D draws and let pw64-gfx scale them into the view rect.
 - **Objectives per player:** hit state lives in shared arrays (rings, balls, missile targets,
   hover pads, ball targets, bonus stars, hopper goals, photos) and hits change shared dobjs;
   the kernel has no per-view dobj visibility. Today only P1 hits objectives (landing pads:

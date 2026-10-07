@@ -89,13 +89,14 @@
  }
  
 +// PW64 split-screen: per-player part of the test setup for players 2..n
-+// (hang glider / rocket belt), after player 1's. Each player i: kernel
++// (hang glider / gyrocopter / rocket belt), after player 1's. Each player i: kernel
 +// channel i = camera i in its viewport, own vehicle buffer + results
-+// struct, pad i. Only player 1's HUD is drawn for now: both HUDs use the
-+// same screen positions (per-view HUD layout comes later).
++// struct, pad i. Each player's HUD is drawn by its channel's callback and
++// laid out in its view by the renderer (pw64_hud_split_tag).
 +static void pw64_setup_players(Unk80362690* arg0) {
 +    Unk80362690_Unk0* p = &arg0->unkC[0];
 +    HangGliderData* hg;
++    GyrocopterData* gc;
 +    RocketBeltData* rb;
 +    Mtx4F start;
 +    Mtx4F* vehMtx;
@@ -107,11 +108,15 @@
 +        p->unk74 = &D_80364210[i];
 +        p->vehicleData = D_80362748[i];
 +        func_8034B5E0(i, p->unk70);
-+        uvChan_80204AB0(i, 1, NULL);
 +        uvChanTerra(i, arg0->terraId);
 +        uvChanEnv(i, arg0->envId);
 +        pw64_split_viewport(p->unk70, i);
-+        if (p->veh == VEHICLE_ROCKET_BELT) {
++        if (p->veh == VEHICLE_GYROCOPTER) {
++            D_803676F4 = gc = (GyrocopterData*)p->vehicleData;
++            gyrocopterLoadLevel(i, p->pilot, gc, p->unk70);
++            gyrocopterEnterLeave(gc);
++            vehMtx = &gc->unk10;
++        } else if (p->veh == VEHICLE_ROCKET_BELT) {
 +            D_803676F8 = rb = (RocketBeltData*)p->vehicleData;
 +            rocketBeltLoadLevel(i, p->pilot, rb, p->unk70);
 +            rocketBeltEnterLeave(rb);
@@ -148,7 +153,10 @@
 +    for (i = 1; i < pw64_level_players; i++) {
 +        pw64_player_switch(i);
 +        if (p->vehicleData != NULL) {
-+            if (p->veh == VEHICLE_ROCKET_BELT) {
++            if (p->veh == VEHICLE_GYROCOPTER) {
++                gyrocopterEnterLeave(p->vehicleData);
++                func_802F5F80(p->vehicleData);
++            } else if (p->veh == VEHICLE_ROCKET_BELT) {
 +                rocketBeltEnterLeave(p->vehicleData);
 +                func_80325100(p->vehicleData);
 +            } else {
@@ -172,13 +180,15 @@
      } else {
          D_8034F160 = -1;
      }
-+    // PW64 split-screen: hang glider and rocket belt tests (not the attract
-+    // demo) take a second pilot; other vehicles stay single-player for now.
-+    // Player 2 starts as a copy of player 1's state before the vehicle load
-+    // (HUD reset, radar waypoints from taskLoad), see pw64_setup_players.
++    // PW64 split-screen: hang glider, gyrocopter and rocket belt tests (not
++    // the attract demo) take a second pilot; other vehicles stay
++    // single-player for now. Player 2 starts as a copy of player 1's state
++    // before the vehicle load (HUD reset, radar waypoints from taskLoad),
++    // see pw64_setup_players.
 +    pw64_level_players = 1;
 +    if ((pw64_players > 1) && !arg0->unkA4) {
 +        if ((temp_s0->veh == VEHICLE_HANG_GLIDER) ||
++            (temp_s0->veh == VEHICLE_GYROCOPTER) ||
 +            (temp_s0->veh == VEHICLE_ROCKET_BELT)) {
 +            pw64_level_players = pw64_players;
 +        } else {

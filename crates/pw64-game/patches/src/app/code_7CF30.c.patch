@@ -25,3 +25,18 @@
          }
  
          gcData->unk9C = func_80313F08(&D_80368880, ABS_NOEQ(xAxisInput));
+@@ -1185,6 +1190,14 @@
+         gcData->unk584 = 0.6f, gcData->unk588 = 0.6f, gcData->unk58C = 0.6f;
+         break;
+     default:
+         break;
+     }
+ }
++
++// PW64 split-screen: per-player button edge detect, sfx one-shot and test
++// timer (pw64_players.c).
++void pw64_reg_gyrocopter_move(void) {
++    PW64_REG(D_8034F380);
++    PW64_REG(D_8034F384);
++    PW64_REG(sPw64TestTime);
++}
