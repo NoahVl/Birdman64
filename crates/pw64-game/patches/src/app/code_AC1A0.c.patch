@@ -1,6 +1,6 @@
 --- a/src/app/code_AC1A0.c
 +++ b/src/app/code_AC1A0.c
-@@ -145,6 +145,11 @@
+@@ -145,6 +145,11 @@ void func_80325100(RocketBeltData* rbData) {
      shadow_80334C70();
  }
  
@@ -12,7 +12,7 @@
  void rocketBeltMovementFrame(RocketBeltData* rbData, u8 gameState) {
      f32 spB4;
      f32 var_fv0_3;
-@@ -175,7 +180,11 @@
+@@ -175,7 +180,11 @@ void rocketBeltMovementFrame(RocketBeltData* rbData, u8 gameState) {
          rbData->unk68 = stickX;
          rbData->unk6C = stickY;
          if ((rbData->unk8 > 0.0f) || (buttons & (A_BUTTON | B_BUTTON))) {
@@ -25,7 +25,24 @@
          }
  
          rbData->unk70 = func_80313F08(&D_80371070, ABS_NOEQ(stickX));
-@@ -851,3 +856,8 @@
+@@ -369,11 +378,14 @@ void rocketBeltMovementFrame(RocketBeltData* rbData, u8 gameState) {
+                 } else {
+                     hud->speed = rbData->unk1F4 * 3.6f * 0.7f;
+                 }
+-                if (rbData->unk91 != 0) {
++                // PW64 free flight: no score, no penalty sound or text.
++                if ((rbData->unk91 != 0) && !pw64_free_flight) {
+                     sndPlaySfx(SFX_UI_POINT_PENALTY);
+                 }
+                 if ((rbData->unk91 != 0) && (hud->unkB40[0] == -1)) {
+-                    hudWarningText(TEXT_OFF_2, 1.5f, 8.0f);
++                    if (!pw64_free_flight) {
++                        hudWarningText(TEXT_OFF_2, 1.5f, 8.0f);
++                    }
+                 } else {
+                     if ((rbData->unkF8 <= 0.0f) && (rbData->unkEC == 0)) {
+                         hudWarningText(TEXT_FUEL_OUT, 1.5f, 8.0f);
+@@ -851,3 +863,8 @@ void func_80326E40(RocketBeltData* rbData) {
      }
      uvDobjState(rbData->objId, rbData->unk2);
  }

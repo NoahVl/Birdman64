@@ -53,7 +53,7 @@
          uvMat4UnkOp6(&camera->unk108, &camera->unk80, &sp48);
      }
  }
-@@ -1001,3 +1005,40 @@ STATIC_FUNC void camera_802D58EC(Camera* camera, Mtx4F* arg1) {
+@@ -1001,3 +1005,48 @@ STATIC_FUNC void camera_802D58EC(Camera* camera, Mtx4F* arg1) {
      camera->unk220 = func_80313AF4(var_fa0, camera->unk220, 1.0f);
      uvMat4RotateAxis(arg1, camera->unk220 * 0.01745329f, 'x'); // almost DEG_TO_RAD(1)
  }
@@ -64,6 +64,14 @@
 +    Camera* cam = camera;
 +    s16 mid = (SUBSCREEN_Y0 + SUBSCREEN_Y1) / 2;
 +    f32 w, h, aspect;
++    if (i < 0) { // back to one view (cameraInit's viewport and frustum)
++        cameraSetViewport(cam, SUBSCREEN_X0, SUBSCREEN_X1, SUBSCREEN_Y0, SUBSCREEN_Y1);
++        cam->clipX0 = -0.4906542f;
++        cam->clipX1 = 0.4906542f;
++        cam->clipY0 = -0.35f;
++        cam->clipY1 = 0.35f;
++        return;
++    }
 +    if (i == 0) {
 +        cameraSetViewport(cam, SUBSCREEN_X0, SUBSCREEN_X1, mid + 1, SUBSCREEN_Y1);
 +    } else {

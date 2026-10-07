@@ -1,6 +1,6 @@
 --- a/src/app/code_7CF30.c
 +++ b/src/app/code_7CF30.c
-@@ -196,6 +196,11 @@
+@@ -196,6 +196,11 @@ void func_802F5F80(GyrocopterData* gcData) {
      shadow_80334C70();
  }
  
@@ -12,7 +12,7 @@
  void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
      s32 pad[2];
      HUDState* hud;
-@@ -225,7 +230,11 @@
+@@ -225,7 +230,11 @@ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
          }
  
          if ((gcData->elapsedTime > 0.0f) || (buttons & A_BUTTON)) {
@@ -25,10 +25,22 @@
          }
  
          gcData->unk9C = func_80313F08(&D_80368880, ABS_NOEQ(xAxisInput));
-@@ -1185,6 +1190,14 @@
-         gcData->unk584 = 0.6f, gcData->unk588 = 0.6f, gcData->unk58C = 0.6f;
-         break;
-     default:
+@@ -484,12 +493,14 @@ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
+                 hud->power = 0.0f;
+             }
+             if (gcData->unkC1 != 0) {
++                if (!pw64_free_flight) { // PW64 free flight: no score, no penalty
+ #if defined(VERSION_JP)
+                 hudText_8031D8E0(TEXT_OFF_5, 1.5f, 8.0f);
+ #else // VERSION_US
+                 hudWarningText(TEXT_OFF_5, 1.5f, 8.0f);
+ #endif
+                 sndPlaySfx(SFX_UI_POINT_PENALTY);
++                }
+             } else {
+                 if ((gcData->fuel <= 0.0f) && !gcData->fuelEmpty) {
+                     hudWarningText(TEXT_FUEL_OUT, 1.5f, 8.0f);
+@@ -1188,3 +1199,11 @@ void gyrocopterLoadPilot(u8 pilot, GyrocopterData* gcData) {
          break;
      }
  }

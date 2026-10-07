@@ -1,6 +1,6 @@
 --- a/src/app/hud.c
 +++ b/src/app/hud.c
-@@ -19,9 +19,12 @@
+@@ -19,9 +19,26 @@
  #include "task.h"
  #include "text_data.h"
  #include "thermals.h"
@@ -24,11 +24,11 @@
 +        uvFontPrintStr((SCREEN_WIDTH / 2) - (uvFontWidth(sFinished) / 2), 125, sFinished);
 +    }
 +}
-
+ 
  // hang glider speeds below this value will be highlighted larger red/amber font
  #define HIGHLIGHT_SPEED_BELOW 36
-@@ -246,6 +249,8 @@ void hudMainRender(void) {
-
+@@ -246,6 +263,8 @@ void hudMainRender(void) {
+ 
      hud = &sHudState;
      if ((hud->renderFlags & HUD_RENDER_DISABLE) == 0x0) {
 +        pw64_hud_tag(1);       // PW64: flight-HUD bracket (OLED care)
@@ -36,7 +36,7 @@
          if ((hud->unkC50 != 0.0f) && (hud->unkC54 < sHudState.unk14)) {
              hud->unkC5C = !hud->unkC5C;
              hud->unkC54 = (1.0f / hud->unkC50) + sHudState.unk14;
-@@ -308,6 +312,7 @@ void hudMainRender(void) {
+@@ -308,8 +327,10 @@ void hudMainRender(void) {
              } else if (sHudState.renderFlags & HUD_RENDER_BIRDMAN) {
                  hudDrawBirdman(&sHudState);
              }
@@ -45,7 +45,9 @@
              hudDrawStartText(&sHudState);
 +            pw64_hud_finished(); // PW64 split-screen
              if (sHudState.showController != 0) {
-@@ -317,6 +323,9 @@ void hudMainRender(void) {
+                 hudDemoController();
+             }
+@@ -317,6 +338,9 @@ void hudMainRender(void) {
          sHudState.unkC++;
          sHudState.unk14 += D_8034F854;
          uvFontGenDlist();
@@ -55,7 +57,7 @@
          uvGfxMtxViewPop();
      }
  }
-@@ -375,6 +382,7 @@ void hudDrawCannonball(HUDState* arg0) {
+@@ -375,6 +399,7 @@ void hudDrawCannonball(HUDState* arg0) {
      s32 pad3;
  
      if (arg0->speed == 0.0f) {
@@ -63,7 +65,7 @@
          uvGfxStatePush();
          uvGfxSetFlags(GFX_STATE_XLU);
          uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER);
-@@ -436,6 +444,7 @@ void hudDrawCannonball(HUDState* arg0) {
+@@ -436,6 +461,7 @@ void hudDrawCannonball(HUDState* arg0) {
              uvVtxEndPoly();
              uvGfxStatePop();
          }
@@ -71,7 +73,7 @@
          uvGfxStatePush();
          uvGfxSetFlags(GFX_STATE_XLU);
          uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER);
-@@ -572,6 +581,7 @@ void hudDrawCannonball(HUDState* arg0) {
+@@ -572,6 +598,7 @@ void hudDrawCannonball(HUDState* arg0) {
          uvVtx(156, 29, 0, 0, 0, 255, 0, 0, 255);
          uvVtxEndPoly();
          uvGfxStatePop();
@@ -79,7 +81,7 @@
          uvGfxStatePush();
          uvGfxSetFlags(GFX_STATE_XLU);
          uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER);
-@@ -686,6 +696,7 @@ void hudDrawBirdman(HUDState* hud) {
+@@ -686,6 +713,7 @@ void hudDrawBirdman(HUDState* hud) {
  }
  
  void hudDrawCamera(HUDState* hud) {
@@ -87,7 +89,7 @@
      s32 x;
  
      if (hud->cameraState & HUD_CAM_RENDER_RETICLE) {
-@@ -703,6 +714,7 @@ void hudDrawCamera(HUDState* hud) {
+@@ -703,6 +731,7 @@ void hudDrawCamera(HUDState* hud) {
          }
      } else if (hud->cameraState & HUD_CAM_RENDER_SHUTTER) {
          hud->cameraState = CAMERA_SHUTTER_FRAMES; // state now means # frames to render shutter
@@ -95,7 +97,7 @@
      } else if (hud->cameraState != 0) {
          // field is count down for rendering black rects for shutter
          if (hud->cameraState != 0) {
-@@ -711,9 +723,23 @@ void hudDrawCamera(HUDState* hud) {
+@@ -711,9 +740,23 @@ void hudDrawCamera(HUDState* hud) {
              x = hud->cameraState * (240 / CAMERA_SHUTTER_FRAMES);
          }
          uvGfxBindTexture(GFX_STATE_TEXTURE_NONE);
@@ -122,7 +124,7 @@
          D_8034F914 = 0;
      }
  }
-@@ -918,6 +944,7 @@ void hud_8031A8E0(s32 idx) {
+@@ -918,6 +961,7 @@ void hud_8031A8E0(s32 idx) {
  }
  
  void hudDrawThrottle(s32 x, s32 y, f32 power) {
@@ -130,7 +132,7 @@
      Mtx4F rot;
      UNUSED s16* fakePtr;
      s16 y1;
-@@ -979,6 +1006,7 @@ void hudDrawThrottle(s32 x, s32 y, f32 power) {
+@@ -979,6 +1023,7 @@ void hudDrawThrottle(s32 x, s32 y, f32 power) {
  }
  
  void hudDrawRadar(s32 x, s32 y, f32 xOff, f32 yOff, f32 heading, f32 pitch, HUDRadar* radar) {
@@ -138,7 +140,7 @@
      Mtx4F sp108;
      Mtx4F spC8;
      f32 temp_fa0;
-@@ -1188,14 +1216,15 @@ void hudDrawRadar(s32 x, s32 y, f32 xOff, f32 yOff, f32 heading, f32 pitch, HUDR
+@@ -1188,14 +1233,15 @@ void hudDrawRadar(s32 x, s32 y, f32 xOff, f32 yOff, f32 heading, f32 pitch, HUDR
          }
  
          temp_fv0_3 = radar->waypoints[idx].z - heading;
@@ -156,7 +158,7 @@
              if (radar->waypoints[idx].unk18 > 0xFF) {
                  radar->waypoints[idx].unk14 = 1;
                  radar->waypoints[idx].unk18 = 0xFF;
-@@ -1243,6 +1272,7 @@ void hudDemoContButton(s32 spriteId, s32 x, s32 y) {
+@@ -1243,6 +1289,7 @@ void hudDemoContButton(s32 spriteId, s32 x, s32 y) {
  }
  
  void hudDemoController(void) {
@@ -164,7 +166,7 @@
      s32 screenX;
      s32 screenY;
      f32 stickX;
-@@ -1299,6 +1329,7 @@ void hudDemoController(void) {
+@@ -1299,6 +1346,7 @@ void hudDemoController(void) {
  }
  
  void hudDrawSpeed(s32 x, s32 y, s32 speed, s32 highlightLowSpeed) {
@@ -172,7 +174,7 @@
      char str[12];
      s32 numX;
  
-@@ -1327,6 +1358,7 @@ void hudDrawSpeed(s32 x, s32 y, s32 speed, s32 highlightLowSpeed) {
+@@ -1327,6 +1375,7 @@ void hudDrawSpeed(s32 x, s32 y, s32 speed, s32 highlightLowSpeed) {
  }
  
  void hudDrawFuel(s32 x, s32 y, f32 fuel) {
@@ -180,7 +182,7 @@
      s16 curX1;
      s16 curX2;
      s16 curY1;
-@@ -1415,6 +1447,7 @@ void hudDrawFuel(s32 x, s32 y, f32 fuel) {
+@@ -1415,6 +1464,7 @@ void hudDrawFuel(s32 x, s32 y, f32 fuel) {
  }
  
  void hudDrawAltimeter(s32 x, s32 y, s32 altitude) {
@@ -188,7 +190,7 @@
      s32 pad32;
      s16 sp72;
      s16 pad16;
-@@ -1534,6 +1567,7 @@ void hudDrawAltimeter(s32 x, s32 y, s32 altitude) {
+@@ -1534,6 +1584,7 @@ void hudDrawAltimeter(s32 x, s32 y, s32 altitude) {
  }
  
  void hudSeaLevel(s32 x, s32 y, s32 alt) {
@@ -196,7 +198,7 @@
      char str[12];
  
      y += 8;
-@@ -1561,6 +1595,7 @@ void hudSeaLevel(s32 x, s32 y, s32 alt) {
+@@ -1561,6 +1612,7 @@ void hudSeaLevel(s32 x, s32 y, s32 alt) {
  }
  
  void hudDrawTimer(s32 x, s32 y, f32 timeSecF) {
@@ -204,7 +206,17 @@
      static s32 D_8034F938 = 0;
      s32 timeMs;
      s32 timeSec;
-@@ -1613,6 +1648,7 @@ void hudDrawTimer(s32 x, s32 y, f32 timeSecF) {
+@@ -1569,6 +1621,9 @@ void hudDrawTimer(s32 x, s32 y, f32 timeSecF) {
+     s32 adjHundth;
+     char timeStr[12];
+ 
++    if (pw64_free_flight) { // PW64 free flight (game.c.patch): no test clock
++        return;
++    }
+     if (timeSecF != 0.0f) {
+         if (timeSecF < (D_8034F910 + 0.083f)) {
+             timeSecF = D_8034F910;
+@@ -1613,6 +1668,7 @@ void hudDrawTimer(s32 x, s32 y, f32 timeSecF) {
  }
  
  void hudDrawAimReticle(s32 x, s32 y, s32 flag) {
@@ -212,7 +224,7 @@
      s16 centerX;
      s16 centerY;
  
-@@ -2055,6 +2091,7 @@ void hudDrawRect(s32 x, s32 y, s32 width, s32 height, s32 penWidth, u8 r, u8 g,
+@@ -2055,6 +2111,7 @@ void hudDrawRect(s32 x, s32 y, s32 width, s32 height, s32 penWidth, u8 r, u8 g,
  }
  
  void hudDrawPhotoCount(void) {
@@ -220,7 +232,7 @@
      char str[12];
      (void)snapGetPhotoCount();
      uvFontSet(8);
-@@ -2075,3 +2112,12 @@ void hudDrawPhotoCount(void) {
+@@ -2075,3 +2132,12 @@ void hudDrawPhotoCount(void) {
  void hudDemoControllerEn(u8 enable) {
      sHudState.showController = enable;
  }

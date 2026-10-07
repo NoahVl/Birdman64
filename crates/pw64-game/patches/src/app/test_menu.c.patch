@@ -1,0 +1,98 @@
+--- a/src/app/test_menu.c
++++ b/src/app/test_menu.c
+@@ -65,6 +65,18 @@ u8 testMenuHandler(Unk80367710*);
+ void testMenuDraw(Camera* camera, u8 classIdx, u8 vehIdx);
+ void testMenu_8034A428(void);
+ 
++// PW64 split-screen free flight (splitscreen.md "Free flight"): an extra
++// "Free flight" item in the bottom-right slot (Sample photo's; it replaces
++// that button on the Shutter Bug tests) for the vehicles split-screen
++// supports. Picking it starts the highlighted test's level without
++// objectives (pw64_free_flight, game.c.patch).
++s32 pw64_split_vehicle(s32 veh); // game.c.patch
++static s16 sPw64FreeText[16];
++
++static s32 pw64_free_offered(void) {
++    return (pw64_players > 1) && pw64_split_vehicle(D_80362690->unkC[D_80362690->unk9C].veh);
++}
++
+ s32 testMenuMainRender(Unk80362690_Unk0* arg0, Unk80367710* arg1) {
+     Camera* camera;
+     u8 classIdx;
+@@ -74,6 +86,7 @@ s32 testMenuMainRender(Unk80362690_Unk0* arg0, Unk80367710* arg1) {
+ 
+     camera = arg0->unk70;
+     vehIdx = arg0->veh;
++    pw64_free_flight = 0; // PW64: set again only by the Free flight item
+     testMenuInit(arg1, D_8037DC84);
+     if (D_8037DC84 != 0) {
+         D_8037DC84 = 0;
+@@ -184,6 +197,36 @@ void testMenuInitText(s32 testIdx) {
+ #define SPRITE_PROP_POS_X2 206
+ #define SPRITE_PROP_POS_X3 64
+ #endif
++
++// PW64 free flight: drawn like the sprite buttons (64x18 at x 206, top y
++// 46, N64 y up): a grey bevelled button with our own text (pw64_text.c),
++// scaled to fit. Text is queued here and flushed by testMenuDraw's
++// uvFontGenDlist.
++static void pw64_free_draw_button(void) {
++    s32 w;
++    s32 h;
++    f32 scale;
++
++    func_802DEE44(SPRITE_PROP_POS_X2, 28, SPRITE_PROP_DIM_X, 18, 2, 0xE6, 0xE6, 0xE6, 0x82, 0x82, 0x82);
++    uvGfxStatePush();
++    uvGfxSetFlags(GFX_STATE_XLU | GFX_STATE_TEXTURE_NONE);
++    uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER | GFX_STATE_CULL_BACK);
++    screenDrawBox(SPRITE_PROP_POS_X2 + 2, 30, SPRITE_PROP_POS_X2 + SPRITE_PROP_DIM_X - 2, 44, 0xBE, 0xBE, 0xBE, 0xFF);
++    uvGfxStatePop();
++    if (sPw64FreeText[0] == 0) {
++        pw64_text_encode_style("Free flight", sPw64FreeText, ARRAY_COUNT(sPw64FreeText), TRUE);
++    }
++    uvFontSet(6);
++    uvFontScale(1.0, 1.0);
++    w = uvFontStr16Width(sPw64FreeText);
++    scale = (w > SPRITE_PROP_DIM_X - 6) ? (f32)(SPRITE_PROP_DIM_X - 6) / w : 1.0f;
++    uvFontScale(scale, 0.75);
++    uvFontColor(0x10, 0x10, 0x10, 0xFF);
++    w = uvFontStr16Width(sPw64FreeText);
++    h = uvFontHeight();
++    uvFontPrintStr16(SPRITE_PROP_POS_X2 + (SPRITE_PROP_DIM_X - w) / 2, 28 + (18 - h) / 2, sPw64FreeText, 0xFF, 0xFFE);
++}
++
+ void testMenuInit(Unk80367710* arg0, s32 arg1) {
+     Unk80362690_Unk0* temp_v1;
+ 
+@@ -405,7 +448,7 @@ u8 testMenuHandler(Unk80367710* arg0) {
+         }
+ 
+         if ((sTestMenuState != 2) && (sMenuCurX == 2) && (sMenuCurY == 0)) {
+-            if (!testMenuShutterBug()) {
++            if (!testMenuShutterBug() && !pw64_free_offered()) { // PW64: Free flight
+                 sMenuCurX = menuPrevX;
+                 sMenuCurY = menuPrevY;
+             }
+@@ -524,6 +567,11 @@ u8 testMenuHandler(Unk80367710* arg0) {
+                     sTestMenuState = 2;
+                     break;
+                 case 2:
++                    if (pw64_free_offered()) { // PW64: Free flight, like Start
++                        sndPlaySfx(SFX_UI_TEST_START);
++                        pw64_free_flight = 1;
++                        return sCurTestIdx;
++                    }
+                     sndPlaySfx(SFX_UI_CONFIRM);
+                     func_8033FB14();
+                     testMenu_8034A428();
+@@ -632,7 +680,9 @@ void testMenuDraw(Camera* camera, u8 classIdx, u8 vehIdx) {
+             uvSprtDraw(8);
+         } else {
+             for (var_s0 = 0; var_s0 < 8; var_s0++) {
+-                if ((var_s0 == 4) && (testMenuShutterBug() != 0)) {
++                if ((var_s0 == 4) && pw64_free_offered()) {
++                    pw64_free_draw_button(); // PW64: Free flight in this slot
++                } else if ((var_s0 == 4) && (testMenuShutterBug() != 0)) {
+                     uvSprtDraw(4);
+                 } else if ((var_s0 == 7) && (sp48->veh != VEHICLE_BIRDMAN)) {
+                     uvSprtDraw(7);

@@ -73,6 +73,18 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   (`pw64_results_split`): every view keeps drawing; results.c reads `D_80364210[unk9C=0]`, so
   "Next" on P1's tally swaps each other player's struct in for a Next-only tally, then P1's
   class totals + Retry/Quit (applies to all). Only P1 is saved. Replay: P1's top view only.
+- **Free flight** (test_menu.c.patch, game.c.patch `pw64_free_*`): split-only item in the
+  test menu's bottom-right slot (Sample photo's; replaces it on Shutter Bug tests) for
+  `pw64_split_vehicle`s; returns like Start with `pw64_free_flight = 1` (cleared on menu entry
+  and in func_802ECE94). The highlighted test's level/start, `unkA0 = 0` before taskLoad (every
+  objective loader returns early). No time checks/timer/penalty texts/save; fuel topped up per
+  frame. A player's end → crash pose + white fade, frozen 1.6 s, `pw64_free_respawn`: vehicle
+  EnterLeave (in-place reset to db_getstart) + crash latches + P2 offset; a landing respawns at
+  its own sequence's white step (unk7C 3). Pause: P1 only (any time).
+- **Glyph encoding** (`native/src/pw64_text.c`): font 6 glyph = index in its STRG table:
+  `0-9` 0x00, `A-Z` 0x0A, `a-z` 0x24, space 0x42, punctuation after; 0x60.. = bold 0-9A-Za-z
+  (main/pause menus). Strings end 0xFFE, -1. `pw64_text_encode[_style]` builds them (bold:
+  letters/digits only; missing chars → space).
 
 ## Gotchas found
 - Matrix stack overflow in pass 2 → red/blue streaks (garbage matrices): budgets above.
@@ -84,6 +96,10 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   Same fix for the rocket belt (`rbSoundEvent13`) and the gyro (`gyrocopter_sound.c`
   func_8030B168: static D_80369E50 rebuilt per gyro with the caller's `gcData`).
 - At the start the other glider is just outside the FOV (camera ~18 m back, 10 m apart).
+- Leaving split left camera 0 on the top-half viewport (test menu map drawn in the top half
+  only): `pw64_leave_players` restores it (`pw64_split_viewport(cam, -1)`).
+- Test runs: an exe copied out of `target/` with no `pw64.eep` beside it uses the per-user
+  data dir (real save + toml): set `PW64_DATA_DIR` (and `PW64_EEP`) to the run dir.
 
 ## Remaining work (from the per-player statics audit)
 - **Dobj cap:** dobjs are capped at 100 (each player's objectives use their own; beginner gc 1 = 3 rings,
@@ -97,6 +113,8 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - **Hard-wired player 0 in gameplay:** falco.c (bird targets P1), snap.c shutter,
   env_sound.c:494, task.c:358-372, game.c:770 (splash billboards on camera 0), cannonball.c:380,
   code_B6580.c:24, code_BA190.c:235, skydiving.c:369.
+- **Free flight:** landing pads stay (radar shows the landing point); event 0x12 from
+  crash effects reaches both players' sound handlers; respawn audio unverified.
 - **Pause:** P2 can't pause (P1 still can once finished, to quit). "Check map"
   (`func_8032CC44`: taskDeinitLevel + reload) is untested in split. Never run
   split-screen in attract/demo playback (single stream).
@@ -118,7 +136,10 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 ## Decisions (2026-10-07)
 - **Modes:** both pilots on the same test, each scored on their own, results for both; and
   free flight. Pilots see each other.
-- **Interactions toggle:** on = pilots collide (new sphere test → existing crash path);
+- **Free flight entry:** a native "Free flight" item in the game's own test menu (split-screen
+  only), not a settings toggle. Menu text = our own strings encoded to the game font's glyph
+  indices (menu.c items are 16-bit glyph strings); the same helper serves later P2 menus.
+- **Interactions toggle:** a Settings > Controls row next to the split-screen rows (setting done: `pw64_split_collide`). On = pilots collide (new sphere test → existing crash path);
   off = pass through. Objectives per player either way. Default off.
 - **Layout:** top/bottom (default) and left/right in settings. Deferred: one window per
   player / multi-monitor (`fb_present` already takes a target rect).
