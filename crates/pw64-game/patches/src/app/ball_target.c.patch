@@ -1,0 +1,28 @@
+--- a/src/app/ball_target.c
++++ b/src/app/ball_target.c
+@@ -78,6 +78,25 @@ void ballTgtInitDobj(BallTarget* bt) {
+     uvDobjProps(bt->objId, 3, var_fa0, 0);
+     uvDobjState(bt->objId, 2);
+     uvDobjPosm(bt->objId, 0, &bt->unk10);
++    pw64_dobj_claim(bt->objId); // PW64 split-screen
++}
++
++// PW64 split-screen (task.c.patch pw64_reg_task): per-player ball goals
++// with their own dobjs (pw64_ball_target_clone); the balls are per player
++// too (balls.c.patch).
++void pw64_reg_ball_target(void) {
++    PW64_REG(sBallTgtCount);
++    PW64_REG(sBallTgts);
++}
++
++void pw64_ball_target_clone(void) {
++    s32 i;
++
++    for (i = 0; i < sBallTgtCount; i++) {
++        if (sBallTgts[i].objId != 0xFFFF) {
++            sBallTgts[i].objId = pw64_dobj_clone(sBallTgts[i].objId);
++        }
++    }
+ }
+ 
+ void ballTgtLoad(void) {

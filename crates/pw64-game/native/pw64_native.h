@@ -140,7 +140,16 @@ void pw64_reg_gyrocopter(void);        /* gyrocopter.c: rate trim */
 void pw64_reg_gyrocopter_sound(void);  /* gyrocopter_sound.c */
 void pw64_reg_gyrocopter_poses(void);  /* code_7C4C0.c */
 void pw64_reg_gyrocopter_move(void);   /* code_7CF30.c */
+void pw64_reg_jumble_hopper(void);     /* code_82B90.c */
 void pw64_players_init(void);
+void pw64_reg_task(void); /* task.c: objective hit state (+ its modules) */
+/* Per-player objective dobjs (kernel dobj.c.patch): owning player + 1 per
+ * dobj, 0 = shared. Draw and collision loops skip another player's dobj. */
+extern unsigned char pw64_dobj_owner[100];
+#define PW64_DOBJ_OTHER(id) \
+    (pw64_dobj_owner[id] != 0 &&pw64_dobj_owner[id] != pw64_player_cur + 1)
+void pw64_dobj_claim(PW64_LONG32 objId);          /* owned by the current player */
+PW64_LONG32 pw64_dobj_clone(PW64_LONG32 src);     /* copy for the current player */
 /* Kernel controller reads (controller.c.patch): with 2+ players, pad 0
  * means "the current player's pad", so hardcoded-0 sites follow the swap. */
 #define PW64_CONT(i) ((pw64_players > 1 && (i) == 0) ? pw64_player_cur : (i))

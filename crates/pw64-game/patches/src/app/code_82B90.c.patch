@@ -146,3 +146,19 @@
          temp_fv1 = 45.0f;
          jhData->unk5D4 = (uvCosF(jhData->unk580 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk584) + (-30.0f + (temp_fv1 * 0.5f));
      }
+@@ -2356,9 +2356,16 @@
+     jhData->unk174.z = jhData->unk168.z;
+     jhData->unk70 = jhData->unk6C;
+     jhData->unk4D = jhData->unk4C;
+     if (func_802E06AC(&jhData->unk74) != 0) {
+         jhData->unkF4.x = jhData->unk74.m[3][0];
+         jhData->unkF4.y = jhData->unk74.m[3][1];
+         jhData->unkF4.z = jhData->unk74.m[3][2];
+     }
+ }
++
++// PW64 split-screen: per-player crash head-shake sfx one-shots
++// (pw64_players.c).
++void pw64_reg_jumble_hopper(void) {
++    PW64_REG(D_8036905C);
++}

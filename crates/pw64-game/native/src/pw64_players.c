@@ -12,8 +12,8 @@ int pw64_players = 1;
 int pw64_level_players = 1;
 int pw64_player_cur = 0;
 
-#define PW64_MAX_REGIONS 64
-#define PW64_SLOT_BYTES 0x8000
+#define PW64_MAX_REGIONS 128
+#define PW64_SLOT_BYTES 0x14000 /* objective arrays (pw64_reg_task) ~29 KB */
 
 typedef struct {
     unsigned char* addr;
@@ -105,4 +105,6 @@ void pw64_players_init(void) {
     pw64_reg_gyrocopter_sound();
     pw64_reg_gyrocopter_poses();
     pw64_reg_gyrocopter_move();
+    pw64_reg_jumble_hopper();
+    pw64_reg_task();
 }

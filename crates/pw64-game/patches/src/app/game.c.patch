@@ -74,6 +74,9 @@
 +        unkC->pilot = spP;
 +        if (IS_BONUS_VEHICLE(spV) && (spV != VEHICLE_BIRDMAN)) {
 +            unkC->cls = spT; // the bonus test menu stores its pick in cls
++            unkC->test = 0; // bonus tasks are keyed [cls][test=0][veh];
++                            // gameInit left test at 0xFF, which taskInitTest
++                            // rejects (leaving the wind grid NULL)
 +        } else {
 +            unkC->cls = spC;
 +            unkC->test = spT;
@@ -89,7 +92,7 @@
  }
  
 +// PW64 split-screen: per-player part of the test setup for players 2..n
-+// (hang glider / gyrocopter / rocket belt), after player 1's. Each player i: kernel
++// (hang glider / gyrocopter / rocket belt / jumble hopper), after player 1's. Each player i: kernel
 +// channel i = camera i in its viewport, own vehicle buffer + results
 +// struct, pad i. Each player's HUD is drawn by its channel's callback and
 +// laid out in its view by the renderer (pw64_hud_split_tag).
@@ -98,6 +101,7 @@
 +    HangGliderData* hg;
 +    GyrocopterData* gc;
 +    RocketBeltData* rb;
++    JumbleHopperData* jh;
 +    Mtx4F start;
 +    Mtx4F* vehMtx;
 +    s32 i;
@@ -121,6 +125,11 @@
 +            rocketBeltLoadLevel(i, p->pilot, rb, p->unk70);
 +            rocketBeltEnterLeave(rb);
 +            vehMtx = &rb->unk10;
++        } else if (p->veh == VEHICLE_JUMBLE_HOPPER) {
++            D_80367708 = jh = (JumbleHopperData*)p->vehicleData;
++            jumbleHopperLoadLevel(i, p->pilot, jh, p->unk70);
++            jumbleHopperEnterLeave(jh);
++            vehMtx = &jh->unk74;
 +        } else {
 +            D_803676F0 = hg = (HangGliderData*)p->vehicleData;
 +            hangGliderLoadLevel(i, p->pilot, hg, p->unk70);
@@ -159,6 +168,9 @@
 +            } else if (p->veh == VEHICLE_ROCKET_BELT) {
 +                rocketBeltEnterLeave(p->vehicleData);
 +                func_80325100(p->vehicleData);
++            } else if (p->veh == VEHICLE_JUMBLE_HOPPER) {
++                jumbleHopperEnterLeave(p->vehicleData);
++                func_802FA290(p->vehicleData);
 +            } else {
 +                hangGliderEnterLeave(p->vehicleData);
 +                func_802EF328(p->vehicleData);
@@ -180,16 +192,17 @@
      } else {
          D_8034F160 = -1;
      }
-+    // PW64 split-screen: hang glider, gyrocopter and rocket belt tests (not
-+    // the attract demo) take a second pilot; other vehicles stay
-+    // single-player for now. Player 2 starts as a copy of player 1's state
-+    // before the vehicle load (HUD reset, radar waypoints from taskLoad),
-+    // see pw64_setup_players.
++    // PW64 split-screen: hang glider, gyrocopter, rocket belt and jumble
++    // hopper tests (not the attract demo) take a second pilot; other
++    // vehicles stay single-player for now. Player 2 starts as a copy of
++    // player 1's state before the vehicle load (HUD reset, radar waypoints
++    // from taskLoad), see pw64_setup_players.
 +    pw64_level_players = 1;
 +    if ((pw64_players > 1) && !arg0->unkA4) {
 +        if ((temp_s0->veh == VEHICLE_HANG_GLIDER) ||
 +            (temp_s0->veh == VEHICLE_GYROCOPTER) ||
-+            (temp_s0->veh == VEHICLE_ROCKET_BELT)) {
++            (temp_s0->veh == VEHICLE_ROCKET_BELT) ||
++            (temp_s0->veh == VEHICLE_JUMBLE_HOPPER)) {
 +            pw64_level_players = pw64_players;
 +        } else {
 +            // _uvDebugPrintf is compiled out; PW64_TRACE_OS shows this.

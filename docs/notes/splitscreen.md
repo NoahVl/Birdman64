@@ -1,9 +1,10 @@
 # Split-screen (2-player local)
 
-Status: two pilots (hang glider, gyrocopter or rocket belt) fly the same test (top view = player 1,
+Status: two pilots (hang glider, gyrocopter, rocket belt or jumble hopper) fly the same test (top view = player 1,
 bottom = player 2), each on its own controller and camera, seeing each other. Other
 vehicles fall back to one player. Everything is gated: `pw64_level_players == 1` runs the
-original code paths.
+original code paths. Hopper: only the crash head-shake sfx one-shots (`D_8036905C`) are
+per-player; the collision query scratch (`D_80368C00`..) stays shared.
 Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patches/`.
 
 ## Architecture
@@ -50,6 +51,16 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - **Budgets** (shared by both world passes): DL `PW64_DL_LEN 16384` (was 4200; overflow
   silently skips the frame), `UV_GFX_NUM_MATRICES 0x400` (0x15E), `LOOKS 0x60` (0x1E),
   `UV_GEOM_NUM_VERTICES 0x800` (0x320). Also apply to single-player (headroom only).
+- **Objectives per player** (task.c.patch `pw64_reg_task`): each objective module's arrays
+  (rings, balls, missile targets, hover pads, ball goals, bonus stars, hopper goals) plus
+  task.c's loaded/all-done/complete flags and `unkA0` are registered regions. Player i's copy
+  gets its own dobjs: on its first `pw64_task_player_update` every objId is replaced by
+  `pw64_dobj_clone` (dobj.c.patch). `pw64_dobj_owner[id]` = player+1 (0 shared; reset on
+  free); `_uvDobjsDraw`, `uvDobj_8021771C` and both dobj collision loops (code_8170.c) skip
+  another player's dobjs, so hits free/re-model only the player's own. Modules `pw64_dobj_claim`
+  dobjs they allocate mid-test (child rings, split balls, next hover pad). Balls move per player.
+  `taskDeinitLevel` frees the other players' copies. P1-only: photos, falcos, teleports, the
+  decomp's `unkC[0].veh = ROCKET_BELT` on a ring/ball goal; bonus stars don't warp in split.
 
 ## Gotchas found
 - Matrix stack overflow in pass 2 → red/blue streaks (garbage matrices): budgets above.
@@ -63,10 +74,10 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - At the start the other glider is just outside the FOV (camera ~18 m back, 10 m apart).
 
 ## Remaining work (from the per-player statics audit)
-- **Objectives per player:** hit state lives in shared arrays (rings, balls, missile targets,
-  hover pads, ball targets, bonus stars, hopper goals, photos) and hits change shared dobjs;
-  the kernel has no per-view dobj visibility. Today only P1 hits objectives (landing pads:
-  both). One player finishing calls `taskDeinit()` (task.c:388) for everyone.
+- **Per-player test end + results:** only P1's end (landing, ring/ball goal, time-up at
+  game.c:1010) ends the test; scores for P2 = `func_8032B560` under `pw64_player_switch(1)`.
+  Dobjs are capped at 100 (each player's objectives use their own; beginner gc 1 = 3 rings,
+  b:rb:2 = 15 rings → up to id 75); a failed clone logs and leaves that object missing for P2.
 - **Other vehicles:** register their audit lists; first fix our rate patches that
   `pw64_fatal` on a second vehicle of the same type (birdman1 `sPw64FlutterOwner`,
   code_BA190 `sPw64DriftOwner`). Gyro `D_8034F380` keeps last frame's buttons (Z edge).
