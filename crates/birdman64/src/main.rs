@@ -397,6 +397,9 @@ pub fn run_game(
     // Split-screen spike: with it on the game draws a second camera on
     // kernel channel 1 (splitscreen.md).
     pw64_game::set_split(u8::from(input::splitscreen_enabled()));
+    // Pilot collisions (the game reads it at each test start; the settings
+    // row changes it live from there).
+    pw64_game::set_split_collide(input::split_collisions());
     os::boot(pw64_game::bootproc, std::ptr::null_mut());
     let cfg = os::RunConfig {
         max_retraces: std::env::var("PW64_MAX_RETRACES")

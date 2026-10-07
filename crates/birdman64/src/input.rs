@@ -1039,6 +1039,30 @@ pub fn splitscreen_enabled() -> bool {
     crate::opts::precedence(env_enabled(), config::get().splitscreen.enabled, false)
 }
 
+/// Pilot collisions on/off: `PW64_SPLIT_COLLIDE` > `[splitscreen]
+/// collisions` > default off (the usual option precedence).
+fn env_collide() -> Option<bool> {
+    match std::env::var("PW64_SPLIT_COLLIDE").as_deref().map(str::trim) {
+        Ok("1" | "true" | "yes" | "on") => Some(true),
+        Ok("0" | "false" | "no" | "off") => Some(false),
+        Ok(other) => {
+            eprintln!(
+                "[input] PW64_SPLIT_COLLIDE={other:?} not understood (use 1 or 0); ignoring"
+            );
+            None
+        }
+        Err(_) => None,
+    }
+}
+
+/// Whether the two split-screen pilots collide (the C `pw64_split_collide`
+/// flag, read at each test start): `PW64_SPLIT_COLLIDE` >
+/// `[splitscreen] collisions` > default off. Also read by main and the
+/// settings screen's Controls page.
+pub fn split_collisions() -> bool {
+    crate::opts::precedence(env_collide(), config::get().splitscreen.collisions, false)
+}
+
 /// The names of the connected gilrs pads, in order (the settings screen's
 /// Player-2 controller choices, one per pad).
 pub fn connected_pad_names() -> Vec<String> {
@@ -2403,6 +2427,8 @@ mod tests {
     /// Split-screen off: everything merges into player 1, player 2 idle.
     #[test]
     fn route_without_p2_merges_into_player_1() {
+        // The keyboard pad reads the live bindings, which other tests rebind.
+        let _lock = TEST_LOCK.lock().unwrap();
         let s = sources(
             &[("Xbox Controller", pad(CONT_B))],
             pad(CONT_L),
@@ -2420,6 +2446,7 @@ mod tests {
     /// Player 2 owns the keyboard: it alone leaves player 1.
     #[test]
     fn route_keyboard_p2() {
+        let _lock = TEST_LOCK.lock().unwrap();
         let s = sources(
             &[("Xbox Controller", pad(CONT_B))],
             pad(CONT_L),
@@ -2466,6 +2493,7 @@ mod tests {
     /// Player 2 owns the BLE pads.
     #[test]
     fn route_ble_p2() {
+        let _lock = TEST_LOCK.lock().unwrap();
         let s = sources(&[("Xbox Controller", pad(CONT_B))], pad(CONT_L), IDLE, IDLE, Vec::new());
         assert_eq!(
             route(&s, Some(&P2Input::Ble), true),

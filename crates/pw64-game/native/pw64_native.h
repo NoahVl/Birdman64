@@ -107,6 +107,11 @@ int pw64_present_active(void);
  * is force-included before camera.h exists. */
 extern int pw64_split;
 void pw64_split_viewport(void* camera, int i);
+/* Pilot collisions (native/src/pw64_collide.c, splitscreen.md "Interactions
+ * toggle"): 1 = the two pilots can crash into each other. Read at each test
+ * start; Rust may set it any time (pw64_game::set_split_collide, also live
+ * from the settings screen). */
+extern int pw64_split_collide;
 /* Split-screen players (native/src/pw64_players.c, splitscreen.md "M2"):
  * per-player state lives in the game's ordinary globals; only the current
  * player's copy is live. Registered regions are swapped on a switch
@@ -157,6 +162,13 @@ PW64_LONG32 pw64_dobj_clone(PW64_LONG32 src);     /* copy for the current player
 /* Kernel controller reads (controller.c.patch): with 2+ players, pad 0
  * means "the current player's pad", so hardcoded-0 sites follow the swap. */
 #define PW64_CONT(i) ((pw64_players > 1 && (i) == 0) ? pw64_player_cur : (i))
+/* Split-screen free flight (game.c.patch, test_menu.c.patch): 1 while a
+ * flight started from the test menu's Free flight item runs. */
+extern int pw64_free_flight;
+/* Our ASCII text in the game's 16-bit glyph strings (native/src/pw64_text.c):
+ * glyphs + 0xFFE + -1 into out[max]; returns the glyph count. */
+int pw64_text_encode(const char* ascii, short* out, int max);
+int pw64_text_encode_style(const char* ascii, short* out, int max, int bold);
 /* World display-list buffer length (kernel/graphics.c.patch): two world
  * passes per frame with split-screen on nearly double the command count. */
 #define PW64_DL_LEN 16384

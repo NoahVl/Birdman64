@@ -564,6 +564,8 @@ Code: `crates/birdman64/src/settings.rs` (overlay + nav + config write), hooks i
 - `Opt::Split` (restart row, like Fill screen; → `[splitscreen] enabled`) and
   `Opt::P2Input` (live while split-screen runs via `input::set_p2`; greyed while staged
   Split is Off; → `[splitscreen] p2_input`), between the gamepad reset and the BLE row.
+- `Opt::Collisions` "Pilots collide" (live: `pw64_game::set_split_collide`, read at each
+  test start; greyed while staged Split is Off; → `[splitscreen] collisions`).
 - P2 choices (pure `p2_choices`): All gamepads, each connected pad by name, Keyboard,
   Switch 2 (Bluetooth). A saved pad that isn't connected stays listed as
   "<name> (not connected)" so cycling doesn't lose it.

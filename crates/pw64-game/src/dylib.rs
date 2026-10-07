@@ -42,6 +42,8 @@ pub struct Game {
     pub fill_screen: *mut i32,
     /// `pw64_split` (pw64_split.c): split-screen layout, 0 = off.
     pub split: *mut i32,
+    /// `pw64_split_collide` (pw64_collide.c): pilot collisions, 0 = off.
+    pub split_collide: *mut i32,
     /// `D_802B892C` (memory.c): the sample global memmap checks.
     pub sample_global: *const u32,
     /// `[start, end)` of the module image.
@@ -155,6 +157,7 @@ fn bind_module(h: *mut c_void, path: &Path) -> Result<(), String> {
             widescreen_aspect: sym(c"pw64_widescreen_aspect")?.cast(),
             fill_screen: sym(c"pw64_fill_screen")?.cast(),
             split: sym(c"pw64_split")?.cast(),
+            split_collide: sym(c"pw64_split_collide")?.cast(),
             sample_global: sym(c"D_802B892C")?.cast(),
             range,
         };

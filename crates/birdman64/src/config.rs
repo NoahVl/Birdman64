@@ -209,6 +209,9 @@ pub struct Splitscreen {
     /// `p2_input` — player 2's input method (`PW64_P2_INPUT`): `P2Input`'s
     /// config spelling, `"keyboard" | "gamepad" | "gamepad:<name>" | "ble"`.
     pub p2_input: Option<String>,
+    /// `collisions` — the two split-screen pilots can crash into each other
+    /// (`PW64_SPLIT_COLLIDE`).
+    pub collisions: Option<bool>,
 }
 
 #[derive(Debug, Default)]
@@ -556,6 +559,8 @@ fn from_table(table: &toml::Table) -> Config {
                     opt_bool_of(ss, "enabled", "splitscreen.enabled", &mut ignored);
                 cfg.splitscreen.p2_input =
                     string_of(ss, "p2_input", "splitscreen.p2_input", &mut ignored);
+                cfg.splitscreen.collisions =
+                    opt_bool_of(ss, "collisions", "splitscreen.collisions", &mut ignored);
             }
             None => ignore(&mut ignored, "splitscreen", v, "must be a [splitscreen] table"),
         }
@@ -684,6 +689,9 @@ pub struct SavedSettings {
     /// Player 2's controller routing (`[splitscreen] p2_input`, the
     /// `P2Input` config spelling; None = leave as-is).
     pub p2_input: Option<String>,
+    /// Split-screen pilot collisions (`[splitscreen] collisions`; None =
+    /// leave as-is).
+    pub splitscreen_collisions: Option<bool>,
 }
 
 /// Writes the screen's settings into `pw64.toml`. The file is round-tripped
@@ -834,6 +842,7 @@ fn builtin_default(section: &str, key: &str, low_end: bool) -> Option<toml::Valu
         // Split-screen: off / every gamepad to player 2 unless changed.
         ("splitscreen", "enabled") => Some(false.into()),
         ("splitscreen", "p2_input") => Some("gamepad".into()),
+        ("splitscreen", "collisions") => Some(false.into()),
         _ => None,
     }
 }
@@ -986,7 +995,7 @@ pub(crate) fn apply(
     }
     // Split-screen (`[splitscreen]`, the settings Controls page): its own
     // table.
-    if u.splitscreen_enabled.is_some() || u.p2_input.is_some() {
+    if u.splitscreen_enabled.is_some() || u.p2_input.is_some() || u.splitscreen_collisions.is_some() {
         let ss = table
             .entry("splitscreen")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -1007,6 +1016,9 @@ pub(crate) fn apply(
         }
         if let Some(v) = &u.p2_input {
             sput("p2_input", v.clone().into());
+        }
+        if let Some(v) = u.splitscreen_collisions {
+            sput("collisions", v.into());
         }
     }
     // Input maps (R1): a Save that includes bindings replaces the
@@ -1160,29 +1172,35 @@ mod tests {
             &SavedSettings {
                 splitscreen_enabled: Some(true),
                 p2_input: Some("keyboard".into()),
+                splitscreen_collisions: Some(true),
                 ..Default::default()
             },
         )
         .unwrap();
         assert_eq!(table["splitscreen"]["enabled"].as_bool(), Some(true));
         assert_eq!(table["splitscreen"]["p2_input"].as_str(), Some("keyboard"));
+        assert_eq!(table["splitscreen"]["collisions"].as_bool(), Some(true));
         // Unrelated keys survive.
         assert_eq!(table["graphics"]["msaa"].as_integer(), Some(4));
         let c = parse(&toml::to_string_pretty(&table).unwrap()).unwrap();
         assert_eq!(c.splitscreen.enabled, Some(true));
         assert_eq!(c.splitscreen.p2_input.as_deref(), Some("keyboard"));
+        assert_eq!(c.splitscreen.collisions, Some(true));
         // The defaults (off / every gamepad) remove the keys again.
         let off = SavedSettings {
             splitscreen_enabled: Some(false),
             p2_input: Some("gamepad".into()),
+            splitscreen_collisions: Some(false),
             ..Default::default()
         };
         apply(&mut table, &off).unwrap();
         assert!(table["splitscreen"].get("enabled").is_none());
         assert!(table["splitscreen"].get("p2_input").is_none());
+        assert!(table["splitscreen"].get("collisions").is_none());
         let c = parse(&toml::to_string_pretty(&table).unwrap()).unwrap();
         assert_eq!(c.splitscreen.enabled, None);
         assert_eq!(c.splitscreen.p2_input, None);
+        assert_eq!(c.splitscreen.collisions, None);
     }
 
     /// `[input.ble] enabled` (settings Controls row): On is written and

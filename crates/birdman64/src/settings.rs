@@ -180,6 +180,9 @@ enum Opt {
     /// Which input method drives player 2 in split-screen (Controls page):
     /// live while split-screen runs (`input::set_p2`).
     P2Input,
+    /// Split-screen pilot collisions (Controls page): live from the next
+    /// test start (`pw64_game::set_split_collide`, read at each test start).
+    Collisions,
 }
 
 /// Frame-rate choices (the running one is added if it's another rate).
@@ -329,6 +332,9 @@ pub struct Overlay {
     ble: bool,
     /// Staged split-screen (restart-only, like widescreen).
     split: bool,
+    /// Staged pilot collisions (live from the next test start, like P2's
+    /// controller routing; greyed while the staged Split value is off).
+    collisions: bool,
     /// The Player-2 controller choices ([`p2_choices`]: all gamepads, one
     /// per connected pad, keyboard, BLE — plus a saved-but-unconnected pad)
     /// and the staged index. Restaged at open.
@@ -417,6 +423,7 @@ impl Overlay {
             widescreen_follow: false,
             saved_restart: None,
             split: running_split,
+            collisions: input::split_collisions(),
             p2_choices: p2,
             p2_sel,
             fps,
@@ -494,6 +501,9 @@ impl Overlay {
         self.pause_background = gpu.pause_background;
         // BLE pads (live): the switch as it stands.
         self.ble = crate::ble::is_on();
+        // Pilot collisions (live from the next test start): the flag as it
+        // stands (env, file or a live change).
+        self.collisions = input::split_collisions();
         self.fb = gpu.fb_size_for_scale(self.scale);
         // Display mode (live): stage the running one; Exclusive is left out
         // of the choices when this window can't do it (Wayland).
@@ -1129,6 +1139,7 @@ impl Overlay {
                 // 2's controller is live while it runs.
                 rows.push(Row::Opt(Opt::Split));
                 rows.push(Row::Opt(Opt::P2Input));
+                rows.push(Row::Opt(Opt::Collisions));
                 // Switch 2 pads over Bluetooth (experimental), under the
                 // controller section.
                 rows.push(Row::Opt(Opt::Ble));
@@ -1306,6 +1317,7 @@ impl Overlay {
                 ui.strong("Split-screen");
                 self.opt_row(ui, at(Row::Opt(Opt::Split)), Opt::Split);
                 self.opt_row(ui, at(Row::Opt(Opt::P2Input)), Opt::P2Input);
+                self.opt_row(ui, at(Row::Opt(Opt::Collisions)), Opt::Collisions);
                 ui.add_space(4.0);
                 self.opt_row(ui, at(Row::Opt(Opt::Ble)), Opt::Ble);
                 // What BLE is doing right now (redrawn every overlay frame).
@@ -1343,7 +1355,9 @@ impl Overlay {
             // Player 2's controller only matters in split-screen: greyed
             // while the staged Split value is off (like Frame rate under
             // V-Sync).
-            || (o == Opt::P2Input && !self.split);
+            || (o == Opt::P2Input && !self.split)
+            // Pilot collisions only matter in split-screen: same greying.
+            || (o == Opt::Collisions && !self.split);
         if disabled {
             let (name, value, hint) = self.row_text(o);
             let text = format!("{name}: {value}  {hint}");
@@ -1566,6 +1580,11 @@ impl Overlay {
             Opt::P2Input => (
                 "Player 2 controller",
                 self.p2_choices[self.p2_sel].label.clone(),
+                "",
+            ),
+            Opt::Collisions => (
+                "Pilots collide",
+                if self.collisions { "On" } else { "Off" }.into(),
                 "",
             ),
         }
@@ -1807,6 +1826,16 @@ impl Overlay {
                     }
                 }
                 Opt::Split => self.split = !self.split,
+                // The Pilot-collisions row is disabled while the staged
+                // Split value is off (greyed, like the P2 row above).
+                Opt::Collisions if !self.split => {}
+                Opt::Collisions => {
+                    self.collisions = !self.collisions;
+                    // Live: the game reads the flag at each test start, so
+                    // the change applies from the next test (staged_settings
+                    // saves it either way).
+                    pw64_game::set_split_collide(self.collisions);
+                }
                 Opt::OledDrift => self.oled_drift = !self.oled_drift,
                 Opt::ShowFps => self.show_fps = !self.show_fps,
                 Opt::PauseBackground => self.pause_background = !self.pause_background,
@@ -1932,6 +1961,7 @@ impl Overlay {
             // live p2 change applies at once; Save pins it either way).
             splitscreen_enabled: Some(self.split),
             p2_input: Some(self.p2_choices[self.p2_sel].input.to_config()),
+            splitscreen_collisions: Some(self.collisions),
             // The rebinding maps as they stand now (empty = defaults, so
             // the sub-table is dropped from the file).
             keyboard: Some(input::keyboard_overrides()),
@@ -2252,6 +2282,10 @@ fn changed_since(s: config::SavedSettings, snap: &config::SavedSettings) -> conf
         ble: keep(s.ble, &snap.ble),
         splitscreen_enabled: keep(s.splitscreen_enabled, &snap.splitscreen_enabled),
         p2_input: keep(s.p2_input, &snap.p2_input),
+        splitscreen_collisions: keep(
+            s.splitscreen_collisions,
+            &snap.splitscreen_collisions,
+        ),
         keyboard: keep(s.keyboard, &snap.keyboard),
         gamepad: keep(s.gamepad, &snap.gamepad),
     }
@@ -2443,6 +2477,9 @@ fn help(row: Row) -> &'static str {
             }
             Opt::Split => "Two players on one screen. Needs a restart.",
             Opt::P2Input => "Which controller player 2 uses. Everything else is player 1.",
+            Opt::Collisions => {
+                "On: the two pilots can crash into each other. Applies from the next test."
+            }
         },
         Row::Bind(..) => "Press a key or button to bind it to this slot.",
         Row::Reset(..) => "Restores this section's default keys and buttons.",
@@ -2909,6 +2946,7 @@ mod tests {
             ble: Some(true),
             splitscreen_enabled: Some(true),
             p2_input: Some("keyboard".into()),
+            splitscreen_collisions: Some(true),
             keyboard: Some(
                 [("A".to_string(), "KeyX".to_string())]
                     .into_iter()
@@ -2940,6 +2978,7 @@ mod tests {
             ble: Some(false),
             splitscreen_enabled: Some(false),
             p2_input: Some("gamepad".into()),
+            splitscreen_collisions: Some(false),
             keyboard: Some(std::collections::BTreeMap::new()),
             gamepad: Some(std::collections::BTreeMap::new()),
         };
@@ -2953,7 +2992,7 @@ mod tests {
              \n[ui]\npause_in_background = false\n\
              \n[input.keyboard]\nA = \"KeyX\"\n\n[input.gamepad]\nA = \"East\"\n\
              \n[input.ble]\nenabled = true\n\
-             \n[splitscreen]\nenabled = true\np2_input = \"keyboard\"\n",
+             \n[splitscreen]\nenabled = true\np2_input = \"keyboard\"\ncollisions = true\n",
         )
         .unwrap();
         config::apply(&mut table, &d, false).unwrap();
@@ -2987,6 +3026,7 @@ mod tests {
         let ss = &table["splitscreen"];
         assert!(ss.get("enabled").is_none());
         assert!(ss.get("p2_input").is_none());
+        assert!(ss.get("collisions").is_none());
     }
 
     /// A reverted exclusive resolution is re-staged, so the auto-save does
@@ -3069,7 +3109,7 @@ mod tests {
         o.confirm();
         assert_eq!(o.page, Page::Controls);
         let rows = o.rows();
-        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 2 + 1 + 1);
+        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 3 + 1 + 1);
         assert_eq!(rows[0], Row::Bind(Kind::Keyboard, 0));
         // The unused keyboard slots (L, the D-pad) moved last, after the
         // stick rows.
@@ -3084,9 +3124,10 @@ mod tests {
         // The split-screen section sits above the Bluetooth row (SS-UI).
         assert_eq!(rows[31], Row::Opt(Opt::Split));
         assert_eq!(rows[32], Row::Opt(Opt::P2Input));
-        assert_eq!(rows[33], Row::Opt(Opt::Ble));
-        assert_eq!(rows[34], Row::Back);
-        o.sel = 34;
+        assert_eq!(rows[33], Row::Opt(Opt::Collisions));
+        assert_eq!(rows[34], Row::Opt(Opt::Ble));
+        assert_eq!(rows[35], Row::Back);
+        o.sel = 35;
         o.confirm();
         assert_eq!(o.page, Page::Main);
         assert_eq!(o.rows()[o.sel], Row::Controls);
@@ -3108,11 +3149,14 @@ mod tests {
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));
         // Through the split-screen section to the gamepad reset (SS-UI).
         o.move_sel(-1);
+        assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Collisions));
+        o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::P2Input));
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Split));
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Reset(Kind::Gamepad));
+        o.move_sel(1);
         o.move_sel(1);
         o.move_sel(1);
         o.move_sel(1);
@@ -3210,6 +3254,34 @@ mod tests {
         o.change(-1, false);
         o.change(-1, false);
         assert_eq!(o.p2_sel, 0);
+        // The Pilot-collisions row: disabled (and nothing saved) while the
+        // staged Split value is off.
+        o.split = false;
+        o.sel = pos(&o, Row::Opt(Opt::Collisions));
+        o.confirm();
+        o.change(1, false);
+        assert!(!o.collisions);
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).splitscreen_collisions,
+            None
+        );
+        // Split-screen on: the row toggles and saves (live: the change
+        // applies from the next test start; the setter itself needs a
+        // linked game module, out of scope in these tests).
+        o.split = true;
+        o.confirm();
+        assert!(o.collisions);
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).splitscreen_collisions,
+            Some(true)
+        );
+        o.confirm();
+        assert!(!o.collisions);
+        // Back to the snapshot value: nothing to save.
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).splitscreen_collisions,
+            None
+        );
     }
 
     /// The status lines under the BLE row.

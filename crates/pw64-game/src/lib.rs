@@ -38,6 +38,8 @@ unsafe extern "C" {
     static mut pw64_fill_screen: i32;
     /// native/src/pw64_split.c: split-screen layout, 0 = off.
     static mut pw64_split: i32;
+    /// native/src/pw64_collide.c: split-screen pilot collisions, 0 = off.
+    static mut pw64_split_collide: i32;
 }
 
 /// Hor+ widescreen for the C side: widens the CPU culling frustum of the
@@ -90,6 +92,23 @@ pub fn set_split(layout: u8) {
     #[cfg(feature = "dylib")]
     unsafe {
         *dylib::game().split = layout as i32
+    };
+}
+
+/// Split-screen pilot collisions for the C side (splitscreen.md
+/// "Interactions toggle"): on = the two pilots can crash into each other.
+/// The game reads the flag at each test start, so unlike [`set_split`]
+/// this may be called any time (also live from the settings screen).
+pub fn set_split_collide(on: bool) {
+    // SAFETY: plain C flag; the game reads it on its own thread.
+    #[cfg(feature = "static")]
+    unsafe {
+        pw64_split_collide = on as i32
+    };
+    // SAFETY: same global, exported by the loaded game module.
+    #[cfg(feature = "dylib")]
+    unsafe {
+        *dylib::game().split_collide = on as i32
     };
 }
 
