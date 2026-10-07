@@ -1,0 +1,12 @@
+--- a/src/app/rocket_belt.c
++++ b/src/app/rocket_belt.c
+@@ -869,3 +869,9 @@
+     var_fs0 = uvCosF(sp24);
+     D_80371630.unk4[1].unk1C.z = (uvCosF(sp20) * (0.4f * sp28)) + ((0.2f * sp28) + ((0.4f * sp28) * var_fs0));
+ }
++
++// PW64 split-screen: per-player rocket belt contact latch (pw64_players.c).
++void pw64_reg_rocket_belt(void) {
++    PW64_REG(D_8037187C);
++    PW64_REG(D_80371880);
++}

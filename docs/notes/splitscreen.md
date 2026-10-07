@@ -1,8 +1,9 @@
 # Split-screen (2-player local)
 
-Status: two hang-glider pilots fly the same test (top view = player 1, bottom = player 2),
-each on its own controller and camera, seeing each other. Other vehicles fall back to one
-player. Everything is gated: `pw64_level_players == 1` runs the original code paths.
+Status: two pilots (hang glider or rocket belt) fly the same test (top view = player 1,
+bottom = player 2), each on its own controller and camera, seeing each other. Other
+vehicles fall back to one player. Everything is gated: `pw64_level_players == 1` runs the
+original code paths.
 Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patches/`.
 
 ## Architecture
@@ -48,6 +49,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   re-issues `uvGfxViewport(arg0)` after both z clears when split.
 - fdr.c flight recorder is P1-only, else its clock runs 2×. Photo shutter is P1-only.
 - `hgSoundEvent13` removed the last-registered sound callback (P2's): now removes its own.
+  Same fix for the rocket belt (`rbSoundEvent13`).
 - At the start the other glider is just outside the FOV (camera ~18 m back, 10 m apart).
 
 ## Remaining work (from the per-player statics audit)

@@ -1,0 +1,21 @@
+--- a/src/app/rocket_belt_sound.c
++++ b/src/app/rocket_belt_sound.c
+@@ -288,3 +288,17 @@
+     func_80200180(0, 4, 0.0f, 0);
+-    uvEventRemoveCb(sRbSoundEventCbInfo, 1, 0xD, 0x12, 0x13, 0x10, 0xC, 0x16, 0x24);
++    // PW64 split-screen: remove this belt's own callback (cb + arg), not the
++    // last-registered one in the static: with two belts the static holds
++    // player 2's. Same as the static with one belt.
++    {
++        EventCallbackInfo info = sRbSoundEventCbInfo;
++        info.cb = rbSoundEventHandler;
++        info.arg = rbData;
++        uvEventRemoveCb(info, 1, 0xD, 0x12, 0x13, 0x10, 0xC, 0x16, 0x24);
++    }
+ }
++
++// PW64 split-screen: per-player rocket belt sound callback info
++// (pw64_players.c).
++void pw64_reg_rocket_belt_sound(void) {
++    PW64_REG(sRbSoundEventCbInfo);
++}

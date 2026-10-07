@@ -89,14 +89,16 @@
  }
  
 +// PW64 split-screen: per-player part of the test setup for players 2..n
-+// (hang glider only), after player 1's. Each player i: kernel channel i =
-+// camera i in its viewport, own vehicle buffer + results struct, pad i.
-+// Only player 1's HUD is drawn for now: both HUDs use the same screen
-+// positions (per-view HUD layout comes later).
++// (hang glider / rocket belt), after player 1's. Each player i: kernel
++// channel i = camera i in its viewport, own vehicle buffer + results
++// struct, pad i. Only player 1's HUD is drawn for now: both HUDs use the
++// same screen positions (per-view HUD layout comes later).
 +static void pw64_setup_players(Unk80362690* arg0) {
 +    Unk80362690_Unk0* p = &arg0->unkC[0];
 +    HangGliderData* hg;
++    RocketBeltData* rb;
 +    Mtx4F start;
++    Mtx4F* vehMtx;
 +    s32 i;
 +
 +    for (i = 1; i < pw64_level_players; i++) {
@@ -109,16 +111,24 @@
 +        uvChanTerra(i, arg0->terraId);
 +        uvChanEnv(i, arg0->envId);
 +        pw64_split_viewport(p->unk70, i);
-+        D_803676F0 = hg = (HangGliderData*)p->vehicleData;
-+        hangGliderLoadLevel(i, p->pilot, hg, p->unk70);
-+        hangGliderEnterLeave(hg);
++        if (p->veh == VEHICLE_ROCKET_BELT) {
++            D_803676F8 = rb = (RocketBeltData*)p->vehicleData;
++            rocketBeltLoadLevel(i, p->pilot, rb, p->unk70);
++            rocketBeltEnterLeave(rb);
++            vehMtx = &rb->unk10;
++        } else {
++            D_803676F0 = hg = (HangGliderData*)p->vehicleData;
++            hangGliderLoadLevel(i, p->pilot, hg, p->unk70);
++            hangGliderEnterLeave(hg);
++            vehMtx = &hg->unk10;
++        }
 +        // Same start point as player 1, 10 m further along its right axis.
-+        uvMat4Copy(&start, &hg->unk10);
++        uvMat4Copy(&start, vehMtx);
 +        start.m[3][0] += 10.0f * i * start.m[0][0];
 +        start.m[3][1] += 10.0f * i * start.m[0][1];
 +        start.m[3][2] += 10.0f * i * start.m[0][2];
 +        func_802EDDEC(&start);
-+        func_802EDD9C(p, &hg->unk10);
++        func_802EDD9C(p, vehMtx);
 +        hudInit();
 +        camera_802D4DE8(p->unk70, 0);
 +        if (arg0->unkA2 == 0) {
@@ -138,8 +148,13 @@
 +    for (i = 1; i < pw64_level_players; i++) {
 +        pw64_player_switch(i);
 +        if (p->vehicleData != NULL) {
-+            hangGliderEnterLeave(p->vehicleData);
-+            func_802EF328(p->vehicleData);
++            if (p->veh == VEHICLE_ROCKET_BELT) {
++                rocketBeltEnterLeave(p->vehicleData);
++                func_80325100(p->vehicleData);
++            } else {
++                hangGliderEnterLeave(p->vehicleData);
++                func_802EF328(p->vehicleData);
++            }
 +        }
 +        hud_8031DAA8(0, 0.0f);
 +        hudGetState()->renderFlags = 0;
@@ -157,13 +172,14 @@
      } else {
          D_8034F160 = -1;
      }
-+    // PW64 split-screen: hang glider tests (not the attract demo) take a
-+    // second pilot; other vehicles stay single-player for now. Player 2
-+    // starts as a copy of player 1's state before the vehicle load (HUD
-+    // reset, radar waypoints from taskLoad), see pw64_setup_players.
++    // PW64 split-screen: hang glider and rocket belt tests (not the attract
++    // demo) take a second pilot; other vehicles stay single-player for now.
++    // Player 2 starts as a copy of player 1's state before the vehicle load
++    // (HUD reset, radar waypoints from taskLoad), see pw64_setup_players.
 +    pw64_level_players = 1;
 +    if ((pw64_players > 1) && !arg0->unkA4) {
-+        if (temp_s0->veh == VEHICLE_HANG_GLIDER) {
++        if ((temp_s0->veh == VEHICLE_HANG_GLIDER) ||
++            (temp_s0->veh == VEHICLE_ROCKET_BELT)) {
 +            pw64_level_players = pw64_players;
 +        } else {
 +            // _uvDebugPrintf is compiled out; PW64_TRACE_OS shows this.

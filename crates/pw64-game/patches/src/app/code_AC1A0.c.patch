@@ -25,3 +25,12 @@
          }
  
          rbData->unk70 = func_80313F08(&D_80371070, ABS_NOEQ(stickX));
+@@ -851,3 +856,8 @@
+     }
+     uvDobjState(rbData->objId, rbData->unk2);
+ }
++
++// PW64 split-screen: per-player rate state (pw64_players.c).
++void pw64_reg_rocket_belt_move(void) {
++    PW64_REG(sPw64TestTime);
++}

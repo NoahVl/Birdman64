@@ -129,6 +129,10 @@ void pw64_reg_shadow(void);
 void pw64_reg_hang_glider0(void);
 void pw64_reg_hang_glider1(void);
 void pw64_reg_hang_glider2(void);
+void pw64_reg_rocket_belt(void);
+void pw64_reg_rocket_belt_sound(void);
+void pw64_reg_rocket_belt_poses(void); /* code_AE460.c */
+void pw64_reg_rocket_belt_move(void);  /* code_AC1A0.c */
 void pw64_players_init(void);
 /* Kernel controller reads (controller.c.patch): with 2+ players, pad 0
  * means "the current player's pad", so hardcoded-0 sites follow the swap. */

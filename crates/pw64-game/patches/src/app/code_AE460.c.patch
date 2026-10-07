@@ -1,6 +1,6 @@
 --- a/src/app/code_AE460.c
 +++ b/src/app/code_AE460.c
-@@ -11,6 +11,7 @@
+@@ -11,10 +11,17 @@
  #include "app/shadow.h"
  #include "app/snd.h"
  #include "app/code_7FE00.h"
@@ -8,7 +8,32 @@
  
  Unk80371120 D_80371120;
  Unk80371120 D_803712D0;
-@@ -245,7 +246,7 @@ void rocketBelt_803279F0(RocketBeltData* rbData) {
+ Unk80371120 D_80371480;
+ 
++// PW64 split-screen: hoisted from rocketBelt_803273C8 / rocketBelt_803279F0
++// so they can be registered as per-player state (pw64_reg_rocket_belt_poses).
++static f32 D_8034FBA0 = 0.0f;
++static f32 D_8034FBA4 = 0.5f;
++static f32 D_8034FBA8;
++
+ void rocketBelt_803277E0(RocketBeltData*);
+ void rocketBelt_803279F0(RocketBeltData*);
+@@ -98,6 +105,4 @@ void rocketBelt_803273C8(RocketBeltData* rbData, u8 arg1) {
+-    static f32 D_8034FBA0 = 0.0f;
+-    static f32 D_8034FBA4 = 0.5f;
+     f32 var_fa1;
+     u8 sp23;
+ 
+     if (rbData->unk90 == 3) {
+@@ -223,7 +229,6 @@
+ }
+ 
+ void rocketBelt_803279F0(RocketBeltData* rbData) {
+-    static f32 D_8034FBA8 = 0.0f;
+     Mtx4F sp178;
+     Mtx4F sp138;
+     Mtx4F spF8;
+@@ -245,7 +251,7 @@ void rocketBelt_803279F0(RocketBeltData* rbData) {
      } else {
          sp74 = ((1.0f - (demoRandF() * 0.7f)) + 0.7f + (0.5f * SQ(0.5f * (rbData->unk70 + 1.0f)))) * (0.6f * rbData->unk78);
      }
@@ -17,3 +42,17 @@
      uvFxProps(rbData->unk338, 3, sp74, sp74, sp74, 0);
      uvMat4RotateAxis(&spF8, -D_8034FBA8, 'z');
      if (rbData->unk80 == 0) {
+@@ -379,3 +384,13 @@
+     uvMat4RotateAxis(&sp28, rbData->unk354, 'z');
+     uvDobjPosm(rbData->objId, rbData->unk2DF, &sp28);
+ }
++
++// PW64 split-screen: per-player rocket belt pose/anim state (pw64_players.c).
++void pw64_reg_rocket_belt_poses(void) {
++    PW64_REG(D_80371120);
++    PW64_REG(D_803712D0);
++    PW64_REG(D_80371480);
++    PW64_REG(D_8034FBA0);
++    PW64_REG(D_8034FBA4);
++    PW64_REG(D_8034FBA8);
++}
