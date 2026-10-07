@@ -1,6 +1,6 @@
 # Split-screen (2-player local)
 
-Status: two pilots (hang glider, gyrocopter, rocket belt or jumble hopper) fly the same test (top view = player 1,
+Status: two pilots (hang glider, gyrocopter, rocket belt, jumble hopper or birdman) fly the same test (top view = player 1,
 bottom = player 2), each on its own controller and camera, seeing each other. Other
 vehicles fall back to one player. Everything is gated: `pw64_level_players == 1` runs the
 original code paths. Hopper: only the crash head-shake sfx one-shots (`D_8036905C`) are
@@ -33,6 +33,9 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   channel i, `pw64_split_viewport`, vehicle load with `contIdx = i`, P2 offset 10 m along the
   start frame's x (`func_802EDDEC`, patched to use `unkC[].vehicleData`). Teardown
   `pw64_leave_players` (from func_802ECE94); Retry sets up a fresh 2-pilot test.
+- **Birdman load path:** `gameUpdateStateTestSetup`'s switch never loads birdman
+  (`case VEHICLE_BIRDMAN: return 0;`); the bonus path `func_802EE14C` (game.c ~1181) does
+  (`birdLoadLevel` on `D_80367704`) — same `pw64_setup_players` treatment as jumble hopper. Statics registered per player: birdman0, bmsound (gyro-style local `uvEventRemoveCb` info), birdman1 (flutter; a 2nd BirdmanData hit `pw64_fatal` without it), birdman2.
 - **Frame** (gameUpdateStateTestUpdate): world once; per player: vehicle update + status +
   `pw64_task_player_update`; `pw64_task_world_update` once with P1 live (therm, wind, env,
   balls, falco, fire/splash/smoke, env sound). Draw: `func_8034B624` per player under
@@ -61,6 +64,15 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   dobjs they allocate mid-test (child rings, split balls, next hover pad). Balls move per player.
   `taskDeinitLevel` frees the other players' copies. P1-only: photos, falcos, teleports, the
   decomp's `unkC[0].veh = ROCKET_BELT` on a ring/ball goal; bonus stars don't warp in split.
+- **Test end + results** (game.c.patch, results.c.patch): any per-player end (status 5,
+  crash/landing flow, goal, fuel) only marks that player done (`pw64_player_finish`: landing
+  pose + `func_8032B560` score *at the finish*, since a later time-up sets the global `unkA1`;
+  HUD off, "FINISHED" from hud.c.patch). Done players skip their update (frozen: their
+  results animation would post the landing music + event 0x12 to everyone). Land-now/time-up
+  run per flying player (`pw64_test_time_split`); results when all are done. Results
+  (`pw64_results_split`): every view keeps drawing; results.c reads `D_80364210[unk9C=0]`, so
+  "Next" on P1's tally swaps each other player's struct in for a Next-only tally, then P1's
+  class totals + Retry/Quit (applies to all). Only P1 is saved. Replay: P1's top view only.
 
 ## Gotchas found
 - Matrix stack overflow in pass 2 → red/blue streaks (garbage matrices): budgets above.
@@ -74,9 +86,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - At the start the other glider is just outside the FOV (camera ~18 m back, 10 m apart).
 
 ## Remaining work (from the per-player statics audit)
-- **Per-player test end + results:** only P1's end (landing, ring/ball goal, time-up at
-  game.c:1010) ends the test; scores for P2 = `func_8032B560` under `pw64_player_switch(1)`.
-  Dobjs are capped at 100 (each player's objectives use their own; beginner gc 1 = 3 rings,
+- **Dobj cap:** dobjs are capped at 100 (each player's objectives use their own; beginner gc 1 = 3 rings,
   b:rb:2 = 15 rings → up to id 75); a failed clone logs and leaves that object missing for P2.
 - **Other vehicles:** register their audit lists; first fix our rate patches that
   `pw64_fatal` on a second vehicle of the same type (birdman1 `sPw64FlutterOwner`,
@@ -87,8 +97,11 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - **Hard-wired player 0 in gameplay:** falco.c (bird targets P1), snap.c shutter,
   env_sound.c:494, task.c:358-372, game.c:770 (splash billboards on camera 0), cannonball.c:380,
   code_B6580.c:24, code_BA190.c:235, skydiving.c:369.
-- **Pause:** P2 can't pause; the pause menu likely redraws only view 0. Never run
+- **Pause:** P2 can't pause (P1 still can once finished, to quit). "Check map"
+  (`func_8032CC44`: taskDeinitLevel + reload) is untested in split. Never run
   split-screen in attract/demo playback (single stream).
+- **Results:** the replay draws only P1's (top) view; the bottom keeps its last frame.
+  P2's results aren't stored anywhere past the session (no save slot).
 - Ground starts: P2's offset keeps P1's ground height. Widescreen/fill-screen + split
   untested (the view scissor may fight the renderer's Hor+ extension). Cockpit views that
   hide their own pilot dobj hide it for the other view too (dobj state is global).

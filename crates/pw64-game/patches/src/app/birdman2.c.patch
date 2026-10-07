@@ -65,3 +65,13 @@
                  return;
              }
  
+@@ -815,3 +833,9 @@
+     uvVec3Copy(&sp38, &bmData->unk320);
+     uvMat4LocalToWorld(temp_s2, &D_803593F0.unk4[2].unk1C, &sp38);
+ }
++
++// PW64 split-screen: per-player pitch torque hold (pw64_players.c).
++void pw64_reg_birdman_move(void) {
++    PW64_REG(sPw64PitchAcc);
++    PW64_REG(sPw64PitchTq);
++}

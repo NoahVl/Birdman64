@@ -5,9 +5,25 @@
  #include "app/code_9A960.h"
  #include "app/code_D1ED0.h"
 +#include <pw64_rate.h>
++Unk80364210* func_8032BE10(void); // PW64 split-screen: code_B2900.c
  
  Unk802D3658_Unk111C D_80368C00;
  Unk802D3658_Unk111C D_80368D08;
+@@ -236,9 +237,15 @@ void func_802FBEFC(JumbleHopperData* jhData, f32 arg1) {
+         // TODO: fix array and/or struct
+-        D_80364210[D_80362690->unk9C].unk38 = D_80364210[D_80362690->unk9C].unk38 - sp2C[11].unk4[5].y;
+-        if (D_80364210[D_80362690->unk9C].unk38 < -100) {
+-            D_80364210[D_80362690->unk9C].unk38 = -100;
++        // PW64 split-screen: the penalty goes to the hopping player's
++        // results (func_8032BE10); D_80364210[unk9C] is always player 1's.
++        {
++            Unk80364210* pw64Res = (pw64_level_players > 1) ? func_8032BE10() : &D_80364210[D_80362690->unk9C];
++            pw64Res->unk38 = pw64Res->unk38 - sp2C[11].unk4[5].y;
++            if (pw64Res->unk38 < -100) {
++                pw64Res->unk38 = -100;
++            }
+         }
+         jhData->unk534++;
 @@ -687,7 +688,8 @@ void func_802FD114(JumbleHopperData* jhData) {
  }
  

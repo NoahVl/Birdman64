@@ -106,5 +106,9 @@ void pw64_players_init(void) {
     pw64_reg_gyrocopter_poses();
     pw64_reg_gyrocopter_move();
     pw64_reg_jumble_hopper();
+    pw64_reg_birdman();
+    pw64_reg_birdman_sound();
+    pw64_reg_birdman_flutter();
+    pw64_reg_birdman_move();
     pw64_reg_task();
 }

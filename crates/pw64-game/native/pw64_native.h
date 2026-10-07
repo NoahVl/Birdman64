@@ -141,6 +141,10 @@ void pw64_reg_gyrocopter_sound(void);  /* gyrocopter_sound.c */
 void pw64_reg_gyrocopter_poses(void);  /* code_7C4C0.c */
 void pw64_reg_gyrocopter_move(void);   /* code_7CF30.c */
 void pw64_reg_jumble_hopper(void);     /* code_82B90.c */
+void pw64_reg_birdman(void);        /* birdman0.c: camera-look toggle + rate state */
+void pw64_reg_birdman_sound(void);  /* bmsound.c */
+void pw64_reg_birdman_flutter(void); /* birdman1.c */
+void pw64_reg_birdman_move(void);   /* birdman2.c */
 void pw64_players_init(void);
 void pw64_reg_task(void); /* task.c: objective hit state (+ its modules) */
 /* Per-player objective dobjs (kernel dobj.c.patch): owning player + 1 per

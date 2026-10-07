@@ -1,0 +1,22 @@
+--- a/src/app/bmsound.c
++++ b/src/app/bmsound.c
+@@ -223,4 +223,18 @@
+     bmData->unk414 = func_8033F8CC(bmData->unk414);
+     bmData->unk415 = func_8033F8CC(bmData->unk415);
+-    uvEventRemoveCb(sBmSoundCbInfo, 1, 0xD, 0x12, 0x13, 0x16, 0xC, 0x10, 0x24);
++    // PW64 split-screen: remove this bird's own callback (cb + arg), not the
++    // last-registered one in the static: with two birds the static holds
++    // player 2's. Same as the static with one bird.
++    {
++        EventCallbackInfo info = sBmSoundCbInfo;
++        info.cb = bmSoundCallback;
++        info.arg = bmData;
++        uvEventRemoveCb(info, 1, 0xD, 0x12, 0x13, 0x16, 0xC, 0x10, 0x24);
++    }
+ }
++
++// PW64 split-screen: per-player birdman sound callback info
++// (pw64_players.c).
++void pw64_reg_birdman_sound(void) {
++    PW64_REG(sBmSoundCbInfo);
++}

@@ -44,3 +44,16 @@
          bmData->unk2EC = func_80313AF4(sp30, bmData->unk2EC, 15.0f);
          uvModelGetPosm(bmData->unk3F4, 0x18, &sp558);
          uvMat4RotateAxis(&sp558, bmData->unk2E0, 'x');
+@@ -183,5 +204,12 @@
+ void bird_802CEB68(BirdmanData* bmData, s32 arg1) {
+     if (bmData->unk104 == 2) {
+         bird_802CEA60(bmData);
+     }
+ }
++
++// PW64 split-screen: per-player wing-flutter hold state (pw64_players.c).
++void pw64_reg_birdman_flutter(void) {
++    PW64_REG(sPw64FlutterOwner);
++    PW64_REG(sPw64FlutterAcc);
++    PW64_REG(sPw64Flutter);
++}

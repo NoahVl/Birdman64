@@ -15,7 +15,7 @@
  HangGliderData* D_803676F0;
  GyrocopterData* D_803676F4;
  RocketBeltData* D_803676F8;
-@@ -62,6 +64,28 @@ Unk80367868 D_80367868;
+@@ -62,6 +64,42 @@ Unk80367868 D_80367868;
  s32 D_8034F160 = -1;
  s32 D_8034F164 = 0;
  
@@ -41,10 +41,24 @@
 +    PW64_REG(D_8034FBD0);
 +}
 +
++// PW64 split-screen: each player's test ends on its own (their landing,
++// crash, goal, fuel-out or the time limit). A finished player is frozen and
++// waits ("FINISHED", hud.c.patch); results come when every player is done.
++// Scores are taken at each player's finish (pw64_player_finish), so a later
++// time-up (unkA1) doesn't rescore an earlier finisher.
++void pw64_task_deinit_player(void); // task.c.patch
++static u8 sPw64Done[PW64_MAX_PLAYERS];
++// Results tally being shown for player n (0 = player 1; results.c.patch).
++s32 pw64_results_player;
++
++s32 pw64_player_finished(void) {
++    return (pw64_level_players > 1) && sPw64Done[pw64_player_cur];
++}
++
  typedef s32 (*GameStateUpdateFunc)(Unk80362690*);
  
  s32 gameUpdateStateTitle(Unk80362690*);
-@@ -151,6 +175,14 @@ void gameInit(void) {
+@@ -151,6 +189,14 @@ void gameInit(void) {
          func_8032B3D0(&D_80364210[i]);
          func_8034B5E0(temp_s0->unk70->unk22C, temp_s0->unk70);
      }
@@ -59,7 +73,7 @@
  }
  
  void func_802EBBB8(void) {
-@@ -178,7 +210,24 @@ void gameUpdate(void) {
+@@ -178,7 +224,27 @@ void gameUpdate(void) {
  
  s32 gameUpdateStateTitle(Unk80362690* arg0) {
      s32 gameState;
@@ -87,12 +101,12 @@
      if (uvControllerCheckInserted(0) == 0) {
          func_8032D90C();
      }
-@@ -428,6 +477,68 @@ s32 gameUpdateStatePilotSelect(Unk80362690* arg0) {
+@@ -428,6 +494,109 @@ s32 gameUpdateStatePilotSelect(Unk80362690* arg0) {
      return GAME_STATE_TEST_OVERVIEW;
  }
  
 +// PW64 split-screen: per-player part of the test setup for players 2..n
-+// (hang glider / gyrocopter / rocket belt / jumble hopper), after player 1's. Each player i: kernel
++// (hang glider / gyrocopter / rocket belt / jumble hopper / birdman), after player 1's. Each player i: kernel
 +// channel i = camera i in its viewport, own vehicle buffer + results
 +// struct, pad i. Each player's HUD is drawn by its channel's callback and
 +// laid out in its view by the renderer (pw64_hud_split_tag).
@@ -102,9 +116,12 @@
 +    GyrocopterData* gc;
 +    RocketBeltData* rb;
 +    JumbleHopperData* jh;
++    BirdmanData* bm;
 +    Mtx4F start;
 +    Mtx4F* vehMtx;
 +    s32 i;
++    f32 landNow;
++    f32 timeUp;
 +
 +    for (i = 1; i < pw64_level_players; i++) {
 +        pw64_player_switch(i);
@@ -130,6 +147,11 @@
 +            jumbleHopperLoadLevel(i, p->pilot, jh, p->unk70);
 +            jumbleHopperEnterLeave(jh);
 +            vehMtx = &jh->unk74;
++        } else if (p->veh == VEHICLE_BIRDMAN) {
++            D_80367704 = bm = (BirdmanData*)p->vehicleData;
++            birdLoadLevel(i, p->pilot, bm, p->unk70);
++            birdEnterLeave(bm);
++            vehMtx = &bm->unk10;
 +        } else {
 +            D_803676F0 = hg = (HangGliderData*)p->vehicleData;
 +            hangGliderLoadLevel(i, p->pilot, hg, p->unk70);
@@ -151,6 +173,8 @@
 +        func_8032B508(p->unk74);
 +    }
 +    pw64_player_switch(0);
++    taskGet_80345CC0(&landNow, &timeUp);
++    PW64_LOGF("split-screen: land-now << 16 | time limit (s)", ((u32)landNow << 16) | (u32)timeUp);
 +}
 +
 +// PW64 split-screen: undo pw64_setup_players (func_802ECE94, player 1's
@@ -171,6 +195,9 @@
 +            } else if (p->veh == VEHICLE_JUMBLE_HOPPER) {
 +                jumbleHopperEnterLeave(p->vehicleData);
 +                func_802FA290(p->vehicleData);
++            } else if (p->veh == VEHICLE_BIRDMAN) {
++                birdEnterLeave(p->vehicleData);
++                bird_802CC51C(p->vehicleData);
 +            } else {
 +                hangGliderEnterLeave(p->vehicleData);
 +                func_802EF328(p->vehicleData);
@@ -185,24 +212,226 @@
 +    pw64_level_players = 1;
 +}
 +
++// PW64 split-screen: player i (live) has ended its test. What
++// gameUpdateStateResults does first for one player (landing pose, score),
++// done now; its HUD makes way for "FINISHED". The vehicle is no longer
++// updated (its results animation would post the landing music and sound
++// event 0x12, heard by every player) until the results screen.
++static void pw64_player_finish(Unk80362690* arg0, s32 i) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++
++    if (sPw64Done[i]) {
++        return;
++    }
++    sPw64Done[i] = TRUE;
++    if (p->unk79 != 0) {
++        switch (p->veh) {
++        case VEHICLE_HANG_GLIDER:
++            func_802F041C(p->vehicleData);
++            break;
++        case VEHICLE_GYROCOPTER:
++            func_802F764C(p->vehicleData);
++            break;
++        case VEHICLE_ROCKET_BELT:
++            func_80325E1C(p->vehicleData);
++            break;
++        case VEHICLE_BIRDMAN:
++            bird_802CD0F8(p->vehicleData);
++            break;
++        }
++    }
++    p->unk78 = func_8032B560(p->unk74, p->cls, p->test, p->veh);
++    hudText_8031D8E0(-1, 0.0f, 0.0f);
++    hudWarningText(-1, 0.0f, 0.0f);
++    hudGetState()->renderFlags = 0;
++    hud_8031DAA8(0, 0.0f);
++    PW64_LOGF("split-screen: player finished (player << 8 | good)", (i << 8) | p->unk78);
++}
++
++static s32 pw64_all_finished(void) {
++    s32 i;
++
++    for (i = 0; i < pw64_level_players; i++) {
++        if (!sPw64Done[i]) {
++            return FALSE;
++        }
++    }
++    return TRUE;
++}
++
++// PW64 split-screen: gameUpdateStateTestUpdate's time checks, per player
++// still flying: the "land now" time despawns that player's objectives, the
++// time limit finishes them. Results once every player is done.
++static s32 pw64_test_time_split(Unk80362690* arg0, s32 gameState) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    f32 landNow;
++    f32 timeUp;
++    s32 chime = FALSE;
++    s32 i;
++
++    taskGet_80345CC0(&landNow, &timeUp);
++    for (i = 0; i < pw64_level_players; i++) {
++        if (sPw64Done[i]) {
++            continue;
++        }
++        pw64_player_switch(i);
++        if ((landNow > 0.0f) && (landNow < D_8034F850) && (arg0->unkA0 != 0) && (p->unkA != 3) && (p->unkA != 4)) {
++            hudText_8031D8E0(TEXT_LAND_MOW, 1.5f, 8.0f);
++            chime = TRUE;
++            if (i == 0) {
++                taskDeinit();
++            } else {
++                pw64_task_deinit_player();
++            }
++            arg0->unkA0 = 0;
++        }
++        if ((timeUp > 0.0f) && (timeUp < D_8034F850)) {
++            arg0->unkA1 = 1;
++            pw64_player_finish(arg0, i);
++        }
++    }
++    pw64_player_switch(0);
++    if (chime) {
++        sndPlaySfx(SFX_UI_HUD_CHIME);
++    }
++    return pw64_all_finished() ? GAME_STATE_RESULTS : gameState;
++}
++
++// PW64 split-screen: the world part of one results-screen frame. Every
++// player's end animation (player 1's last, so its landing music wins), the
++// world ticks once, then each view. Ends inside uvGfxBegin, player 1 live.
++static void pw64_results_world(Unk80362690* arg0) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    s32 i;
++
++    for (i = pw64_level_players - 1; i >= 0; i--) {
++        pw64_player_switch(i);
++        switch (p->veh) {
++        case VEHICLE_HANG_GLIDER:
++            func_802EEB00(p->vehicleData, p->unk78);
++            break;
++        case VEHICLE_GYROCOPTER:
++            func_802F56B4(p->vehicleData, p->unk78);
++            break;
++        case VEHICLE_ROCKET_BELT:
++            rocketBelt_803273C8(p->vehicleData, p->unk78);
++            break;
++        case VEHICLE_BIRDMAN:
++            bird_802CEB68(p->vehicleData, p->unk78);
++            break;
++        }
++    }
++    uvGfxBegin();
++    proxAnimUpdate();
++    pw64_task_world_update(&p->unk2C, 0.0f);
++    for (i = 0; i < pw64_level_players; i++) {
++        pw64_player_switch(i);
++        func_8034B624(p->unk70);
++    }
++    pw64_player_switch(0);
++}
++
++// results.c reads D_80364210[unk9C = 0]: swap player i's results in for
++// its tally (and back). Never saved while swapped.
++static void pw64_results_swap(s32 i) {
++    u8* a = (u8*)&D_80364210[0];
++    u8* b = (u8*)&D_80364210[i];
++    u8 t;
++    u32 k;
++
++    for (k = 0; k < sizeof(Unk80364210); k++) {
++        t = a[k];
++        a[k] = b[k];
++        b[k] = t;
++    }
++}
++
++// PW64 split-screen (results.c.patch, "Next" on player 1's tally): each
++// other player's tally (menu: Next only), then back to player 1's class
++// totals and the Retry/Next/Quit choice, which applies to everyone.
++// Player 1 stays live (same test); only player 1's results are saved.
++void pw64_results_other_players(void) {
++    s32 i;
++
++    for (i = 1; i < pw64_level_players; i++) {
++        pw64_results_swap(i);
++        pw64_results_player = i;
++        resultInit(1);
++        while (resultMenuChoose(1) == 0) {
++            pw64_results_world(D_80362690);
++            resultDrawTally(1);
++            uvGfxEnd();
++        }
++        pw64_results_player = 0;
++        pw64_results_swap(i);
++    }
++}
++
++// PW64 split-screen: gameUpdateStateResults once every player is done
++// (scores already taken at each finish): both views keep running behind
++// player 1's tally; "Next" shows the others' (pw64_results_other_players).
++static s32 pw64_results_split(Unk80362690* arg0) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    s32 var_v1;
++    s32 i;
++    f32 t = 0.0f;
++    f32 dur;
++
++    dur = ((p->unk7A == 0) && (p->unk79 != 0)) ? 1.0f : 4.0f;
++    while (t < dur) {
++        pw64_results_world(arg0);
++        func_80313D74();
++        uvGfxEnd();
++        t += D_8034F854;
++    }
++    for (i = 0; i < pw64_level_players; i++) {
++        pw64_player_switch(i);
++        hudText_8031D8E0(-1, 0.0f, 0.0f);
++        hudWarningText(-1, 0.0f, 0.0f);
++        hudGetState()->renderFlags = 0;
++        hud_8031DAA8(0, 0.0f);
++        sPw64Done[i] = FALSE; // no more "FINISHED"
++    }
++    pw64_player_switch(0);
++    resultInit(1);
++    while ((var_v1 = resultMenuChoose(1)) == 0) {
++        pw64_results_world(arg0);
++        resultDrawTally(1);
++        if (gCurrentMusicId != BGM_RESULTS) {
++            uvEventPost(0x12, 0);
++            sndSetMusic(BGM_RESULTS);
++            sndSetMusicState(MUS_STATE_PLAY_SEQ);
++            func_8033FCD0(0xFF);
++        }
++        uvGfxEnd();
++    }
++    resultDeinit();
++    func_802ECE94(arg0);
++    if (var_v1 == GAME_STATE_TEST_SETUP) {
++        sndPlaySfx(SFX_UI_TEST_START);
++    }
++    return var_v1;
++}
++
  s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
      Unk80362690_Unk0* temp_s0;
      f32 sp28;
-@@ -467,6 +578,23 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
+@@ -467,6 +636,28 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
      } else {
          D_8034F160 = -1;
      }
-+    // PW64 split-screen: hang glider, gyrocopter, rocket belt and jumble
-+    // hopper tests (not the attract demo) take a second pilot; other
-+    // vehicles stay single-player for now. Player 2 starts as a copy of
-+    // player 1's state before the vehicle load (HUD reset, radar waypoints
-+    // from taskLoad), see pw64_setup_players.
++    // PW64 split-screen: hang glider, gyrocopter, rocket belt, jumble
++    // hopper and birdman tests (not the attract demo) take a second pilot;
++    // other vehicles stay single-player for now. Player 2 starts as a copy
++    // of player 1's state before the vehicle load (HUD reset, radar
++    // waypoints from taskLoad), see pw64_setup_players.
 +    pw64_level_players = 1;
 +    if ((pw64_players > 1) && !arg0->unkA4) {
 +        if ((temp_s0->veh == VEHICLE_HANG_GLIDER) ||
 +            (temp_s0->veh == VEHICLE_GYROCOPTER) ||
 +            (temp_s0->veh == VEHICLE_ROCKET_BELT) ||
-+            (temp_s0->veh == VEHICLE_JUMBLE_HOPPER)) {
++            (temp_s0->veh == VEHICLE_JUMBLE_HOPPER) ||
++            (temp_s0->veh == VEHICLE_BIRDMAN)) {
 +            pw64_level_players = pw64_players;
 +        } else {
 +            // _uvDebugPrintf is compiled out; PW64_TRACE_OS shows this.
@@ -212,11 +441,12 @@
 +    if (pw64_level_players > 1) {
 +        pw64_split_viewport(temp_s0->unk70, 0);
 +        pw64_players_sync();
++        uvMemSet(sPw64Done, 0, sizeof(sPw64Done));
 +    }
      switch (temp_s0->veh) {
      case VEHICLE_HANG_GLIDER:
          D_803676F0 = (HangGliderData*)temp_s0->vehicleData;
-@@ -541,6 +669,9 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
+@@ -541,6 +732,9 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
          sndSetMusicState(MUS_STATE_PLAY_SEQ);
          func_8033FCD0(temp_s0->veh);
      }
@@ -226,7 +456,16 @@
      uvEventPost(0xB, 0);
      return GAME_STATE_TEST_UPDATE;
  }
-@@ -714,6 +845,9 @@ void func_802ECE94(Unk80362690* arg0) {
+@@ -567,6 +567,9 @@ s32 gameUpdateStateResults(Unk80362690* arg0) {
+         D_803676FC = (CannonballData*)D_80362748[arg0->unk9C];
+         return cannonLandedFrame(D_803676FC);
+     }
++    if (pw64_level_players > 1) { // PW64 split-screen: both players done
++        return pw64_results_split(arg0);
++    }
+
+     if (temp_s0->unk79 != 0) {
+@@ -714,6+908,9 @@ void func_802ECE94(Unk80362690* arg0) {
              bird_802CC51C(temp_s0->vehicleData);
              break;
          }
@@ -236,7 +475,7 @@
          taskDeinitLevel();
          windObjDeinit();
          level_8030BA60();
-@@ -740,6 +874,8 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
+@@ -740,6 +937,8 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
      f32 sp48;
      f32 sp44;
      GyrocopterData* sp40;
@@ -245,7 +484,7 @@
  
      sp6C = &arg0->unkC[arg0->unk9C];
      gameState = GAME_STATE_TEST_UPDATE;
-@@ -770,6 +906,12 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
+@@ -770,6 +969,12 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
      func_802F89A0(D_80362E88);
      windObjFrameUpdate();
  
@@ -255,10 +494,13 @@
 +    for (pw64I = 0; pw64I < pw64_level_players; pw64I++) {
 +    pw64_player_switch(pw64I);
 +    pw64Saved = gameState;
++    if ((pw64_level_players > 1) && sPw64Done[pw64I]) {
++        continue; // finished: frozen, waits for the others
++    }
      switch (sp6C->veh) {
      case VEHICLE_HANG_GLIDER:
          D_803676F0 = (HangGliderData*)sp6C->vehicleData;
-@@ -938,13 +1080,33 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
+@@ -938,13 +1143,33 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
          gameState = GAME_STATE_RESULTS;
          break;
      }
@@ -266,10 +508,12 @@
 +        if (pw64_task_player_update(&sp6C->unk2C, sp6C->unk20) == 1) {
 +            gameState = GAME_STATE_RESULTS;
 +        }
-+        // Only player 1 ends the test for now; player 2 just stops.
-+        if (pw64I > 0) {
-+            gameState = pw64Saved;
++        // A player's own end finishes only that player; results once
++        // everyone is done (pw64_test_time_split).
++        if (gameState == GAME_STATE_RESULTS) {
++            pw64_player_finish(arg0, pw64I);
 +        }
++        gameState = pw64Saved;
 +    }
 +    }
 +    pw64_player_switch(0);
@@ -293,7 +537,23 @@
      uvGfxEnd();
      func_80313D74();
      // pause menu
-@@ -1111,15 +1273,17 @@ void func_802EDDEC(Mtx4F* arg0) {
+     if ((demoButtonPress(arg0->unk9C, START_BUTTON) != 0) && (demoButtonCheck(arg0->unk9C, A_BUTTON) == 0)) {
+-        if ((sp6C->unkA != 3) && (sp6C->unkA != 4)) {
++        // PW64 split-screen: a finished player 1 can still pause (to quit
++        // while the others fly).
++        if (((sp6C->unkA != 3) && (sp6C->unkA != 4)) || pw64_player_finished()) {
+             sp40 = (GyrocopterData*)sp6C->vehicleData;
+@@ -1005,6 +1005,9 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
+             }
+         }
+     }
++    if (pw64_level_players > 1) { // PW64 split-screen: per player
++        return pw64_test_time_split(arg0, gameState);
++    }
+     taskGet_80345CC0(&sp64, &sp60);
+     if ((sp64 > 0.0f) && (sp64 < D_8034F850) && (arg0->unkA0 != 0)) {
+         if ((sp6C->unkA != 3) && (sp6C->unkA != 4)) {
+@@ -1111,15 +1336,17 @@ void func_802EDDEC(Mtx4F* arg0) {
      u16 i;
      Vec3F sp40;
  
@@ -313,7 +573,7 @@
          sp54 = &D_803676F4->unk10;
          sp50 = &D_803676F4->unk668;
          sp4E = D_803676F4->objId;
-@@ -1131,31 +1295,31 @@ void func_802EDDEC(Mtx4F* arg0) {
+@@ -1131,31 +1358,31 @@ void func_802EDDEC(Mtx4F* arg0) {
          }
          break;
      case VEHICLE_ROCKET_BELT:
@@ -350,7 +610,7 @@
          sp54 = &D_80367704->unk10;
          sp50 = &D_80367704->unk400;
          sp4E = D_80367704->objId;
-@@ -1181,7 +1345,7 @@ void func_802EE14C(u16 veh) {
+@@ -1181,7 +1408,7 @@ void func_802EE14C(u16 veh) {
      if (veh == temp_s0->veh) {
          return;
      }

@@ -10,7 +10,21 @@
  #define CAMERA_SHUTTER_FRAMES 3
 +// PW64 rate: fraction of a REF frame of the shutter countdown.
 +static f32 sPw64ShutterAcc;
- 
++
++// PW64 split-screen (game.c.patch): this player's test has ended and it
++// waits for the others; the flight HUD is off (renderFlags 0).
++s32 pw64_player_finished(void);
++static void pw64_hud_finished(void) {
++    static char sFinished[] = "FINISHED";
++
++    if (pw64_player_finished()) {
++        uvFontSet(6);
++        uvFontScale(1.0, 1.0);
++        uvFontColor(0xFF, 0xFF, 0xFF, 0xFF);
++        uvFontPrintStr((SCREEN_WIDTH / 2) - (uvFontWidth(sFinished) / 2), 125, sFinished);
++    }
++}
+
  // hang glider speeds below this value will be highlighted larger red/amber font
  #define HIGHLIGHT_SPEED_BELOW 36
 @@ -246,6 +249,8 @@ void hudMainRender(void) {
@@ -29,6 +43,7 @@
 +            pw64_hud_set_anchor('C'); // PW64: centred messages (widescreen)
              hudDrawLowFuel(&sHudState);
              hudDrawStartText(&sHudState);
++            pw64_hud_finished(); // PW64 split-screen
              if (sHudState.showController != 0) {
 @@ -317,6 +323,9 @@ void hudMainRender(void) {
          sHudState.unkC++;

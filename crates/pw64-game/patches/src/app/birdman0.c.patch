@@ -35,7 +35,7 @@
          if (D_80362690->unkC[D_80362690->unk9C].unk7B == 0) {
              func_80339E1C(bmData);
          }
-@@ -197,13 +209,29 @@
+@@ -197,15 +209,31 @@
              bmData->unk2D4 = 1.5707f;
          }
          if (sp68 != 0) {
@@ -66,3 +66,20 @@
          }
          if (gameState != GAME_STATE_RESULTS) {
              bird_802CEDF8(bmData);
+         }
+         bird_802CE190(bmData, gameState);
+@@ -366,6 +394,14 @@
+             fdr_802E65AC(&bmData->unk10, &D_80362690->terraId, &sp7C, &sp78, &buttons);
+         }
+     }
+ }
++
++// PW64 split-screen: per-player camera-look toggle (R) and rate state
++// (pw64_players.c).
++void pw64_reg_birdman(void) {
++    PW64_REG(D_803593E4);
++    PW64_REG(sPw64TestTime);
++    PW64_REG(sPw64FlapHold);
++}
+ 
+ void bird_802CD0F8(BirdmanData* bmData) {
