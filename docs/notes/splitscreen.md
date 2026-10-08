@@ -72,7 +72,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   run per flying player (`pw64_test_time_split`); results when all are done. Results
   (`pw64_results_split`): every view keeps drawing; results.c reads `D_80364210[unk9C=0]`, so
   "Next" on P1's tally swaps each other player's struct in for a Next-only tally, then P1's
-  class totals + Retry/Quit (applies to all). Only P1 is saved. Replay: P1's top view only.
+  class totals + Retry/Quit (applies to all). Only P1 is saved. Tallies/replay full screen (see Remaining work).
 - **Free flight** (test_menu.c.patch, game.c.patch `pw64_free_*`): split-only item in the
   test menu's bottom-right slot (Sample photo's; replaces it on Shutter Bug tests) for
   `pw64_split_vehicle`s; returns like Start with `pw64_free_flight = 1` (cleared on menu entry
@@ -131,8 +131,10 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - **Free flight:** landing pads stay (radar shows the landing point); event 0x12 from
   crash effects reaches both players' sound handlers; respawn audio unverified.
 - Never run split-screen in attract/demo playback (single stream).
-- **Results:** the replay draws only P1's (top) view; the bottom keeps its last frame.
-  P2's results aren't stored anywhere past the session (no save slot).
+- **Results:** from the tally on, each tally draws only its player's view, full screen
+  (`pw64_results_full`; both halves left the 1-row view gap as a dark seam across it).
+  P1's replay is full screen too (camera 0 already is). P2 replay = a 2nd fdr recorder (not
+  cheap). P2's results aren't stored past the session (no save slot).
 - Hopper fall-over in split: P2 waits in state 9 (get-up) for its 7 s timeout (camera
   follow-distance check never met), P1 gets up at once. A test-start fall-over faulted.
 - Widescreen/fill-screen + split

@@ -657,8 +657,9 @@
 +
 +// PW64 split-screen: the world part of one results-screen frame. Every
 +// player's end animation (player 1's last, so its landing music wins), the
-+// world ticks once, then each view. Ends inside uvGfxBegin, player 1 live.
-+static void pw64_results_world(Unk80362690* arg0) {
++// world ticks once, then each view (view < 0) or only player `view`'s
++// (full screen, pw64_results_full). Ends inside uvGfxBegin, player 1 live.
++static void pw64_results_world(Unk80362690* arg0, s32 view) {
 +    Unk80362690_Unk0* p = &arg0->unkC[0];
 +    s32 i;
 +
@@ -683,10 +684,20 @@
 +    proxAnimUpdate();
 +    pw64_task_world_update(&p->unk2C, 0.0f);
 +    for (i = 0; i < pw64_level_players; i++) {
-+        pw64_player_switch(i);
-+        func_8034B624(p->unk70);
++        if ((view < 0) || (view == i)) {
++            pw64_player_switch(i);
++            func_8034B624(p->unk70);
++        }
 +    }
 +    pw64_player_switch(0);
++}
++
++// PW64 split-screen: camera i's view full screen (on) or back to its half.
++// The tallies, class totals and replay are full-screen screens: with both
++// halves drawn behind them, the one-line gap between the views showed as a
++// dark seam across the tally.
++static void pw64_results_full(s32 i, s32 on) {
++    pw64_split_viewport(&D_80362E88[i], on ? -1 : i);
 +}
 +
 +// results.c reads D_80364210[unk9C = 0]: swap player i's results in for
@@ -714,20 +725,23 @@
 +    for (i = 1; i < pw64_level_players; i++) {
 +        pw64_results_swap(i);
 +        pw64_results_player = i;
++        pw64_results_full(i, TRUE); // player i's own view behind its tally
 +        resultInit(1);
 +        while (resultMenuChoose(1) == 0) {
-+            pw64_results_world(D_80362690);
++            pw64_results_world(D_80362690, i);
 +            resultDrawTally(1);
 +            uvGfxEnd();
 +        }
++        pw64_results_full(i, FALSE);
 +        pw64_results_player = 0;
 +        pw64_results_swap(i);
 +    }
 +}
 +
 +// PW64 split-screen: gameUpdateStateResults once every player is done
-+// (scores already taken at each finish): both views keep running behind
-+// player 1's tally; "Next" shows the others' (pw64_results_other_players).
++// (scores already taken at each finish): both views run until the tally,
++// then player 1's full screen behind it; "Next" shows the others' tallies
++// over their own views (pw64_results_other_players).
 +static s32 pw64_results_split(Unk80362690* arg0) {
 +    Unk80362690_Unk0* p = &arg0->unkC[0];
 +    s32 var_v1;
@@ -737,7 +751,7 @@
 +
 +    dur = ((p->unk7A == 0) && (p->unk79 != 0)) ? 1.0f : 4.0f;
 +    while (t < dur) {
-+        pw64_results_world(arg0);
++        pw64_results_world(arg0, -1);
 +        func_80313D74();
 +        uvGfxEnd();
 +        t += D_8034F854;
@@ -751,9 +765,13 @@
 +        sPw64Done[i] = FALSE; // no more "FINISHED"
 +    }
 +    pw64_player_switch(0);
++    // From the tally on, player 1's view is full screen (also for its
++    // replay, func_8032C540, which draws camera 0 only); func_802ECE94 ->
++    // pw64_leave_players restores the menus' view, a retry re-splits.
++    pw64_results_full(0, TRUE);
 +    resultInit(1);
 +    while ((var_v1 = resultMenuChoose(1)) == 0) {
-+        pw64_results_world(arg0);
++        pw64_results_world(arg0, 0);
 +        resultDrawTally(1);
 +        if (gCurrentMusicId != BGM_RESULTS) {
 +            uvEventPost(0x12, 0);
