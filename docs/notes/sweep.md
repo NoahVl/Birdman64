@@ -351,3 +351,8 @@ Gotcha for concurrent runs: run pw64 with a scratch **cwd** (its own `tmp/`), `P
 absolute — repo `tmp/frame_*.png` gets clobbered by concurrent runs; and wait for the exe
 (not the `cargo run` wrapper) to exit before moving frames.
 
+Determinism (copied exe, `PW64_DATA_DIR` per run, `PW64_NO_AUDIO=1`): same script twice
+is NOT bit-identical. sp pair: frame 600 ~0.05% px differ (mad ~0.07), 1200 identical,
+1800+ diverge to 15-38% px; throttled pair same shape (1200 identical, 1800 0.3%, then 16-31%).
+ss pair diverges from frame 100. Likely a thread-timing nondeterminism somewhere, not throttling.
+
