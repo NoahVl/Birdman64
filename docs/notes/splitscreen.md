@@ -80,7 +80,16 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   objective loader returns early). No time checks/timer/penalty texts/save; fuel topped up per
   frame. A player's end → crash pose + white fade, frozen 1.6 s, `pw64_free_respawn`: vehicle
   EnterLeave (in-place reset to db_getstart) + crash latches + P2 offset; a landing respawns at
-  its own sequence's white step (unk7C 3). Pause: P1 only (any time).
+  its own sequence's white step (unk7C 3).
+- **Pause** (`pw64_pause_player`/`pw64_pause_menu`): any player's Start pauses everyone (not
+  in their own landing/crash sequence unless finished or in free flight); the menu runs with
+  the pauser live, so their pad (PW64_CONT) drives it; the choice runs with P1 live. Split
+  menu = Continue/Quit (replay_screen.c.patch): "Check map" reloads level + task (P1's
+  objectives only, others' copies freed), so it's dropped, as is P1's "Check photos".
+- **P2 start spot** (`pw64_offset_start`): ground starts (start ≤ 3 m above ground) take the
+  first of right/left/back/forward at 10 m then 5 m that `db_getgnd` finds unblocked, not
+  water/sea and flat (5 probes, 2 m apart, within 0.5 m of the start's ground); air starts
+  keep 10 m right. a:rb:1 (pier): 10 m right was water, P2 crashed = "FINISHED" at once.
 - **Collisions** (game.c.patch `pw64_collide_*`): `pw64_split_collide` latched at test setup;
   once per frame after both vehicle updates, sphere test on the vehicles' world matrices
   (radius 4 m glider, 3 gyro, 2.5 birdman, 1 rocket belt/hopper; P2 starts 10 m away), skipped
@@ -121,15 +130,12 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   code_B6580.c:24, code_BA190.c:235, skydiving.c:369.
 - **Free flight:** landing pads stay (radar shows the landing point); event 0x12 from
   crash effects reaches both players' sound handlers; respawn audio unverified.
-- **Pause:** P2 can't pause (P1 still can once finished, to quit). "Check map"
-  (`func_8032CC44`: taskDeinitLevel + reload) is untested in split. Never run
-  split-screen in attract/demo playback (single stream).
+- Never run split-screen in attract/demo playback (single stream).
 - **Results:** the replay draws only P1's (top) view; the bottom keeps its last frame.
   P2's results aren't stored anywhere past the session (no save slot).
 - Hopper fall-over in split: P2 waits in state 9 (get-up) for its 7 s timeout (camera
   follow-distance check never met), P1 gets up at once. A test-start fall-over faulted.
-- a:rb:1: P2 is "FINISHED" at once (its 10 m offset start ends its test), collisions or not.
-- Ground starts: P2's offset keeps P1's ground height. Widescreen/fill-screen + split
+- Widescreen/fill-screen + split
   untested (the view scissor may fight the renderer's Hor+ extension). Cockpit views that
   hide their own pilot dobj hide it for the other view too (dobj state is global).
 

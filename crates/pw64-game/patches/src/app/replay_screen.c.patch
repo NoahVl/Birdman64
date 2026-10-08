@@ -8,7 +8,30 @@
  
  #if defined(VERSION_JP)
  #define CONTROLLER_MSG_LEN 0x14
-@@ -511,7 +512,7 @@ void func_8032D51C(s32 fadeoutType) {
+@@ -371,7 +372,11 @@ s32 func_8032CF28(Unk80362690* arg0) {
+     hud->renderFlags = HUD_RENDER_DISABLE;
+     sp40 = sp6C->veh == VEHICLE_HANG_GLIDER &&
+            ((sp6C->test == 0 && sp6C->cls == CLASS_A) || (sp6C->test == 1 && sp6C->cls == CLASS_B) || (sp6C->test == 2 && sp6C->cls == CLASS_PILOT));
+-    if (sp6C->unk8 != 0 || (sp6C->veh == VEHICLE_SKY_DIVING && ((BirdmanData*)sp6C->vehicleData)->unk25C.z == 1 /*.0f*/)) {
++    // PW64 split-screen: Continue / Quit only. "Check map" reloads the level
++    // and task (taskDeinitLevel + taskLoad: player 1's objectives only, the
++    // other players' copies freed); photos are player 1's alone.
++    sp40 = sp40 && (pw64_level_players < 2);
++    if (sp6C->unk8 != 0 || (sp6C->veh == VEHICLE_SKY_DIVING && ((BirdmanData*)sp6C->vehicleData)->unk25C.z == 1 /*.0f*/) || (pw64_level_players > 1)) {
+         menuCreateItems(99, 72, 6, 1.0f, 1.0f, sSkyDivingItems, 2);
+         var_s0 = 0x38;
+     } else if (sp40 != 0) {
+@@ -406,7 +411,8 @@ s32 func_8032CF28(Unk80362690* arg0) {
+     if (sp40 == 0 && var_s1 == 2) {
+         var_s1 = 3;
+     }
+-    if ((sp6C->unk8 != 0) || ((sp6C->veh == VEHICLE_SKY_DIVING) && (((BirdmanData*)sp6C->vehicleData)->unk25C.z == 1 /*.0f*/))) {
++    if ((sp6C->unk8 != 0) || ((sp6C->veh == VEHICLE_SKY_DIVING) && (((BirdmanData*)sp6C->vehicleData)->unk25C.z == 1 /*.0f*/)) ||
++        (pw64_level_players > 1)) { // PW64 split-screen: Continue / Quit
+         if (var_s1 == 0) {
+             var_s1 = 0;
+         }
+@@ -511,7 +517,7 @@ void func_8032D51C(s32 fadeoutType) {
          uvVtxEndPoly();
          func_803141E4();
          uvGfxEnd();

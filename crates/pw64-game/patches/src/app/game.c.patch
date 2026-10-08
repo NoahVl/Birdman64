@@ -4,6 +4,7 @@
  #include "app/snap.h"
  #include "app/snd.h"
 +#include "app/smoke.h" // PW64: pilot collisions (gyrocopter smoke)
++#include "app/code_66F70.h" // PW64: db_getgnd (player 2's ground start)
  #include "app/test_menu.h"
 @@ -45,9 +45,11 @@
  
@@ -260,13 +261,82 @@
      return GAME_STATE_TEST_OVERVIEW;
  }
  
++// PW64 split-screen: ground under `to` (db_getgnd down probe; `from` != `to`
++// also tests the segment between them for walls/sea). FALSE when blocked,
++// no ground (open sea) or the ground is water.
++static s32 pw64_start_ground(Vec3F* from, Vec3F* to, f32* gnd) {
++    s32 state = 1; // above the ground
++    s32 surf = -1;
++    Vec3F norm;
++
++    if (db_getgnd(from, to, &state, &surf, gnd, &norm) != 0) {
++        return FALSE;
++    }
++    return (surf != -1) && !func_802DC8E4(surf);
++}
++
++// PW64 split-screen: a spot for a ground start at `to`: reachable from
++// `from`, and solid ground within 0.5 m of `gnd0` under it and 2 m around
++// it (a wall top only 1-2 m wide passes a single probe; the pilot then
++// slid off it and was penalised for the fall).
++static s32 pw64_start_spot(Vec3F* from, Vec3F* to, f32 gnd0, f32* gnd) {
++    static const f32 ring[4][2] = { { 2.0f, 0.0f }, { -2.0f, 0.0f }, { 0.0f, 2.0f }, { 0.0f, -2.0f } };
++    Vec3F p;
++    f32 g;
++    s32 k;
++
++    if (!pw64_start_ground(from, to, gnd) || (FABS(*gnd - gnd0) >= 0.5f)) {
++        return FALSE;
++    }
++    for (k = 0; k < 4; k++) {
++        p.x = to->x + ring[k][0];
++        p.y = to->y + ring[k][1];
++        p.z = to->z;
++        if (!pw64_start_ground(&p, &p, &g) || (FABS(g - gnd0) >= 0.5f)) {
++            return FALSE;
++        }
++    }
++    return TRUE;
++}
++
 +// PW64 split-screen: player i (live, i > 0) starts at player 1's start
 +// point, 10 m further along its right axis (vehMtx: the vehicle's pose,
-+// just set to the start by its EnterLeave).
++// just set to the start by its EnterLeave). A ground start (on or just
++// above solid ground) instead takes the first spot, right/left/back/
++// forward at 10 m then 5 m, that pw64_start_spot accepts, at the same
++// height above its ground: a:rb:1 starts on a pier, 10 m right is over the
++// water and player 2 fell in and crashed (test over) at once.
 +static void pw64_offset_start(s32 i, Mtx4F* vehMtx) {
++    static const f32 dirs[4][2] = { { 1.0f, 0.0f }, { -1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, 1.0f } };
 +    Mtx4F start;
++    Vec3F from;
++    Vec3F to;
++    f32 gnd0;
++    f32 gnd;
++    f32 d;
++    s32 k;
 +
 +    uvMat4Copy(&start, vehMtx);
++    from.x = vehMtx->m[3][0];
++    from.y = vehMtx->m[3][1];
++    from.z = vehMtx->m[3][2] + 1.0f;
++    if (pw64_start_ground(&from, &from, &gnd0) && ((vehMtx->m[3][2] - gnd0) < 3.0f)) {
++        for (d = 10.0f * i; d > 1.0f; d -= 5.0f * i) {
++            for (k = 0; k < 4; k++) {
++                to.x = from.x + d * (dirs[k][0] * vehMtx->m[0][0] + dirs[k][1] * vehMtx->m[1][0]);
++                to.y = from.y + d * (dirs[k][0] * vehMtx->m[0][1] + dirs[k][1] * vehMtx->m[1][1]);
++                to.z = from.z;
++                if (pw64_start_spot(&from, &to, gnd0, &gnd)) {
++                    start.m[3][0] = to.x;
++                    start.m[3][1] = to.y;
++                    start.m[3][2] = vehMtx->m[3][2] + (gnd - gnd0);
++                    func_802EDDEC(&start);
++                    return;
++                }
++            }
++        }
++        PW64_LOGF("split-screen: no free ground start spot, player", i);
++    }
 +    start.m[3][0] += 10.0f * i * start.m[0][0];
 +    start.m[3][1] += 10.0f * i * start.m[0][1];
 +    start.m[3][2] += 10.0f * i * start.m[0][2];
@@ -510,6 +580,41 @@
 +        }
 +    }
 +    return TRUE;
++}
++
++// PW64 split-screen: the player whose Start opens the pause menu this
++// frame, or -1 (player 1 first). Any player's Start pauses the game for
++// everyone; not during that player's own landing/crash sequence (unkA 3/4,
++// as for one player), except once finished (to quit while the others fly)
++// and always in free flight. Read with that player live: PW64_CONT maps
++// pad 0 to the live player's pad.
++static s32 pw64_pause_player(Unk80362690* arg0, s32 freeFlight) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    s32 who = -1;
++    s32 i;
++
++    for (i = 0; (i < pw64_level_players) && (who < 0); i++) {
++        pw64_player_switch(i);
++        if ((demoButtonPress(0, START_BUTTON) != 0) && (demoButtonCheck(0, A_BUTTON) == 0) &&
++            (((p->unkA != 3) && (p->unkA != 4)) || sPw64Done[i] || freeFlight)) {
++            who = i;
++        }
++    }
++    pw64_player_switch(0);
++    return who;
++}
++
++// PW64 split-screen: the pause menu (func_8032CF28) with the player who
++// opened it live: their pad navigates it (PW64_CONT) and it draws over
++// their view. Its choice is then carried out with player 1 live, as for
++// one player (Quit's func_802ECE94 tears down every player).
++static s32 pw64_pause_menu(Unk80362690* arg0, s32 who) {
++    s32 choice;
++
++    pw64_player_switch(who);
++    choice = func_8032CF28(arg0);
++    pw64_player_switch(0);
++    return choice;
 +}
 +
 +// PW64 split-screen: gameUpdateStateTestUpdate's time checks, per player
@@ -760,6 +865,7 @@
 +    s32 pw64I;     // PW64 split-screen: player loop index
 +    s32 pw64Saved; // PW64 split-screen: gameState before player pw64I
 +    s32 pw64Free;  // PW64 free flight this frame
++    s32 pw64Pauser; // PW64 split-screen: player who opened the pause menu
  
      sp6C = &arg0->unkC[arg0->unk9C];
      gameState = GAME_STATE_TEST_UPDATE;
@@ -843,15 +949,22 @@
      uvGfxEnd();
      func_80313D74();
 +    pw64Free = pw64_free_flight; // PW64: Quit below clears the flag
++    // PW64 split-screen: any player's Start (pw64_pause_player checks who may)
++    pw64Pauser = (pw64_level_players > 1) ? pw64_pause_player(arg0, pw64Free) : 0;
      // pause menu
-     if ((demoButtonPress(arg0->unk9C, START_BUTTON) != 0) && (demoButtonCheck(arg0->unk9C, A_BUTTON) == 0)) {
+-    if ((demoButtonPress(arg0->unk9C, START_BUTTON) != 0) && (demoButtonCheck(arg0->unk9C, A_BUTTON) == 0)) {
 -        if ((sp6C->unkA != 3) && (sp6C->unkA != 4)) {
-+        // PW64 split-screen: a finished player 1 can still pause (to quit
-+        // while the others fly); in free flight player 1 always can.
-+        if (((sp6C->unkA != 3) && (sp6C->unkA != 4)) || pw64_player_finished() || pw64Free) {
++    if ((pw64_level_players > 1) ? (pw64Pauser >= 0)
++                                 : ((demoButtonPress(arg0->unk9C, START_BUTTON) != 0) && (demoButtonCheck(arg0->unk9C, A_BUTTON) == 0))) {
++        if (((sp6C->unkA != 3) && (sp6C->unkA != 4)) || (pw64_level_players > 1)) {
              sp40 = (GyrocopterData*)sp6C->vehicleData;
              if (sp6C->veh == VEHICLE_GYROCOPTER) {
                  sp4C = sp40->usingFuel;
+@@ -965,3 +1591,3 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
+             sndSetMusicState(MUS_STATE_PAUSE_MENU);
+
+-            switch (func_8032CF28(arg0)) {
++            switch (pw64_pause_menu(arg0, pw64Pauser)) { // PW64: func_8032CF28, pauser live
 @@ -1005,6 +1589,12 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
              }
          }
