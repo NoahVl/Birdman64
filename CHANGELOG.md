@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-08
+
+### Fixed
+
+- Linux: on systems without a file chooser (no xdg-desktop-portal, zenity or
+  kdialog) the game no longer quits on first start. The window now asks for
+  the ROM itself: drag the file onto it, or copy it next to the AppImage and
+  choose Check again.
+- Linux AppImage: no longer crashes at start on systems without
+  libxkbcommon-x11; the AppImage carries a fallback copy.
+
 ## [1.0.0] - 2026-10-03
 
 First public release.
@@ -42,5 +53,6 @@ First public release.
   tar.gz, with checksums and build provenance attestations.
 - `--version`, and crash reports written to `crash.log` in the data folder.
 
-[Unreleased]: https://github.com/NoahVl/Birdman64/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/NoahVl/Birdman64/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/NoahVl/Birdman64/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/NoahVl/Birdman64/releases/tag/v1.0.0
