@@ -114,6 +114,10 @@ enum Row {
     Bind(Kind, usize),
     /// Reset one input kind to its defaults (Controls page).
     Reset(Kind),
+    /// Controls: capture the next pad / BLE press (or any key) as player 2's
+    /// input ("Assign player 2…", directly under the Player-2 controller
+    /// row). Greyed while the staged Split value is off.
+    P2Assign,
     /// Main: back to the game (closes the screen, D2 auto-save applies).
     Resume,
     /// Main: open the Graphics page.
@@ -238,6 +242,14 @@ struct Capture {
     kind: Kind,
     slot: usize,
     name: &'static str,
+    started: Instant,
+}
+
+/// A player-2 assignment capture in progress (`Overlay::p2_capture`, the
+/// "Assign player 2" row): when it started (it times out like a Bind
+/// capture). What to assign arrives via `input::take_captured_source` (pad /
+/// BLE press) or `on_key` (any key but Escape → keyboard).
+struct P2Capture {
     started: Instant,
 }
 
@@ -372,6 +384,9 @@ pub struct Overlay {
     monitor_hz: Option<u32>,
     /// A binding capture in progress (`None`: idle).
     capture: Option<Capture>,
+    /// A player-2 assignment capture in progress ("Assign player 2", None:
+    /// idle).
+    p2_capture: Option<P2Capture>,
     /// Red line for a rejected key ("reserved") or a timed-out pad capture.
     capture_error: Option<String>,
     /// Window scale factor (physical px per egui point) times the UI zoom
@@ -465,6 +480,7 @@ impl Overlay {
             restart_error: None,
             monitor_hz: None,
             capture: None,
+            p2_capture: None,
             capture_error: None,
             ppp: 1.0,
             events: Vec::new(),
@@ -589,6 +605,7 @@ impl Overlay {
         // A pad capture still armed (the pad Select that closed the overlay)
         // must not outlive it.
         self.end_capture();
+        self.end_p2_capture();
         // Closing keeps what was applied: the countdown has nothing to revert
         // to once the overlay stops redrawing.
         self.revert = None;
@@ -771,6 +788,63 @@ impl Overlay {
         }
     }
 
+    /// The player-2 assignment poll + timeout, each overlay frame (the
+    /// keyboard path is driven by `on_key` instead).
+    fn poll_p2_capture(&mut self) {
+        let Some(cap) = &self.p2_capture else { return };
+        if let Some(p2) = input::take_captured_source() {
+            self.apply_p2(p2);
+            self.end_p2_capture();
+        } else if cap.started.elapsed() >= CAPTURE_TIMEOUT {
+            // Ended first (it clears the red line), then the message.
+            self.end_p2_capture();
+            self.capture_error = Some("No button pressed. Select the row to try again.".into());
+        }
+    }
+
+    /// Ends the running player-2 assignment (done, cancelled, or the overlay
+    /// closed): disarms the source capture and re-syncs the pad edge state,
+    /// so the button that ended the capture doesn't re-confirm the row.
+    fn end_p2_capture(&mut self) {
+        if self.p2_capture.take().is_some() {
+            input::cancel_source_capture();
+            self.capture_error = None;
+            self.prev_pad = input::overlay_pad();
+        }
+    }
+
+    /// Applies a captured player-2 input exactly like cycling the
+    /// "Player 2 controller" row: the choices are restaged, the new value is
+    /// selected (so that row shows it) and — while split-screen runs — the
+    /// routing changes at once (`staged_settings` saves it either way).
+    /// The captured pad was connected a press ago; if it dropped since, it
+    /// keeps its own row, so the screen shows what was applied.
+    fn apply_p2(&mut self, p2: input::P2Input) {
+        let saved_p2 = input::p2_input().unwrap_or_else(input::resolve_p2);
+        self.p2_choices = p2_choices(&input::connected_pad_names(), &saved_p2);
+        let sel = self.p2_choices.iter().position(|c| c.input == p2);
+        self.p2_sel = match sel {
+            Some(i) => i,
+            None => {
+                let label = match &p2 {
+                    input::P2Input::Gamepad(Some(n)) => format!("{n} (not connected)"),
+                    input::P2Input::Keyboard => "Keyboard".into(),
+                    input::P2Input::Ble => "Switch 2 (Bluetooth)".into(),
+                    input::P2Input::Gamepad(None) => "All gamepads".into(),
+                };
+                self.p2_choices.push(P2Choice {
+                    input: p2.clone(),
+                    label,
+                });
+                self.p2_choices.len() - 1
+            }
+        };
+        // Live: while split-screen runs, the routing changes at once.
+        if input::splitscreen_enabled() {
+            input::set_p2(Some(p2));
+        }
+    }
+
     /// The next key of a keyboard capture (`on_key` routed it here).
     /// Reserved keys are rejected with a red line (the settings key never
     /// reaches the game, and F11 fullscreens instead of reaching it); any
@@ -859,6 +933,18 @@ impl Overlay {
             }
             return;
         }
+        // The "Assign player 2" capture owns the keyboard: Escape cancels,
+        // any other key assigns the keyboard to player 2.
+        if self.p2_capture.is_some() {
+            if code == KeyCode::Escape {
+                self.end_p2_capture();
+            } else if !repeat && !matches!(code, KeyCode::F10 | KeyCode::F11) {
+                // F10/F11 are the overlay/fullscreen hotkeys, not a choice.
+                self.apply_p2(input::P2Input::Keyboard);
+                self.end_p2_capture();
+            }
+            return;
+        }
         match code {
             KeyCode::ArrowUp => self.move_sel(-1),
             KeyCode::ArrowDown => self.move_sel(1),
@@ -903,6 +989,7 @@ impl Overlay {
     /// live settings. Returns false once the overlay wants to close.
     pub fn render(&mut self, gpu: &mut Gpu, view: &wgpu::TextureView) -> bool {
         self.poll_capture();
+        self.poll_p2_capture();
         self.quit_check();
         self.pad_nav();
         self.running_mode = gpu.display_mode;
@@ -1147,6 +1234,7 @@ impl Overlay {
                 // 2's controller is live while it runs.
                 rows.push(Row::Opt(Opt::Split));
                 rows.push(Row::Opt(Opt::P2Input));
+                rows.push(Row::P2Assign);
                 rows.push(Row::Opt(Opt::Collisions));
                 rows.push(Row::Opt(Opt::SplitLayout));
                 // Switch 2 pads over Bluetooth (experimental), under the
@@ -1326,6 +1414,7 @@ impl Overlay {
                 ui.strong("Split-screen");
                 self.opt_row(ui, at(Row::Opt(Opt::Split)), Opt::Split);
                 self.opt_row(ui, at(Row::Opt(Opt::P2Input)), Opt::P2Input);
+                self.p2_assign_row(ui, at(Row::P2Assign));
                 self.opt_row(ui, at(Row::Opt(Opt::Collisions)), Opt::Collisions);
                 self.opt_row(ui, at(Row::Opt(Opt::SplitLayout)), Opt::SplitLayout);
                 ui.add_space(4.0);
@@ -1372,18 +1461,7 @@ impl Overlay {
         if disabled {
             let (name, value, hint) = self.row_text(o);
             let text = format!("{name}: {value}  {hint}");
-            ui.add_enabled_ui(false, |ui| {
-                let resp = ui.selectable_label(
-                    self.sel == i,
-                    egui::RichText::new(text.trim_end()).size(16.0),
-                );
-                // Hover/clicks on a disabled widget don't fire; the selection
-                // still shows where keyboard/pad navigation is, and still
-                // scrolls into view (U1).
-                if self.sel == i && self.follow_sel {
-                    resp.scroll_to_me(Some(egui::Align::Center));
-                }
-            });
+            self.disabled_row(ui, i, &text);
             return;
         }
         // Restart rows get their value in orange while it differs from the
@@ -1399,6 +1477,38 @@ impl Overlay {
             }
         };
         self.selectable(ui, i, text);
+    }
+
+    /// A disabled row (greyed out): clicks don't act; the selection still
+    /// shows where keyboard/pad navigation is, and still scrolls into view
+    /// (U1).
+    fn disabled_row(&mut self, ui: &mut egui::Ui, i: usize, text: &str) {
+        ui.add_enabled_ui(false, |ui| {
+            let resp = ui.selectable_label(
+                self.sel == i,
+                egui::RichText::new(text.trim_end()).size(16.0),
+            );
+            if self.sel == i && self.follow_sel {
+                resp.scroll_to_me(Some(egui::Align::Center));
+            }
+        });
+    }
+
+    /// The "Assign player 2" row (under the Player-2 controller row): while
+    /// its capture runs, the row says what to press; greyed while the staged
+    /// Split value is off (like the Pilots-collide row).
+    fn p2_assign_row(&mut self, ui: &mut egui::Ui, i: usize) {
+        if self.p2_capture.is_some() {
+            self.text_row(
+                ui,
+                i,
+                "Press any button on player 2's controller (Esc cancels)",
+            );
+        } else if !self.split {
+            self.disabled_row(ui, i, "Assign player 2\u{2026}");
+        } else {
+            self.text_row(ui, i, "Assign player 2\u{2026}");
+        }
     }
 
     /// A plain selectable row (Resume / the sub-page rows / Back): same look
@@ -1700,10 +1810,11 @@ impl Overlay {
         let rows = self.rows();
         // A click (mouse) can land on any row while a capture runs; only a
         // Bind row replaces the capture, everything else ends it first.
-        let capturing = self.capture.is_some();
-        let is_bind = matches!(rows[self.sel], Row::Bind(..));
+        let capturing = self.capture.is_some() || self.p2_capture.is_some();
+        let is_bind = matches!(rows[self.sel], Row::Bind(..) | Row::P2Assign);
         if capturing && !is_bind {
             self.end_capture();
+            self.end_p2_capture();
         }
         // Confirming anything but Quit disarms the Quit row (U3).
         if rows[self.sel] != Row::Quit {
@@ -1754,6 +1865,17 @@ impl Overlay {
                 Kind::Keyboard => input::reset_keyboard(),
                 Kind::Gamepad => input::reset_gamepad(),
             },
+            // "Assign player 2" (split-screen only): arm the source capture —
+            // the next pad / BLE press (or any key) becomes player 2's input.
+            // Re-confirming re-arms it (the 5 s timeout restarts).
+            Row::P2Assign if !self.split => {}
+            Row::P2Assign => {
+                input::start_source_capture();
+                self.capture_error = None;
+                self.p2_capture = Some(P2Capture {
+                    started: Instant::now(),
+                });
+            }
         }
     }
 
@@ -1888,12 +2010,13 @@ impl Overlay {
                     );
                 }
             },
-            // The Controls / Back / Quit / "Open save folder" rows have
-            // nothing to cycle.
+            // The Controls / Back / Quit / "Open save folder" /
+            // "Assign player 2" rows have nothing to cycle.
             Row::Controls
             | Row::Back
             | Row::Bind(..)
             | Row::Reset(..)
+            | Row::P2Assign
             | Row::Quit
             | Row::OpenSaveFolder
             | Row::RestartNow => {}
@@ -2007,7 +2130,7 @@ impl Overlay {
     /// Skipped while a capture runs: the A that arms it must not confirm
     /// again, and a captured button must not navigate.
     fn pad_nav(&mut self) {
-        if self.capture.is_some() {
+        if self.capture.is_some() || self.p2_capture.is_some() {
             return;
         }
         let pad = input::overlay_pad();
@@ -2521,6 +2644,10 @@ fn help(row: Row) -> &'static str {
         },
         Row::Bind(..) => "Press a key or button to bind it to this slot.",
         Row::Reset(..) => "Restores this section's default keys and buttons.",
+        Row::P2Assign => {
+            "Press a button on player 2's controller (or any key) to assign it to player 2. \
+             Esc cancels."
+        }
         Row::Resume => "Back to the game.",
         Row::Graphics => "Fullscreen, widescreen, frame rate and picture quality.",
         Row::ResetGraphics => "Puts every option on this page back to its default.",
@@ -3151,7 +3278,7 @@ mod tests {
         o.confirm();
         assert_eq!(o.page, Page::Controls);
         let rows = o.rows();
-        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 4 + 1 + 1);
+        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 4 + 1 + 1 + 1);
         assert_eq!(rows[0], Row::Bind(Kind::Keyboard, 0));
         // The unused keyboard slots (L, the D-pad) moved last, after the
         // stick rows.
@@ -3163,14 +3290,16 @@ mod tests {
         assert_eq!(rows[25], Row::Bind(Kind::Gamepad, 3));
         assert_eq!(rows[29], Row::Bind(Kind::Gamepad, 10));
         assert_eq!(rows[30], Row::Reset(Kind::Gamepad));
-        // The split-screen section sits above the Bluetooth row (SS-UI).
+        // The split-screen section sits above the Bluetooth row (SS-UI);
+        // "Assign player 2" sits directly under the Player-2 controller row.
         assert_eq!(rows[31], Row::Opt(Opt::Split));
         assert_eq!(rows[32], Row::Opt(Opt::P2Input));
-        assert_eq!(rows[33], Row::Opt(Opt::Collisions));
-        assert_eq!(rows[34], Row::Opt(Opt::SplitLayout));
-        assert_eq!(rows[35], Row::Opt(Opt::Ble));
-        assert_eq!(rows[36], Row::Back);
-        o.sel = 36;
+        assert_eq!(rows[33], Row::P2Assign);
+        assert_eq!(rows[34], Row::Opt(Opt::Collisions));
+        assert_eq!(rows[35], Row::Opt(Opt::SplitLayout));
+        assert_eq!(rows[36], Row::Opt(Opt::Ble));
+        assert_eq!(rows[37], Row::Back);
+        o.sel = 37;
         o.confirm();
         assert_eq!(o.page, Page::Main);
         assert_eq!(o.rows()[o.sel], Row::Controls);
@@ -3196,12 +3325,14 @@ mod tests {
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Collisions));
         o.move_sel(-1);
+        assert_eq!(o.rows()[o.sel], Row::P2Assign);
+        o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::P2Input));
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Split));
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Reset(Kind::Gamepad));
-        for _ in 0..5 {
+        for _ in 0..6 {
             o.move_sel(1);
         }
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));
@@ -3341,6 +3472,63 @@ mod tests {
         );
         o.confirm();
         assert_eq!(changed_since(o.staged_settings(), &snap).split_layout, None);
+    }
+
+    /// SS-UI: the "Assign player 2" row. It sits directly under the
+    /// Player-2 controller row, is disabled while the staged Split value is
+    /// off (confirm arms nothing), confirming arms the source capture, any
+    /// key but Escape assigns the keyboard, a captured pad keeps its own
+    /// row, and a pad capture times out after 5 s.
+    #[test]
+    fn p2_assign_state_machine() {
+        let mut o = Overlay::new();
+        o.page = Page::Controls;
+        let pos = |o: &Overlay, r: Row| o.rows().iter().position(|&x| x == r).unwrap();
+        assert_eq!(
+            pos(&o, Row::P2Assign),
+            pos(&o, Row::Opt(Opt::P2Input)) + 1,
+            "directly under the Player-2 controller row"
+        );
+        // Split-screen off: the row is disabled, confirming arms nothing.
+        o.split = false;
+        o.sel = pos(&o, Row::P2Assign);
+        o.confirm();
+        assert!(o.p2_capture.is_none());
+        assert!(input::take_captured_source().is_none());
+        // Split-screen on: confirm arms the source capture; Escape cancels.
+        o.split = true;
+        o.confirm();
+        assert!(o.p2_capture.is_some());
+        o.on_key(KeyCode::Escape, false, true);
+        assert!(o.p2_capture.is_none());
+        // Arm again: a key (not Escape) assigns the keyboard — the
+        // Player-2 controller row shows it and the staged value saves.
+        let snap = o.staged_settings();
+        o.confirm();
+        o.on_key(KeyCode::KeyK, false, true);
+        assert!(o.p2_capture.is_none());
+        assert_eq!(o.p2_choices[o.p2_sel].input, input::P2Input::Keyboard);
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).p2_input.as_deref(),
+            Some("keyboard")
+        );
+        // A captured pad whose name no pad matches (it dropped between the
+        // press and the apply) keeps its own row, like a saved one would.
+        let snap2 = o.staged_settings();
+        o.apply_p2(input::P2Input::Gamepad(Some("Pad B".into())));
+        assert_eq!(o.p2_choices[o.p2_sel].label, "Pad B (not connected)");
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap2).p2_input.as_deref(),
+            Some("gamepad:Pad B")
+        );
+        // A pad capture times out after 5 s, with the red line.
+        o.confirm();
+        o.p2_capture = Some(P2Capture {
+            started: Instant::now() - CAPTURE_TIMEOUT,
+        });
+        o.poll_p2_capture();
+        assert!(o.p2_capture.is_none());
+        assert!(o.capture_error.is_some());
     }
 
     /// The status lines under the BLE row.

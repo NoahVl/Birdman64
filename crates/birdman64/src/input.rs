@@ -1604,14 +1604,23 @@ pub fn spawn() {
                         }
                         // Pad capture (the settings screen): the press never
                         // reaches the game — it is stored for the overlay and
-                        // capture disarms itself.
+                        // capture disarms itself. Source capture ("Assign
+                        // player 2") stores the pad itself, by name.
                         gilrs::EventType::ButtonPressed(b, _)
-                            if PAD_CAPTURE.load(Ordering::Relaxed)
+                            if (PAD_CAPTURE.load(Ordering::Relaxed)
+                                || SOURCE_CAPTURE.load(Ordering::Relaxed))
                                 && !matches!(b, Button::Unknown | Button::Mode)
                                 && b != settings_btn =>
                         {
-                            *CAPTURED_BUTTON.lock().unwrap() = Some(b);
-                            PAD_CAPTURE.store(false, Ordering::Relaxed);
+                            if SOURCE_CAPTURE.load(Ordering::Relaxed) {
+                                let name = gilrs.gamepad(ev.id).name().to_string();
+                                *CAPTURED_SOURCE.lock().unwrap() =
+                                    Some(P2Input::Gamepad(Some(name)));
+                                SOURCE_CAPTURE.store(false, Ordering::Relaxed);
+                            } else {
+                                *CAPTURED_BUTTON.lock().unwrap() = Some(b);
+                                PAD_CAPTURE.store(false, Ordering::Relaxed);
+                            }
                         }
                         // Any other press: that pad becomes the active one
                         // (last used wins; `active_pad` names its buttons).
@@ -1652,7 +1661,15 @@ pub fn spawn() {
                     }
                 }
                 let mut s = SOURCES.lock().unwrap();
-                if s.gamepads != gamepads || s.ble != ble || s.nav != nav {
+                // Source capture ("Assign player 2"): a BLE button edge
+                // against the published snapshot becomes player 2 = BLE, and
+                // the press vanishes (a held button syncs up on the next
+                // poll — no fresh press for the game). A press + release
+                // between two polls is not sampled.
+                if SOURCE_CAPTURE.load(Ordering::Relaxed) && ble.button & !s.ble.button != 0 {
+                    *CAPTURED_SOURCE.lock().unwrap() = Some(P2Input::Ble);
+                    SOURCE_CAPTURE.store(false, Ordering::Relaxed);
+                } else if s.gamepads != gamepads || s.ble != ble || s.nav != nav {
                     s.gamepads = gamepads;
                     s.ble = ble;
                     s.nav = nav;
@@ -1849,6 +1866,35 @@ pub fn take_captured_button() -> Option<Button> {
 pub fn cancel_pad_capture() {
     PAD_CAPTURE.store(false, Ordering::Relaxed);
     *CAPTURED_BUTTON.lock().unwrap() = None;
+}
+
+/// Source capture (the settings screen's "Assign player 2" row): while
+/// armed, the input thread stores the next pressed pad here as the
+/// [`P2Input`] it should become (a gilrs pad by name, a BLE pad as
+/// `P2Input::Ble`) instead of routing the press to the game. Keyboard keys
+/// are not captured here (the overlay sees those itself).
+static SOURCE_CAPTURE: AtomicBool = AtomicBool::new(false);
+static CAPTURED_SOURCE: Mutex<Option<P2Input>> = Mutex::new(None);
+
+/// Arms source capture: the next pressed pad (`Unknown`, `Mode` and the
+/// settings trigger never count) is stored for `take_captured_source`.
+pub fn start_source_capture() {
+    *CAPTURED_SOURCE.lock().unwrap() = None;
+    SOURCE_CAPTURE.store(true, Ordering::Relaxed);
+}
+
+/// Takes the captured player-2 source since the last take (None = still
+/// waiting). Reads the stored value whether or not capture is still armed:
+/// the input thread disarms itself when it stores one.
+pub fn take_captured_source() -> Option<P2Input> {
+    CAPTURED_SOURCE.lock().unwrap().take()
+}
+
+/// Disarms source capture and drops anything stored (the overlay closed or
+/// the capture was cancelled).
+pub fn cancel_source_capture() {
+    SOURCE_CAPTURE.store(false, Ordering::Relaxed);
+    *CAPTURED_SOURCE.lock().unwrap() = None;
 }
 
 #[cfg(test)]
@@ -2440,6 +2486,26 @@ mod tests {
         start_pad_capture();
         cancel_pad_capture();
         assert!(take_captured_button().is_none(), "cancel drops");
+    }
+
+    /// Source capture ("Assign player 2") state machine: arm, store, take
+    /// once; cancel drops.
+    #[test]
+    fn source_capture_flow() {
+        assert!(take_captured_source().is_none(), "nothing armed");
+        cancel_source_capture(); // a stray cancel is fine
+        start_source_capture();
+        // The input thread's arm of the store: direct stand-in for the
+        // event loop (the loop itself needs a real gilrs / BLE pad).
+        *CAPTURED_SOURCE.lock().unwrap() = Some(P2Input::Gamepad(Some("Pad B".into())));
+        SOURCE_CAPTURE.store(false, Ordering::Relaxed);
+        assert_eq!(
+            take_captured_source(),
+            Some(P2Input::Gamepad(Some("Pad B".into())))
+        );
+        assert!(take_captured_source().is_none(), "taken once");
+        cancel_source_capture();
+        assert!(take_captured_source().is_none(), "cancel drops");
     }
 
     /// Test-only `Sources`: keyboard input as `held_keys` (Space = A),
