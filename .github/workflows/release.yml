@@ -274,6 +274,48 @@ jobs:
           # kernel that mounts squashfs.
           tmp/appimagetool --comp zstd appdir Birdman64-x86_64.AppImage
 
+      # The AppImage catalog's test: a virtual X display (no GPU), no ROM and
+      # no file dialog (no portal, zenity or kdialog). The AppImage must open
+      # a window (the in-window ROM screen, rom_screen.rs) and keep running;
+      # it used to exit with instructions on stderr instead.
+      - name: AppImage opens a window without a ROM or file dialog
+        env:
+          PW64_NO_AUDIO: '1'
+          PW64_NO_INPUT: '1'
+          APPIMAGE_EXTRACT_AND_RUN: '1' # no FUSE needed
+        run: |
+          sudo apt-get install -y xvfb xdotool
+          if command -v zenity || command -v kdialog; then
+            echo "a file dialog tool is installed; this test needs none"; exit 1
+          fi
+          mkdir -p tmp/noromdir && cd tmp/noromdir   # no ROM in the cwd
+          Xvfb :99 -screen 0 1280x800x24 & XPID=$!
+          export DISPLAY=:99
+          sleep 2
+          ../../Birdman64-x86_64.AppImage > ../window-test.log 2>&1 & APID=$!
+          ok=
+          for i in $(seq 1 30); do
+            kill -0 $APID 2>/dev/null || break
+            if xdotool search --onlyvisible --name Birdman64 >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          sleep 3
+          kill -0 $APID 2>/dev/null || ok=   # still running after the window showed
+          import -window root ../window-test.png || true
+          kill $APID $XPID 2>/dev/null || true
+          cat ../window-test.log
+          grep -q "asking for the ROM in the window" ../window-test.log
+          test -n "$ok"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appimage-window-test
+          path: |
+            tmp/window-test.log
+            tmp/window-test.png
+          if-no-files-found: ignore
+
       - name: SHA256SUMS
         run: |
           sha256sum Birdman64-x86_64.AppImage birdman64-linux-x64.tar.gz > SHA256SUMS-linux.txt
