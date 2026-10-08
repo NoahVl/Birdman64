@@ -183,6 +183,9 @@ enum Opt {
     /// Split-screen pilot collisions (Controls page): live from the next
     /// test start (`pw64_game::set_split_collide`, read at each test start).
     Collisions,
+    /// Split-screen view layout, top/bottom or left/right (Controls page):
+    /// live from the next test start (`pw64_game::set_split_layout`).
+    SplitLayout,
 }
 
 /// Frame-rate choices (the running one is added if it's another rate).
@@ -335,6 +338,9 @@ pub struct Overlay {
     /// Staged pilot collisions (live from the next test start, like P2's
     /// controller routing; greyed while the staged Split value is off).
     collisions: bool,
+    /// Staged split-screen layout (live from the next test start, like
+    /// collisions; greyed while the staged Split value is off).
+    split_layout: input::SplitLayout,
     /// The Player-2 controller choices ([`p2_choices`]: all gamepads, one
     /// per connected pad, keyboard, BLE — plus a saved-but-unconnected pad)
     /// and the staged index. Restaged at open.
@@ -424,6 +430,7 @@ impl Overlay {
             saved_restart: None,
             split: running_split,
             collisions: input::split_collisions(),
+            split_layout: input::split_layout(),
             p2_choices: p2,
             p2_sel,
             fps,
@@ -504,6 +511,7 @@ impl Overlay {
         // Pilot collisions (live from the next test start): the flag as it
         // stands (env, file or a live change).
         self.collisions = input::split_collisions();
+        self.split_layout = input::split_layout();
         self.fb = gpu.fb_size_for_scale(self.scale);
         // Display mode (live): stage the running one; Exclusive is left out
         // of the choices when this window can't do it (Wayland).
@@ -1140,6 +1148,7 @@ impl Overlay {
                 rows.push(Row::Opt(Opt::Split));
                 rows.push(Row::Opt(Opt::P2Input));
                 rows.push(Row::Opt(Opt::Collisions));
+                rows.push(Row::Opt(Opt::SplitLayout));
                 // Switch 2 pads over Bluetooth (experimental), under the
                 // controller section.
                 rows.push(Row::Opt(Opt::Ble));
@@ -1318,6 +1327,7 @@ impl Overlay {
                 self.opt_row(ui, at(Row::Opt(Opt::Split)), Opt::Split);
                 self.opt_row(ui, at(Row::Opt(Opt::P2Input)), Opt::P2Input);
                 self.opt_row(ui, at(Row::Opt(Opt::Collisions)), Opt::Collisions);
+                self.opt_row(ui, at(Row::Opt(Opt::SplitLayout)), Opt::SplitLayout);
                 ui.add_space(4.0);
                 self.opt_row(ui, at(Row::Opt(Opt::Ble)), Opt::Ble);
                 // What BLE is doing right now (redrawn every overlay frame).
@@ -1357,7 +1367,8 @@ impl Overlay {
             // V-Sync).
             || (o == Opt::P2Input && !self.split)
             // Pilot collisions only matter in split-screen: same greying.
-            || (o == Opt::Collisions && !self.split);
+            || (o == Opt::Collisions && !self.split)
+            || (o == Opt::SplitLayout && !self.split);
         if disabled {
             let (name, value, hint) = self.row_text(o);
             let text = format!("{name}: {value}  {hint}");
@@ -1585,6 +1596,15 @@ impl Overlay {
             Opt::Collisions => (
                 "Pilots collide",
                 if self.collisions { "On" } else { "Off" }.into(),
+                "",
+            ),
+            Opt::SplitLayout => (
+                "Split layout",
+                match self.split_layout {
+                    input::SplitLayout::TopBottom => "Top / bottom",
+                    input::SplitLayout::LeftRight => "Side by side",
+                }
+                .into(),
                 "",
             ),
         }
@@ -1836,6 +1856,18 @@ impl Overlay {
                     // saves it either way).
                     pw64_game::set_split_collide(self.collisions);
                 }
+                // Same greying as the collisions row.
+                Opt::SplitLayout if !self.split => {}
+                Opt::SplitLayout => {
+                    self.split_layout = match self.split_layout {
+                        input::SplitLayout::TopBottom => input::SplitLayout::LeftRight,
+                        input::SplitLayout::LeftRight => input::SplitLayout::TopBottom,
+                    };
+                    // Live: the game latches the layout at each test start.
+                    pw64_game::set_split_layout(
+                        self.split_layout == input::SplitLayout::LeftRight,
+                    );
+                }
                 Opt::OledDrift => self.oled_drift = !self.oled_drift,
                 Opt::ShowFps => self.show_fps = !self.show_fps,
                 Opt::PauseBackground => self.pause_background = !self.pause_background,
@@ -1962,6 +1994,7 @@ impl Overlay {
             splitscreen_enabled: Some(self.split),
             p2_input: Some(self.p2_choices[self.p2_sel].input.to_config()),
             splitscreen_collisions: Some(self.collisions),
+            split_layout: Some(self.split_layout.to_config()),
             // The rebinding maps as they stand now (empty = defaults, so
             // the sub-table is dropped from the file).
             keyboard: Some(input::keyboard_overrides()),
@@ -2286,6 +2319,7 @@ fn changed_since(s: config::SavedSettings, snap: &config::SavedSettings) -> conf
             s.splitscreen_collisions,
             &snap.splitscreen_collisions,
         ),
+        split_layout: keep(s.split_layout, &snap.split_layout),
         keyboard: keep(s.keyboard, &snap.keyboard),
         gamepad: keep(s.gamepad, &snap.gamepad),
     }
@@ -2479,6 +2513,10 @@ fn help(row: Row) -> &'static str {
             Opt::P2Input => "Which controller player 2 uses. Everything else is player 1.",
             Opt::Collisions => {
                 "On: the two pilots can crash into each other. Applies from the next test."
+            }
+            Opt::SplitLayout => {
+                "Player 1 on top or on the left. Side by side suits a wide screen. Applies \
+                 from the next test."
             }
         },
         Row::Bind(..) => "Press a key or button to bind it to this slot.",
@@ -2947,6 +2985,7 @@ mod tests {
             splitscreen_enabled: Some(true),
             p2_input: Some("keyboard".into()),
             splitscreen_collisions: Some(true),
+            split_layout: Some("left_right"),
             keyboard: Some(
                 [("A".to_string(), "KeyX".to_string())]
                     .into_iter()
@@ -2979,6 +3018,7 @@ mod tests {
             splitscreen_enabled: Some(false),
             p2_input: Some("gamepad".into()),
             splitscreen_collisions: Some(false),
+            split_layout: Some("top_bottom"),
             keyboard: Some(std::collections::BTreeMap::new()),
             gamepad: Some(std::collections::BTreeMap::new()),
         };
@@ -2992,7 +3032,8 @@ mod tests {
              \n[ui]\npause_in_background = false\n\
              \n[input.keyboard]\nA = \"KeyX\"\n\n[input.gamepad]\nA = \"East\"\n\
              \n[input.ble]\nenabled = true\n\
-             \n[splitscreen]\nenabled = true\np2_input = \"keyboard\"\ncollisions = true\n",
+             \n[splitscreen]\nenabled = true\np2_input = \"keyboard\"\ncollisions = true\n\
+             layout = \"left_right\"\n",
         )
         .unwrap();
         config::apply(&mut table, &d, false).unwrap();
@@ -3027,6 +3068,7 @@ mod tests {
         assert!(ss.get("enabled").is_none());
         assert!(ss.get("p2_input").is_none());
         assert!(ss.get("collisions").is_none());
+        assert!(ss.get("layout").is_none());
     }
 
     /// A reverted exclusive resolution is re-staged, so the auto-save does
@@ -3109,7 +3151,7 @@ mod tests {
         o.confirm();
         assert_eq!(o.page, Page::Controls);
         let rows = o.rows();
-        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 3 + 1 + 1);
+        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 4 + 1 + 1);
         assert_eq!(rows[0], Row::Bind(Kind::Keyboard, 0));
         // The unused keyboard slots (L, the D-pad) moved last, after the
         // stick rows.
@@ -3125,9 +3167,10 @@ mod tests {
         assert_eq!(rows[31], Row::Opt(Opt::Split));
         assert_eq!(rows[32], Row::Opt(Opt::P2Input));
         assert_eq!(rows[33], Row::Opt(Opt::Collisions));
-        assert_eq!(rows[34], Row::Opt(Opt::Ble));
-        assert_eq!(rows[35], Row::Back);
-        o.sel = 35;
+        assert_eq!(rows[34], Row::Opt(Opt::SplitLayout));
+        assert_eq!(rows[35], Row::Opt(Opt::Ble));
+        assert_eq!(rows[36], Row::Back);
+        o.sel = 36;
         o.confirm();
         assert_eq!(o.page, Page::Main);
         assert_eq!(o.rows()[o.sel], Row::Controls);
@@ -3149,6 +3192,8 @@ mod tests {
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));
         // Through the split-screen section to the gamepad reset (SS-UI).
         o.move_sel(-1);
+        assert_eq!(o.rows()[o.sel], Row::Opt(Opt::SplitLayout));
+        o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Collisions));
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::P2Input));
@@ -3156,10 +3201,9 @@ mod tests {
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Split));
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Reset(Kind::Gamepad));
-        o.move_sel(1);
-        o.move_sel(1);
-        o.move_sel(1);
-        o.move_sel(1);
+        for _ in 0..5 {
+            o.move_sel(1);
+        }
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));
         let (name, value, hint) = o.row_text(Opt::Ble);
         assert_eq!(
@@ -3282,6 +3326,21 @@ mod tests {
             changed_since(o.staged_settings(), &snap).splitscreen_collisions,
             None
         );
+        // The Split-layout row: same greying, then toggles and saves.
+        o.split = false;
+        o.sel = pos(&o, Row::Opt(Opt::SplitLayout));
+        o.confirm();
+        assert_eq!(o.split_layout, input::SplitLayout::TopBottom);
+        o.split = true;
+        o.confirm();
+        assert_eq!(o.split_layout, input::SplitLayout::LeftRight);
+        assert_eq!(o.row_text(Opt::SplitLayout).1, "Side by side");
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).split_layout,
+            Some("left_right")
+        );
+        o.confirm();
+        assert_eq!(changed_since(o.staged_settings(), &snap).split_layout, None);
     }
 
     /// The status lines under the BLE row.

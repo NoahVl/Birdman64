@@ -213,6 +213,9 @@ pub fn link_args(os: Os) -> Vec<String> {
             "-export:bootproc",
             "-export:pw64_widescreen_aspect,DATA",
             "-export:pw64_fill_screen,DATA",
+            "-export:pw64_split,DATA",
+            "-export:pw64_split_collide,DATA",
+            "-export:pw64_split_layout,DATA",
             "-export:D_802B892C,DATA",
         ]
         .iter()
@@ -685,7 +688,8 @@ pub fn remove_other_keys(out_root: &Path, keep: &Path) {
 /// keeps the -fPIE objects' symbols bound locally).
 const LINUX_VERSION_SCRIPT: &str = "\
 { global: pw64_dll_bind; pw64_dll_abi; pw64_dll_range;
-  bootproc; pw64_widescreen_aspect; pw64_fill_screen; D_802B892C;
+  bootproc; pw64_widescreen_aspect; pw64_fill_screen;
+  pw64_split; pw64_split_collide; pw64_split_layout; D_802B892C;
   local: *; };";
 
 /// Host target of the build ([`Os`] docs: build scripts run on the host).

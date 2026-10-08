@@ -400,6 +400,8 @@ pub fn run_game(
     // Pilot collisions (the game reads it at each test start; the settings
     // row changes it live from there).
     pw64_game::set_split_collide(input::split_collisions());
+    // View layout (latched at each test start; also live from settings).
+    pw64_game::set_split_layout(input::split_layout() == input::SplitLayout::LeftRight);
     os::boot(pw64_game::bootproc, std::ptr::null_mut());
     let cfg = os::RunConfig {
         max_retraces: std::env::var("PW64_MAX_RETRACES")

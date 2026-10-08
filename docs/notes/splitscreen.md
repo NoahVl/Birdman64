@@ -1,7 +1,7 @@
 # Split-screen (2-player local)
 
-Status: two pilots (hang glider, gyrocopter, rocket belt, jumble hopper or birdman) fly the same test (top view = player 1,
-bottom = player 2), each on its own controller and camera, seeing each other. Other
+Status: two pilots (hang glider, gyrocopter, rocket belt, jumble hopper or birdman) fly the same test (top/left view = player 1,
+bottom/right = player 2), each on its own controller and camera, seeing each other. Other
 vehicles fall back to one player. Everything is gated: `pw64_level_players == 1` runs the
 original code paths. Hopper: only the crash head-shake sfx one-shots (`D_8036905C`) are
 per-player; the collision query scratch (`D_80368C00`..) stays shared.
@@ -40,14 +40,20 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   `pw64_task_player_update`; `pw64_task_world_update` once with P1 live (therm, wind, env,
   balls, falco, fire/splash/smoke, env sound). Draw: `func_8034B624` per player under
   switch(i). `taskFrameUpdate` = both parts, original order, when single-player.
-- **Viewports:** `pw64_split_viewport` (camera.c.patch) halves the subscreen (N64 y is
-  bottom-up) and reshapes the camera's clip frustum to the view's aspect (wider: keep x).
+- **Viewports:** `pw64_split_viewport` (camera.c.patch) halves the subscreen top/bottom or
+  left/right (`pw64_split_layout`, `[splitscreen] layout`/`PW64_SPLIT_LAYOUT=tb|lr`, latched
+  into `pw64_split_lr` at test start; 1 px seam; N64 y bottom-up) and reshapes the clip
+  frustum to the shown aspect (wider: keep x). Left/right on a wider output (widescreen or
+  fill): the world channel is tagged WIDE + "PWS" rect outside the HUD bracket and pw64-gfx
+  `split_world_placement` stretches the view from its outer edge to the output edge; the
+  frustum is widened by 120·aspect−150 N64 px to match (not Hor+ uniform: that would
+  off-centre each view). HUD scale = min(view_h/214, view_w/300): left/right fits by width.
 - **HUD per view:** every player's channel keeps the HUD callback (`func_8034B6F8`), so each
   HUD draws for 320×240 inside its own channel pass. `hudMainRender` brackets it with
   `pw64_hud_split_tag` (G_NOOP "PWS": view rect from `D_80261730[pw64_player_cur]`) and the
-  anchor tags are emitted in split too; pw64-gfx lays the subscreen frame out in the view at
-  scale view_h/214 (= an exact miniature vertically, so the right column radar/altimeter/sea
-  level never overlaps), each element at its L/C/R anchor. C-side moves can't work (the 2D
+  anchor tags are emitted in split too; pw64-gfx lays the subscreen frame out in the view
+  (scale: see Viewports; a whole miniature, so columns never overlap), each element at its
+  L/C/R anchor. C-side moves can't work (the 2D
   texrects don't scale; the 0..320 HUD scissor). font.c advanced its sprite-DL offset by the
   message count only: the 2nd flush per frame overwrote P1's text (patched, split only).
   splash.c ripples step in P1's pass only (drawn per view). Shutter bars don't close fully.

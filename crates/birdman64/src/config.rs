@@ -46,6 +46,7 @@
 //! [splitscreen]            # second controller routed to player 2
 //! enabled = true           # (`PW64_SPLITSCREEN`)
 //! p2_input = "keyboard"    # "keyboard" | "gamepad" | "gamepad:<name>" | "ble" (`PW64_P2_INPUT`)
+//! layout = "left_right"    # or "top_bottom" (default) (`PW64_SPLIT_LAYOUT=lr|tb`)
 //!
 //! [oled]                   # OLED care (settings screen): HUD drift + dim
 //! drift = false            # `PW64_OLED`
@@ -212,6 +213,9 @@ pub struct Splitscreen {
     /// `collisions` — the two split-screen pilots can crash into each other
     /// (`PW64_SPLIT_COLLIDE`).
     pub collisions: Option<bool>,
+    /// `layout` — `"top_bottom"` or `"left_right"` (`PW64_SPLIT_LAYOUT`,
+    /// `input::parse_split_layout`).
+    pub layout: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -561,6 +565,14 @@ fn from_table(table: &toml::Table) -> Config {
                     string_of(ss, "p2_input", "splitscreen.p2_input", &mut ignored);
                 cfg.splitscreen.collisions =
                     opt_bool_of(ss, "collisions", "splitscreen.collisions", &mut ignored);
+                cfg.splitscreen.layout = checked_string(
+                    ss,
+                    "layout",
+                    "splitscreen.layout",
+                    &mut ignored,
+                    "use top_bottom or left_right",
+                    |s| crate::input::parse_split_layout(s).is_some(),
+                );
             }
             None => ignore(&mut ignored, "splitscreen", v, "must be a [splitscreen] table"),
         }
@@ -692,6 +704,9 @@ pub struct SavedSettings {
     /// Split-screen pilot collisions (`[splitscreen] collisions`; None =
     /// leave as-is).
     pub splitscreen_collisions: Option<bool>,
+    /// Split-screen view layout (`[splitscreen] layout`, the
+    /// `SplitLayout::to_config` spelling; None = leave as-is).
+    pub split_layout: Option<&'static str>,
 }
 
 /// Writes the screen's settings into `pw64.toml`. The file is round-tripped
@@ -843,6 +858,7 @@ fn builtin_default(section: &str, key: &str, low_end: bool) -> Option<toml::Valu
         ("splitscreen", "enabled") => Some(false.into()),
         ("splitscreen", "p2_input") => Some("gamepad".into()),
         ("splitscreen", "collisions") => Some(false.into()),
+        ("splitscreen", "layout") => Some("top_bottom".into()),
         _ => None,
     }
 }
@@ -995,7 +1011,11 @@ pub(crate) fn apply(
     }
     // Split-screen (`[splitscreen]`, the settings Controls page): its own
     // table.
-    if u.splitscreen_enabled.is_some() || u.p2_input.is_some() || u.splitscreen_collisions.is_some() {
+    if u.splitscreen_enabled.is_some()
+        || u.p2_input.is_some()
+        || u.splitscreen_collisions.is_some()
+        || u.split_layout.is_some()
+    {
         let ss = table
             .entry("splitscreen")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -1019,6 +1039,9 @@ pub(crate) fn apply(
         }
         if let Some(v) = u.splitscreen_collisions {
             sput("collisions", v.into());
+        }
+        if let Some(v) = u.split_layout {
+            sput("layout", v.into());
         }
     }
     // Input maps (R1): a Save that includes bindings replaces the
@@ -1173,6 +1196,7 @@ mod tests {
                 splitscreen_enabled: Some(true),
                 p2_input: Some("keyboard".into()),
                 splitscreen_collisions: Some(true),
+                split_layout: Some("left_right"),
                 ..Default::default()
             },
         )
@@ -1180,27 +1204,55 @@ mod tests {
         assert_eq!(table["splitscreen"]["enabled"].as_bool(), Some(true));
         assert_eq!(table["splitscreen"]["p2_input"].as_str(), Some("keyboard"));
         assert_eq!(table["splitscreen"]["collisions"].as_bool(), Some(true));
+        assert_eq!(table["splitscreen"]["layout"].as_str(), Some("left_right"));
         // Unrelated keys survive.
         assert_eq!(table["graphics"]["msaa"].as_integer(), Some(4));
         let c = parse(&toml::to_string_pretty(&table).unwrap()).unwrap();
         assert_eq!(c.splitscreen.enabled, Some(true));
         assert_eq!(c.splitscreen.p2_input.as_deref(), Some("keyboard"));
         assert_eq!(c.splitscreen.collisions, Some(true));
-        // The defaults (off / every gamepad) remove the keys again.
+        assert_eq!(c.splitscreen.layout.as_deref(), Some("left_right"));
+        // The defaults (off / every gamepad / top-bottom) remove the keys again.
         let off = SavedSettings {
             splitscreen_enabled: Some(false),
             p2_input: Some("gamepad".into()),
             splitscreen_collisions: Some(false),
+            split_layout: Some("top_bottom"),
             ..Default::default()
         };
         apply(&mut table, &off).unwrap();
         assert!(table["splitscreen"].get("enabled").is_none());
         assert!(table["splitscreen"].get("p2_input").is_none());
         assert!(table["splitscreen"].get("collisions").is_none());
+        assert!(table["splitscreen"].get("layout").is_none());
         let c = parse(&toml::to_string_pretty(&table).unwrap()).unwrap();
         assert_eq!(c.splitscreen.enabled, None);
         assert_eq!(c.splitscreen.p2_input, None);
         assert_eq!(c.splitscreen.collisions, None);
+        assert_eq!(c.splitscreen.layout, None);
+    }
+
+    /// `[splitscreen] layout`: both spellings (and the env short forms)
+    /// parse; anything else is ignored with a warning entry.
+    #[test]
+    fn splitscreen_layout_parses() {
+        use crate::input::{SplitLayout, parse_split_layout};
+        let c = parse("[splitscreen]\nlayout = \"left_right\"\n").unwrap();
+        assert_eq!(c.splitscreen.layout.as_deref(), Some("left_right"));
+        let c = parse("[splitscreen]\nlayout = \"top_bottom\"\n").unwrap();
+        assert_eq!(c.splitscreen.layout.as_deref(), Some("top_bottom"));
+        let c = parse("[splitscreen]\nlayout = \"diagonal\"\n").unwrap();
+        assert_eq!(c.splitscreen.layout, None);
+        assert!(c.ignored.iter().any(|k| k.contains("splitscreen.layout")));
+        let c = parse("[splitscreen]\nlayout = 2\n").unwrap();
+        assert_eq!(c.splitscreen.layout, None);
+        assert_eq!(parse_split_layout("lr"), Some(SplitLayout::LeftRight));
+        assert_eq!(parse_split_layout(" TB "), Some(SplitLayout::TopBottom));
+        assert_eq!(parse_split_layout("Left-Right"), Some(SplitLayout::LeftRight));
+        assert_eq!(parse_split_layout("x"), None);
+        for l in [SplitLayout::TopBottom, SplitLayout::LeftRight] {
+            assert_eq!(parse_split_layout(l.to_config()), Some(l));
+        }
     }
 
     /// `[input.ble] enabled` (settings Controls row): On is written and

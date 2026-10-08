@@ -146,10 +146,12 @@ pub struct DrawCall {
     /// options (drift + dim) apply to. Ignored when OLED care is off
     /// (default options are bit-identical).
     pub hud: bool,
-    /// Split-screen HUD: the view rect (N64 px x0, row0, x1, row1) this
-    /// screen-space draw is laid out into (the native game's `G_NOOP` "PWS"
-    /// tags, `interp::SPLIT_TAG`, `pw64_hud_split_tag`); `None` = full screen.
-    /// See `Renderer::split_placement`.
+    /// Split-screen view rect (N64 px x0, row0, x1, row1; the native game's
+    /// `G_NOOP` "PWS" tags, `interp::SPLIT_TAG`); `None` = full screen.
+    /// With `hud`: a HUD draw laid out into the view
+    /// (`Renderer::split_placement`, `pw64_hud_split_tag`). Without: a
+    /// left/right world view stretched to the output edge
+    /// (`Renderer::split_world_placement`, `pw64_widescreen_tag`).
     pub split: Option<[f32; 4]>,
 }
 

@@ -101,12 +101,18 @@ void pw64_fb_pixels(unsigned int fb, const unsigned PW64_LONG32* idx, int count,
  * whether present ticks (not retraces) latch swaps and start gfx. */
 void pw64_present_set_event(void* mq, void* msg);
 int pw64_present_active(void);
-/* Split-screen spike (native/src/pw64_split.c): 0 = off, 1 = top/bottom
- * (set by Rust before boot, pw64_game::set_split). The helpers live in
- * camera.c.patch; they take the game's Camera as void* because this header
- * is force-included before camera.h exists. */
+/* Split-screen (native/src/pw64_split.c): 0 = off, 1 = on (set by Rust
+ * before boot, pw64_game::set_split). pw64_split_layout: 0 top/bottom, 1
+ * left/right (Rust, any time); pw64_split_lr: the layout latched at test
+ * start. The helpers live in camera.c.patch; they take the game's Camera
+ * as void* because this header is force-included before camera.h exists.
+ * pw64_split_out_aspect (pw64_widescreen.c): the output aspect a
+ * left/right view extends into (0 = none: plain 4:3 halves). */
 extern int pw64_split;
+extern int pw64_split_layout;
+extern int pw64_split_lr;
 void pw64_split_viewport(void* camera, int i);
+float pw64_split_out_aspect(void);
 /* Pilot collisions (native/src/pw64_collide.c, splitscreen.md "Interactions
  * toggle"): 1 = the two pilots can crash into each other. Read at each test
  * start; Rust may set it any time (pw64_game::set_split_collide, also live

@@ -1063,6 +1063,55 @@ pub fn split_collisions() -> bool {
     crate::opts::precedence(env_collide(), config::get().splitscreen.collisions, false)
 }
 
+/// How the two split-screen views share the screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SplitLayout {
+    /// Player 1 on top, player 2 below (wide views).
+    #[default]
+    TopBottom,
+    /// Player 1 left, player 2 right (tall views).
+    LeftRight,
+}
+
+impl SplitLayout {
+    /// The `[splitscreen] layout` spelling.
+    pub fn to_config(self) -> &'static str {
+        match self {
+            SplitLayout::TopBottom => "top_bottom",
+            SplitLayout::LeftRight => "left_right",
+        }
+    }
+}
+
+/// `"top_bottom"`/`"tb"` or `"left_right"`/`"lr"` (case and `-`/`_`
+/// insensitive); None otherwise.
+pub fn parse_split_layout(v: &str) -> Option<SplitLayout> {
+    match v.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "top_bottom" | "tb" => Some(SplitLayout::TopBottom),
+        "left_right" | "lr" => Some(SplitLayout::LeftRight),
+        _ => None,
+    }
+}
+
+/// The split-screen layout (the C `pw64_split_layout`, latched at each test
+/// start): `PW64_SPLIT_LAYOUT=tb|lr` > `[splitscreen] layout` > top/bottom.
+/// Also read by main and the settings screen's Controls page.
+pub fn split_layout() -> SplitLayout {
+    let env = std::env::var("PW64_SPLIT_LAYOUT").ok().and_then(|s| {
+        let l = parse_split_layout(&s);
+        if l.is_none() {
+            eprintln!("[input] PW64_SPLIT_LAYOUT={s:?} not understood (use tb or lr); ignoring");
+        }
+        l
+    });
+    let cfg = config::get()
+        .splitscreen
+        .layout
+        .as_deref()
+        .and_then(parse_split_layout);
+    crate::opts::precedence(env, cfg, SplitLayout::TopBottom)
+}
+
 /// The names of the connected gilrs pads, in order (the settings screen's
 /// Player-2 controller choices, one per pad).
 pub fn connected_pad_names() -> Vec<String> {

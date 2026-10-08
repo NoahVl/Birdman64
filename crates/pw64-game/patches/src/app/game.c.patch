@@ -806,7 +806,7 @@
      taskLoad();
      windObjLoad();
      if (arg0->unkA2 == 0) {
-@@ -467,6 +960,26 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
+@@ -467,6 +960,27 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
      } else {
          D_8034F160 = -1;
      }
@@ -825,6 +825,7 @@
 +        }
 +    }
 +    if (pw64_level_players > 1) {
++        pw64_split_lr = pw64_split_layout; // fixed for this test
 +        pw64_split_viewport(temp_s0->unk70, 0);
 +        pw64_players_sync();
 +        uvMemSet(sPw64Done, 0, sizeof(sPw64Done));

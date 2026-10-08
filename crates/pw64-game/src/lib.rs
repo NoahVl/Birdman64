@@ -40,6 +40,9 @@ unsafe extern "C" {
     static mut pw64_split: i32;
     /// native/src/pw64_collide.c: split-screen pilot collisions, 0 = off.
     static mut pw64_split_collide: i32;
+    /// native/src/pw64_split.c: split-screen layout, 0 = top/bottom, 1 =
+    /// left/right.
+    static mut pw64_split_layout: i32;
 }
 
 /// Hor+ widescreen for the C side: widens the CPU culling frustum of the
@@ -77,10 +80,11 @@ pub fn set_fill_screen(fill: bool) {
     };
 }
 
-/// Split-screen layout for the C side (splitscreen.md): 0 = off, 1 =
-/// top/bottom. On means two players (`pw64_players = 2`, set from this in
-/// gameInit): hang glider tests run a second pilot on controller 2 in the
-/// bottom view. Call before `bootproc`, on the thread that runs the game.
+/// Split-screen for the C side (splitscreen.md): 0 = off, 1 = on. On means
+/// two players (`pw64_players = 2`, set from this in gameInit): supported
+/// vehicles run a second pilot on controller 2 in the second view (layout:
+/// [`set_split_layout`]). Call before `bootproc`, on the thread that runs
+/// the game.
 pub fn set_split(layout: u8) {
     // SAFETY: plain C global; the game (the only reader) runs on this
     // thread and hasn't started yet.
@@ -109,6 +113,23 @@ pub fn set_split_collide(on: bool) {
     #[cfg(feature = "dylib")]
     unsafe {
         *dylib::game().split_collide = on as i32
+    };
+}
+
+/// Split-screen view layout for the C side (splitscreen.md "Viewports"):
+/// false = top/bottom, true = left/right (side by side). The game latches
+/// it at each test start, so like [`set_split_collide`] this may be called
+/// any time (also live from the settings screen).
+pub fn set_split_layout(left_right: bool) {
+    // SAFETY: plain C flag; the game reads it on its own thread.
+    #[cfg(feature = "static")]
+    unsafe {
+        pw64_split_layout = left_right as i32
+    };
+    // SAFETY: same global, exported by the loaded game module.
+    #[cfg(feature = "dylib")]
+    unsafe {
+        *dylib::game().split_layout = left_right as i32
     };
 }
 
