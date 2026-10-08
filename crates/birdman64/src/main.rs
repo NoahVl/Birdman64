@@ -30,6 +30,7 @@ mod packs;
 mod pad_art;
 mod pad_sprites;
 mod paths;
+mod rom_screen;
 mod rom_setup;
 mod settings;
 mod sys;
@@ -129,10 +130,16 @@ fn main() {
     // else the `rom/` + cwd/exe-dir scan, else the first-run picker
     // (interactive only; `rom_setup.rs`).
     let rom_arg = std::env::args_os().nth(1).map(std::path::PathBuf::from);
-    match rom_setup::resolve(rom_arg.as_deref()) {
-        Ok(p) => eprintln!("ROM: {}", p.display()),
+    // No ROM yet and no file dialog on this system (interactive only, so
+    // never headless): the window asks for it first (rom_screen.rs).
+    let ask_rom = match rom_setup::resolve(rom_arg.as_deref()) {
+        Ok(Some(p)) => {
+            eprintln!("ROM: {}", p.display());
+            false
+        }
+        Ok(None) => true,
         Err(e) => fatal(&format!("{e:#}")),
-    }
+    };
     let headless = std::env::var_os("PW64_HEADLESS").is_some()
         || std::env::var_os("PW64_MAX_RETRACES").is_some();
     // First-run build (firstrun.rs): headless builds right here (stderr
@@ -181,7 +188,7 @@ fn main() {
         // leave the Hle (GPU) alive: terminate without dropping.
         std::process::exit(exit_code(stop));
     }
-    window::run(setup);
+    window::run(setup, ask_rom);
 }
 
 /// U12: true when `exe` sits inside `temp` (the usual `%TEMP%`) under a
