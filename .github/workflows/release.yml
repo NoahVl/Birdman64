@@ -297,16 +297,19 @@ jobs:
           PW64_NO_INPUT: '1'
           APPIMAGE_EXTRACT_AND_RUN: '1' # no FUSE needed
         run: |
-          sudo apt-get install -y xvfb xdotool
+          # The catalog test's display + graphics packages (its test.yml):
+          # Mesa software OpenGL, no GPU, icewm on an 800x600 Xvfb.
+          sudo apt-get install -y xvfb xdotool icewm libgl1-mesa-dri libgl1-mesa-dev mesa-utils libosmesa6 libsdl2-2.0-0
           if command -v zenity || command -v kdialog; then
             echo "a file dialog tool is installed; this test needs none"; exit 1
           fi
           # Informational: without it the AppImage's bundled fallback is used.
           /sbin/ldconfig -p | grep libxkbcommon-x11 || echo "host has no libxkbcommon-x11"
           mkdir -p tmp/noromdir && cd tmp/noromdir   # no ROM in the cwd
-          Xvfb :99 -screen 0 1280x800x24 & XPID=$!
+          Xvfb :99 -screen 0 800x600x24 & XPID=$!
           export DISPLAY=:99
           sleep 2
+          icewm & WPID=$!
           ../../Birdman64-x86_64.AppImage > ../window-test.log 2>&1 & APID=$!
           ok=
           for i in $(seq 1 30); do
@@ -317,7 +320,7 @@ jobs:
           sleep 3
           kill -0 $APID 2>/dev/null || ok=   # still running after the window showed
           import -window root ../window-test.png || true
-          kill $APID $XPID 2>/dev/null || true
+          kill $APID $WPID $XPID 2>/dev/null || true
           cat ../window-test.log
           grep -q "asking for the ROM in the window" ../window-test.log
           test -n "$ok"
