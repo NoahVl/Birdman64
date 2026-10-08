@@ -16,9 +16,43 @@ pub struct Start {
     pub pilot: i32,
 }
 
+/// Human-readable class names, indexed by class id.
+const CLASS_NAMES: [&str; 4] = ["beginner", "a", "b", "pilot"];
+
+/// Human-readable vehicle names, indexed by vehicle id.
+const VEHICLE_NAMES: [&str; 7] = [
+    "hang glider",
+    "rocket belt",
+    "gyrocopter",
+    "cannonball",
+    "sky diving",
+    "jumble hopper",
+    "birdman",
+];
+
+/// Number of tests each class has per vehicle (0 = the combination doesn't
+/// exist), mirroring `taskGetTestCount` (decomp task.c:184, which counts the
+/// UPWT task files loaded in `taskInit`, task.c:118): hang glider/rocket
+/// belt/gyrocopter have 1/2/3/3 tests in beginner/a/b/pilot; cannonball has
+/// 4 tests in beginner/a/b and none in pilot; sky diving and jumble hopper
+/// have 1 test each in beginner/a/b; birdman has 4 in every class.
+const TEST_COUNTS: [[i32; 7]; 4] = [
+    // hg rb gc cb sd jh bm
+    [1, 1, 1, 4, 1, 1, 4], // beginner
+    [2, 2, 2, 4, 1, 1, 4], // a
+    [3, 3, 3, 4, 1, 1, 4], // b
+    [3, 3, 3, 0, 0, 0, 4], // pilot
+];
+
+/// Number of tests `class` has for `veh` (0 = combination doesn't exist).
+fn test_count(class: i32, veh: i32) -> i32 {
+    TEST_COUNTS.get(class as usize).and_then(|r| r.get(veh as usize)).copied().unwrap_or(0)
+}
+
 /// Parses the `PW64_START` value. Class `beginner|a|b|pilot`; vehicle
-/// `hg|rb|gc|cb|sd|jh|bm` (or full names); test 1-based; pilot
-/// `lark|goose|hawk|kiwi|ibis|robin` (default lark); file 1|2 (default 1).
+/// `hg|rb|gc|cb|sd|jh|bm` (or full names); test 1-based and must exist for
+/// that class+vehicle; pilot `lark|goose|hawk|kiwi|ibis|robin` (default
+/// lark); file 1|2 (default 1).
 pub fn parse(s: &str) -> Result<Start, String> {
     let parts: Vec<String> = s
         .split(':')
@@ -49,8 +83,22 @@ pub fn parse(s: &str) -> Result<Start, String> {
         }
     };
     let test = match parts[2].parse::<i32>() {
-        Ok(t @ 1..=8) => t - 1,
-        _ => return Err(format!("bad test `{}` (1-based)", parts[2])),
+        Ok(t) if (1..=test_count(class, vehicle)).contains(&t) => t - 1,
+        _ => {
+            let count = test_count(class, vehicle);
+            if count == 0 {
+                return Err(format!(
+                    "class {} has no {} tests",
+                    CLASS_NAMES[class as usize],
+                    VEHICLE_NAMES[vehicle as usize]
+                ));
+            }
+            return Err(format!(
+                "class {} {} has tests 1-{count}",
+                CLASS_NAMES[class as usize],
+                VEHICLE_NAMES[vehicle as usize]
+            ));
+        }
     };
     let pilot = match parts.get(3).map(String::as_str) {
         None | Some("lark") => 0,
@@ -142,6 +190,10 @@ mod tests {
                 pilot: 4
             }
         );
+        // last valid test of each bonus/multi-test combination
+        for valid in ["beginner:cb:4", "pilot:bm:4", "a:sd:1", "b:jh:1"] {
+            assert!(parse(valid).is_ok(), "{valid}");
+        }
         for bad in [
             "a:hg",
             "c:hg:1",
@@ -152,5 +204,29 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn rejects_missing_tests() {
+        // test number too high for the class+vehicle
+        for bad in ["beginner:rb:2", "a:rb:3", "b:hg:4", "a:cb:5", "pilot:bm:5"] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains("has tests 1-"), "{bad}: {e}");
+        }
+        // class+vehicle combination doesn't exist
+        for bad in ["pilot:cb:1", "pilot:sd:1", "pilot:jh:1"] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains("no"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn test_counts_match_rom() {
+        assert_eq!(test_count(0, 0), 1); // beginner hang glider
+        assert_eq!(test_count(1, 1), 2); // a rocket belt
+        assert_eq!(test_count(2, 3), 4); // b cannonball
+        assert_eq!(test_count(3, 3), 0); // pilot cannonball: doesn't exist
+        assert_eq!(test_count(3, 6), 4); // pilot birdman
+        assert_eq!(test_count(9, 9), 0); // out of range
     }
 }
