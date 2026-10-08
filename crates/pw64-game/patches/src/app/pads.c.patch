@@ -1,0 +1,28 @@
+--- a/src/app/pads.c
++++ b/src/app/pads.c
+@@ -99,7 +99,13 @@ void padsLoad(void) {
+
+     gLandingPadCount = taskGetLPAD(&sRefLPAD);
+     if (gLandingPadCount > ARRAY_COUNT(gLandingPads)) {
+         _uvDebugPrintf("pads : too many landing pads defined in level [%d]\n", gLandingPadCount);
+         gLandingPadCount = 0;
+         return;
+     }
++    // PW64 free flight (game.c.patch): no landing target. Without the test's
++    // pads and strips every level pad keeps its plain model, the radar shows
++    // no landing point (hud.c) and a landing scores nothing.
++    if (pw64_free_flight) {
++        gLandingPadCount = 0;
++    }
+
+@@ -140,7 +146,10 @@ void padsLoad(void) {
+     gLandingStripCount = taskGetLSTP(&sRefLSTP);
+     if (gLandingStripCount > ARRAY_COUNT(gLandingStrips)) {
+         _uvDebugPrintf("pads : too many landing strips defined in level [%d]\n", gLandingStripCount);
+         gLandingStripCount = 0;
+         return;
+     }
++    if (pw64_free_flight) {
++        gLandingStripCount = 0;
++    }
+

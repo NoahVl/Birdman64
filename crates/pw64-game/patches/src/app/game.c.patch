@@ -89,6 +89,7 @@
 +// takes: hang glider, gyrocopter, rocket belt and birdman tumble (scream,
 +// crash music, smoke) and crash; the jumble hopper falls over.
 +static s32 sPw64Collide;
++static u8 sPw64JhBump[PW64_MAX_PLAYERS]; // hopper hit in the air: falls over on landing
 +
 +// Sphere radius (m) around the vehicle's origin: about half the span.
 +static f32 pw64_collide_radius(s32 veh) {
@@ -135,6 +136,26 @@
 +    }
 +}
 +
++// The jumble hopper falls over (state 6, func_80301D28) at its last ground
++// contact unk134, which only the landing queries set: before the first
++// landing it is the origin (the hopper got stuck far from its camera in
++// state 9 until the 7 s timeout, or faulted), mid-hop it is the previous
++// landing spot. So it falls over only from the ground (crouch, take-off,
++// landing: states 0, 1, 3), at its own spot on the ground under it (unk68,
++// set at the start and by every landing); a hopper hit in the air falls
++// over when it lands.
++static s32 pw64_jh_fall(JumbleHopperData* jh) {
++    if ((jh->unk4C != 0) && (jh->unk4C != 1) && (jh->unk4C != 3)) {
++        return FALSE;
++    }
++    jh->unk134.x = jh->unkF4.x;
++    jh->unk134.y = jh->unkF4.y;
++    jh->unk134.z = jh->unk68;
++    jh->unk4C = 6;
++    sndPlaySfx(SFX_CRASH_LANDING_REVEAL);
++    return TRUE;
++}
++
 +// The live player's vehicle takes its own hard-impact state; its movement,
 +// sound and status code run the rest (test end / free-flight respawn).
 +static void pw64_collide_crash(s32 veh, void* data) {
@@ -159,8 +180,9 @@
 +        rb->unk118 = 1000.0f;
 +        break;
 +    case VEHICLE_JUMBLE_HOPPER: // func_803006E8: bad landing, falls over
-+        ((JumbleHopperData*)data)->unk4C = 6;
-+        sndPlaySfx(SFX_CRASH_LANDING_REVEAL);
++        if (!pw64_jh_fall(data)) {
++            sPw64JhBump[pw64_player_cur] = TRUE;
++        }
 +        break;
 +    case VEHICLE_BIRDMAN: // bird_802D0080: object hit
 +        bm = data;
@@ -188,14 +210,24 @@
 +    f32 r;
 +    s32 i;
 +
-+    // Not in the test's first second: a hopper made to fall over in its
-+    // first frames faulted (uvMat4CopyF2L), and 10 m apart no pilots meet
-+    // that soon.
-+    if (!sPw64Collide || (pw64_level_players != 2) || (D_8034F850 < 1.0f) || (veh == VEHICLE_SKY_DIVING)) {
++    if (!sPw64Collide || (pw64_level_players != 2) || (veh == VEHICLE_SKY_DIVING)) {
 +        return;
 +    }
++    for (i = 0; (veh == VEHICLE_JUMBLE_HOPPER) && (i < 2); i++) {
++        if (!sPw64JhBump[i]) {
++            continue;
++        }
++        pw64_player_switch(i);
++        pw64_evt_scope = i;
++        if (sPw64Done[i] || (sPw64Respawn[i] != 0.0f) || (((JumbleHopperData*)D_80362748[i])->unk4C >= 6) ||
++            pw64_jh_fall((JumbleHopperData*)D_80362748[i])) {
++            sPw64JhBump[i] = FALSE; // landed (or fell over by itself)
++        }
++        pw64_evt_scope = -1;
++        pw64_player_switch(0);
++    }
 +    for (i = 0; i < 2; i++) {
-+        if (sPw64Done[i] || (sPw64Respawn[i] != 0.0f) || !pw64_collide_live(veh, D_80362748[i])) {
++        if (sPw64Done[i] || (sPw64Respawn[i] != 0.0f) || sPw64JhBump[i] || !pw64_collide_live(veh, D_80362748[i])) {
 +            return;
 +        }
 +    }
@@ -376,6 +408,19 @@
 +    func_802EDDEC(&start);
 +}
 +
++// A hopper moved by pw64_offset_start: its restore point (unk118, where a
++// stuck hopper is put back in state 9) was set by EnterLeave at player 1's
++// start, and stays there until its first take-off.
++static void pw64_jh_moved(Unk80362690_Unk0* p) {
++    JumbleHopperData* jh = p->vehicleData;
++
++    if (p->veh == VEHICLE_JUMBLE_HOPPER) {
++        jh->unk118.x = jh->unk74.m[3][0];
++        jh->unk118.y = jh->unk74.m[3][1];
++        jh->unk118.z = jh->unk74.m[3][2];
++    }
++}
++
 +// PW64 split-screen: per-player part of the test setup for players 2..n
 +// (hang glider / gyrocopter / rocket belt / jumble hopper / birdman), after player 1's. Each player i: kernel
 +// channel i = camera i in its viewport, own vehicle buffer + results
@@ -443,6 +488,7 @@
 +            pw64_sky_offset(sd, 10.0f * i * vehMtx->m[0][0], 10.0f * i * vehMtx->m[0][1]);
 +        } else {
 +            pw64_offset_start(i, vehMtx);
++            pw64_jh_moved(p);
 +        }
 +        func_802EDD9C(p, vehMtx);
 +        hudInit();
@@ -608,6 +654,7 @@
 +    case VEHICLE_JUMBLE_HOPPER:
 +        D_80367708 = jh = (JumbleHopperData*)p->vehicleData;
 +        jumbleHopperEnterLeave(jh);
++        sPw64JhBump[i] = FALSE;
 +        vehMtx = &jh->unk74;
 +        break;
 +    case VEHICLE_BIRDMAN:
@@ -626,6 +673,7 @@
 +    }
 +    if (i > 0) {
 +        pw64_offset_start(i, vehMtx);
++        pw64_jh_moved(p);
 +    }
 +    func_802EDD9C(p, vehMtx);
 +    p->unk7C = 0;
@@ -1024,6 +1072,7 @@
 +        pw64_players_sync();
 +        uvMemSet(sPw64Done, 0, sizeof(sPw64Done));
 +        uvMemSet(sPw64Respawn, 0, sizeof(sPw64Respawn));
++        uvMemSet(sPw64JhBump, 0, sizeof(sPw64JhBump));
 +        pw64_evt_mute = 0;
 +        sPw64Collide = pw64_split_collide; // fixed for this test
 +    }

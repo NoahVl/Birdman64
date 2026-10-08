@@ -104,7 +104,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - **Collisions** (game.c.patch `pw64_collide_*`): `pw64_split_collide` latched at test setup;
   once per frame after both vehicle updates, sphere test on the vehicles' world matrices
   (radius 4 m glider, 3 gyro, 2.5 birdman, 1 rocket belt/hopper; P2 starts 10 m away), skipped
-  for done/respawning players, non-flying states and the first second. Hit → per player under
+  for done/respawning players and non-flying states. Hit → per player under
   switch(i), the vehicle's own hard-impact state (glider/gyro/belt/birdman tumble state → crash
   → their unk7C test-end or free-flight respawn; hopper falls over, test goes on).
 - **Glyph encoding** (`native/src/pw64_text.c`): font 6 glyph = index in its STRG table:
@@ -151,15 +151,15 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - **Hard-wired player 0 in gameplay:** falco.c (bird targets P1), snap.c shutter,
   env_sound.c:494, task.c:358-372, game.c:770 (splash billboards on camera 0).
   Sky diving's pad-0 reads (code_B6580.c:24, code_BA190.c:235, skydiving.c:369) follow PW64_CONT.
-- **Free flight:** landing pads stay (radar shows the landing point); respawn audio
-  (unmute + 0x13, see Audio) not run-tested.
+- **Free flight:** respawn audio (unmute + 0x13, see Audio) not run-tested. pads.c.patch: no
+  test landing pads/strips (plain level pads, no radar landing point).
 - Never run split-screen in attract/demo playback (single stream).
 - **Results:** from the tally on, each tally draws only its player's view, full screen
   (`pw64_results_full`; both halves left the 1-row view gap as a dark seam across it).
   P1's replay is full screen too (camera 0 already is). P2 replay = a 2nd fdr recorder (not
   cheap). P2's results aren't stored past the session (no save slot).
-- Hopper fall-over in split: P2 waits in state 9 (get-up) for its 7 s timeout (camera
-  follow-distance check never met), P1 gets up at once. A test-start fall-over faulted.
+- Hopper hit (`pw64_jh_fall`): state 6 goes to `unk134` (last landing; origin before one → stuck in
+  state 9 / fault), so it falls only on the ground at its own spot; hit in the air → on landing.
 - Widescreen/fill-screen + split
   untested (the view scissor may fight the renderer's Hor+ extension). Cockpit views that
   hide their own pilot dobj hide it for the other view too (dobj state is global).
