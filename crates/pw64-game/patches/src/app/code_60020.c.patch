@@ -1,0 +1,34 @@
+--- a/src/app/code_60020.c
++++ b/src/app/code_60020.c
+@@ -19,13 +19,25 @@
+ void func_802D9B40(CannonballData*);
+ void func_802D9BBC(CannonballData*);
+ 
++// PW64 split-screen: func_802D8AF0's pilot wobble phases, hoisted to be
++// registered per player (pw64_reg_cannonball_pilot).
++static f32 D_8034EA10 = 0.0f;
++static f32 D_8034EA14 = 0.0f;
++static f32 D_8034EA18 = 0.0f;
++static f32 D_8034EA1C = 0.0f;
++static f32 D_8034EA20 = 0.0f;
++static f32 D_8034EA24 = 0.0f;
++
++void pw64_reg_cannonball_pilot(void) {
++    PW64_REG(D_8034EA10);
++    PW64_REG(D_8034EA14);
++    PW64_REG(D_8034EA18);
++    PW64_REG(D_8034EA1C);
++    PW64_REG(D_8034EA20);
++    PW64_REG(D_8034EA24);
++}
++
+ void func_802D8AF0(CannonballData* cbData) {
+-    static f32 D_8034EA10 = 0.0f;
+-    static f32 D_8034EA14 = 0.0f;
+-    static f32 D_8034EA18 = 0.0f;
+-    static f32 D_8034EA1C = 0.0f;
+-    static f32 D_8034EA20 = 0.0f;
+-    static f32 D_8034EA24 = 0.0f;
+     Mtx4F spD0;
+     f32 var_fa1;
+     s32 pad[12];

@@ -156,6 +156,8 @@ void pw64_reg_birdman(void);        /* birdman0.c: camera-look toggle + rate sta
 void pw64_reg_birdman_sound(void);  /* bmsound.c */
 void pw64_reg_birdman_flutter(void); /* birdman1.c */
 void pw64_reg_birdman_move(void);   /* birdman2.c */
+void pw64_reg_cannonball(void);       /* cannonball.c: aim, scoring, round state */
+void pw64_reg_cannonball_pilot(void); /* code_60020.c: pilot wobble */
 void pw64_players_init(void);
 void pw64_reg_task(void); /* task.c: objective hit state (+ its modules) */
 /* Per-player objective dobjs (kernel dobj.c.patch): owning player + 1 per

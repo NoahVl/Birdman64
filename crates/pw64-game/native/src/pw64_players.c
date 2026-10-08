@@ -110,5 +110,7 @@ void pw64_players_init(void) {
     pw64_reg_birdman_sound();
     pw64_reg_birdman_flutter();
     pw64_reg_birdman_move();
+    pw64_reg_cannonball();
+    pw64_reg_cannonball_pilot();
     pw64_reg_task();
 }

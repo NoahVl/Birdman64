@@ -1,0 +1,18 @@
+--- a/src/app/cbsound.c
++++ b/src/app/cbsound.c
+@@ -202,6 +202,14 @@
+     cbData->unk2B1 = func_8033F8CC(cbData->unk2B1);
+     cbData->unk2B4 = func_8033F8CC(cbData->unk2B4);
+     cbData->unk2B5 = func_8033F8CC(cbData->unk2B5);
+-    uvEventRemoveCb(D_80359BE0, 1, 0xD, 0x12, 0x13, 0x10, 0xC, 0x16, 0x19, 0x24);
++    // PW64 split-screen: remove this cannonball's own callback (cb + arg),
++    // not the last-registered one in the static: with two cannonballs it
++    // holds player 2's. Same as the static with one.
++    {
++        EventCallbackInfo info = D_80359BE0;
++        info.cb = func_802D9E68;
++        info.arg = cbData;
++        uvEventRemoveCb(info, 1, 0xD, 0x12, 0x13, 0x10, 0xC, 0x16, 0x19, 0x24);
++    }
+ }
+ 

@@ -1,6 +1,6 @@
 # Split-screen (2-player local)
 
-Status: two pilots (hang glider, gyrocopter, rocket belt, jumble hopper or birdman) fly the same test (top/left view = player 1,
+Status: two pilots (hang glider, gyrocopter, rocket belt, jumble hopper, birdman or cannonball) fly the same test (top/left view = player 1,
 bottom/right = player 2), each on its own controller and camera, seeing each other. Other
 vehicles fall back to one player. Everything is gated: `pw64_level_players == 1` runs the
 original code paths. Hopper: only the crash head-shake sfx one-shots (`D_8036905C`) are
@@ -128,11 +128,18 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - **Other vehicles:** register their audit lists; first fix our rate patches that
   `pw64_fatal` on a second vehicle of the same type (birdman1 `sPw64FlutterOwner`,
   code_BA190 `sPw64DriftOwner`). Gyro `D_8034F380` keeps last frame's buttons (Z edge).
-  Cannonball/skydiving scoring statics; skydiving formation partners need a second set.
+  Skydiving scoring statics; skydiving formation partners need a second set.
+- **Cannonball** (cannonball.c.patch `pw64_cannon_*`, game.c.patch `pw64_cannon_setup/frame_split`):
+  lockstep rounds: both aim+fire the same shot; a landed player watches its fly-out until every
+  shot is down + 3 s, then one `pw64_cannon_next_round` (target tally P1 → Next → P2, a new
+  target's level loaded once then each cannon, or RESULTS_CB). Stays in TEST_UPDATE (no per-shot
+  RESULTS state). Scoring statics, aim sweep, fly-out camera, wobble (code_60020) registered;
+  TEXT_C_POINTS is one shared string: re-formatted per view before each draw. Each cannon dobj
+  is owned (same pillar), pilots shared. cbsound removes its own cb. P2 bests are session-only.
 - **Audio:** engine-sound events are broadcast to both players' handlers; one music
   sequence; one listener (kernel `D_80250E80[1]`), follows P1.
 - **Hard-wired player 0 in gameplay:** falco.c (bird targets P1), snap.c shutter,
-  env_sound.c:494, task.c:358-372, game.c:770 (splash billboards on camera 0), cannonball.c:380,
+  env_sound.c:494, task.c:358-372, game.c:770 (splash billboards on camera 0),
   code_B6580.c:24, code_BA190.c:235, skydiving.c:369.
 - **Free flight:** landing pads stay (radar shows the landing point); event 0x12 from
   crash effects reaches both players' sound handlers; respawn audio unverified.

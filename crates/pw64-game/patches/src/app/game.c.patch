@@ -430,6 +430,9 @@
 +            } else if (p->veh == VEHICLE_BIRDMAN) {
 +                birdEnterLeave(p->vehicleData);
 +                bird_802CC51C(p->vehicleData);
++            } else if (p->veh == VEHICLE_CANNONBALL) {
++                cannonLevelEnterLeave(p->vehicleData);
++                cannonEndTarget(p->vehicleData);
 +            } else {
 +                hangGliderEnterLeave(p->vehicleData);
 +                func_802EF328(p->vehicleData);
@@ -617,6 +620,105 @@
 +    return choice;
 +}
 +
++// PW64 split-screen cannonball (cannonball.c.patch): every player shoots
++// each round at once; the round moves on when all shots are down.
++void pw64_cannon_own(CannonballData* cbData);
++void pw64_cannon_load_player(Unk80362690* arg0, s32 i);
++s32 pw64_cannon_player_frame(Unk80362690* arg0);
++void pw64_cannon_view_text(void);
++s32 pw64_cannon_next_round(Unk80362690* arg0);
++void pw64_cannon_quit(Unk80362690* arg0);
++
++// After cannonLoad802D77D8 loaded the world and player 1's cannon: player
++// 2.. start as a copy of player 1's state, then get their own channel,
++// view, results struct and cannon (same pillar, pad i).
++static void pw64_cannon_setup(Unk80362690* arg0) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    s32 i;
++
++    pw64_level_players = pw64_players;
++    pw64_split_lr = pw64_split_layout; // fixed for this test
++    pw64_split_viewport(p->unk70, 0);
++    uvMemSet(sPw64Done, 0, sizeof(sPw64Done));
++    uvMemSet(sPw64Respawn, 0, sizeof(sPw64Respawn));
++    sPw64Collide = FALSE;
++    pw64_cannon_own(p->vehicleData);
++    pw64_players_sync();
++    for (i = 1; i < pw64_level_players; i++) {
++        pw64_player_switch(i);
++        p->unk70 = &D_80362E88[i];
++        p->unk74 = &D_80364210[i];
++        p->vehicleData = D_80362748[i];
++        D_803676FC = (CannonballData*)p->vehicleData;
++        func_8034B5E0(i, p->unk70);
++        uvChanTerra(i, arg0->terraId);
++        uvChanEnv(i, arg0->envId);
++        pw64_split_viewport(p->unk70, i);
++        hudInit();
++        pw64_cannon_load_player(arg0, i);
++    }
++    pw64_player_switch(0);
++    PW64_LOGF("split-screen cannonball: players", pw64_level_players);
++}
++
++// cannonFrame802D7B7C for every player: each aims/flies (or, landed,
++// watches its shot) with its state live, the world ticks once, one view
++// per player; any player's Start pauses (Continue/Quit). Once every shot
++// of the round is down, pw64_cannon_next_round.
++static s32 pw64_cannon_frame_split(Unk80362690* arg0) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    s32 roundDone = TRUE;
++    s32 who;
++    s32 i;
++    f32 t;
++
++    uvEventPost(0xE, 0);
++    env_802E15F0();
++    proxAnimUpdate();
++    func_80313D74();
++    for (i = 0; i < pw64_level_players; i++) {
++        pw64_player_switch(i);
++        D_803676FC = (CannonballData*)p->vehicleData;
++        if (!pw64_cannon_player_frame(arg0)) {
++            roundDone = FALSE;
++        }
++        pw64_task_player_update(&p->unk2C, p->unk20);
++    }
++    pw64_player_switch(0);
++    uvEventPost(0x16, 0);
++    pw64_task_world_update(&p->unk2C, p->unk20);
++    func_8033F6F8(&p->unk70->unk108, &p->unk2C); // listener: player 1
++    uvGfxBegin();
++    for (i = 0; i < pw64_level_players; i++) {
++        pw64_player_switch(i);
++        pw64_cannon_view_text();
++        func_8034B624(p->unk70);
++    }
++    pw64_player_switch(0);
++    uvGfxEnd();
++    who = pw64_pause_player(arg0, FALSE);
++    if (who >= 0) {
++        uvEventPost(0x12, 0);
++        t = D_8034F850;
++        switch (pw64_pause_menu(arg0, who)) {
++        case 1:
++            uvEventPost(0x17, 0);
++            func_8032CC44(arg0);
++            uvEventPost(0x18, 0);
++            break;
++        case 3:
++            pw64_cannon_quit(arg0);
++            func_802ECE94(arg0);
++            D_8034F850 = t;
++            uvEventPost(0x13, 0);
++            return GAME_STATE_TEST_DETAILS;
++        }
++        D_8034F850 = t;
++        uvEventPost(0x13, 0);
++    }
++    return roundDone ? pw64_cannon_next_round(arg0) : GAME_STATE_TEST_UPDATE;
++}
++
 +// PW64 split-screen: gameUpdateStateTestUpdate's time checks, per player
 +// still flying: the "land now" time despawns that player's objectives, the
 +// time limit finishes them. Results once every player is done.
@@ -792,6 +894,20 @@
  s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
      Unk80362690_Unk0* temp_s0;
      f32 sp28;
+@@ -445,4 +1033,15 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
+     if (temp_s0->veh == VEHICLE_CANNONBALL) {
+         D_803676FC = (CannonballData*)temp_s0->vehicleData;
++        // PW64 split-screen: a cannon per player (not in the attract demo).
++        pw64_level_players = 1;
++        pw64_free_flight = 0;
++        if ((pw64_players > 1) && !arg0->unkA4) {
++            s32 pw64State = cannonLoad802D77D8(arg0, D_803676FC);
++
++            pw64_cannon_setup(arg0);
++            return pw64State;
++        }
+         return cannonLoad802D77D8(arg0, D_803676FC);
+     }
 @@ -459,7 +947,12 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
      levelLoad(arg0->map, temp_s0->pilot, temp_s0->veh, TRUE);
      uvChanTerra(temp_s0->unk70->unk22C, arg0->terraId);
@@ -888,6 +1004,13 @@
  
      sp6C = &arg0->unkC[arg0->unk9C];
      gameState = GAME_STATE_TEST_UPDATE;
+@@ -764,3 +1290,6 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
+     if (sp6C->veh == VEHICLE_CANNONBALL) {
++        if (pw64_level_players > 1) { // PW64 split-screen
++            return pw64_cannon_frame_split(arg0);
++        }
+         return cannonFrame802D7B7C(arg0);
+     }
 @@ -770,6 +1296,29 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
      func_802F89A0(D_80362E88);
      windObjFrameUpdate();

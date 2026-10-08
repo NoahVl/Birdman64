@@ -25,3 +25,317 @@
      cbData->unk11D = 0;
      if (gameState != GAME_STATE_RESULTS) {
          stickX = demoGetInputs(cbData->unk10, INPUT_AXIS_X);
+@@ -473,11 +482,14 @@
+     func_802D9430(cbData);
+ }
+ 
++// PW64 split-screen: hoisted from cannonPilotLand to be registered per
++// player (pw64_reg_cannonball).
++static Vec4F D_80359AB0;
++static Vec4F D_80359AC0;
++static f32 D_8034E9FC = 0.0f;
++
+ // cannonPilotLand called when pilot lands on surface after being shot from cannon
+ void cannonPilotLand(CannonballData* cbData) {
+-    static Vec4F D_80359AB0;
+-    static Vec4F D_80359AC0;
+-    static f32 D_8034E9FC = 0.0f;
+     Camera* camera;
+     f32 temp_fv0_2;
+     f32 var_fv1;
+@@ -826,9 +838,10 @@
+     return sp50;
+ }
+ 
+-// cannonLandedFrame called every frame after landing from cannon shot
+-s32 cannonLandedFrame(CannonballData* cbData) {
+-    static f32 D_8034EA00 = 0.0f;
++// PW64: cannonLandedFrame's scoring of a landed shot, moved out unchanged so
++// split-screen scores each player's shot (pw64_cannon_frame_split). Returns
++// the points shown (0: a miss).
++static s32 pw64_cannon_score(CannonballData* cbData) {
+     Unk80364210* temp_v1;
+     Unk80362690_Unk0* temp_s0;
+     u8 sp27;
+@@ -836,8 +849,7 @@
+ 
+     temp_s0 = &D_80362690->unkC[D_80362690->unk9C];
+     temp_v1 = func_8032BE10();
+-    if (0.0f == D_8034EA00) {
+-        D_8034EA00 = D_8034F850 + 3.0f;
++    {
+         if (cbData->unkD5 == 2) {
+             sp27 = 1;
+         } else {
+@@ -875,6 +887,19 @@
+             }
+         }
+     }
++    return points;
++}
++
++// cannonLandedFrame called every frame after landing from cannon shot
++s32 cannonLandedFrame(CannonballData* cbData) {
++    static f32 D_8034EA00 = 0.0f;
++    Unk80362690_Unk0* temp_s0;
++
++    temp_s0 = &D_80362690->unkC[D_80362690->unk9C];
++    if (0.0f == D_8034EA00) {
++        D_8034EA00 = D_8034F850 + 3.0f;
++        pw64_cannon_score(cbData);
++    }
+     uvEventPost(0xC, 0);
+     if (D_8034F850 < D_8034EA00) {
+         cannonPilotLand(cbData);
+@@ -998,7 +1023,9 @@
+     uvMat4Copy(&sp4C, &cbData->unk14);
+     uvMat4RotateAxis(&sp4C, 1.5707961f, 'x');
+     func_802EDAF0(temp_s0, &cbData->unk14, cbData->unk120, cbData->unk1D0, 0.0f, 1.0f, cbData->unk4, cbData->unk8, 0, cbData->unk11C, 5);
+-    saveFileWrite(temp_s0->unk8A);
++    if (pw64_player_cur == 0) { // PW64 split-screen: only player 1 is saved
++        saveFileWrite(temp_s0->unk8A);
++    }
+     return 1;
+ }
+ 
+@@ -1015,3 +1042,236 @@
+         }
+     }
+ }
++
++// PW64 split-screen (splitscreen.md "Cannonball"): every player takes the
++// same shot of each round at once, from their own cannon (drawn only in
++// their own view) and scored on their own results/statics; the round ends
++// when every player's shot has landed and shown its points for 3 s
++// (cannonLandedFrame's wait). game.c.patch pw64_cannon_frame_split runs the
++// frame; the functions below run with the given player live.
++extern s32 D_8034F858; // code_9A960.c: frame counter (log only)
++static u8 sPw64CbLanded;  // this round's shot has landed and is scored
++static f32 sPw64CbWait;   // game time its points stay up until
++static s32 sPw64CbPoints; // its points (TEXT_C_POINTS is one shared string)
++
++void pw64_reg_cannonball(void) {
++    PW64_REG(D_8034E9F0);
++    PW64_REG(D_8034E9F4);
++    PW64_REG(D_8034E9F8);
++    PW64_REG(D_80359A84);
++    PW64_REG(D_80359A88);
++    PW64_REG(D_80359A98);
++    PW64_REG(D_80359AA8);
++    PW64_REG(D_80359AAC);
++    PW64_REG(D_80359AB0);
++    PW64_REG(D_80359AC0);
++    PW64_REG(D_8034E9FC);
++    PW64_REG(sPw64TestTime);
++    PW64_REG(sPw64CbLanded);
++    PW64_REG(sPw64CbWait);
++    PW64_REG(sPw64CbPoints);
++}
++
++// The live player's cannon is drawn in its own view only (both cannons
++// stand on the same pillar); the pilot stays visible to everyone.
++void pw64_cannon_own(CannonballData* cbData) {
++    pw64_dobj_claim(cbData->unk54);
++    sPw64CbLanded = FALSE;
++    sPw64CbPoints = 0;
++}
++
++// Player i (live, channel/camera/results set by the caller): what
++// cannonLoad802D77D8 does for player 1's cannon at the first target.
++void pw64_cannon_load_player(Unk80362690* arg0, s32 i) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    CannonballData* cbData = (CannonballData*)p->vehicleData;
++    Mtx4F sp3C;
++    s32 k;
++
++    D_80359AAC = levelGetTotalPoints(p->unk74, p->cls, p->veh);
++    D_80359AA8 = 0;
++    for (k = 0; k < 4; k++) {
++        D_80359A98[k] = testGetPointCount(p->unk74, p->cls, k, p->veh);
++        p->unk74->unk40[p->cls].unk0[k][p->veh].unk2C = 0x7F;
++        p->unk74->unk40[p->cls].unk0[k][p->veh].unk4 = 0x7F;
++        D_80359A88[k] = 0;
++    }
++    cannonLoadLevel(i, p->pilot, cbData, p->unk70);
++    cannonLevelEnterLeave(cbData);
++    cbData->unkC = 0;
++    cbData->unkE = 0;
++    uvMat4Copy(&sp3C, &cbData->unk14);
++    uvMat4RotateAxis(&sp3C, 1.5707961f, 'x');
++    func_802EDD9C(p, &sp3C);
++    camera_802D4DE8(p->unk70, 0);
++    func_8032B508(p->unk74);
++    pw64_cannon_own(cbData);
++    D_80359A84 = 0;
++    hudWarningText(TEXT_CANON_1, 1.5f, 8.0f);
++}
++
++// The live player's part of one frame (cannonFrame802D7B7C while aiming or
++// flying, then cannonLandedFrame's scoring and fly-out camera). TRUE once
++// its shot has landed and the points have been up for 3 s.
++s32 pw64_cannon_player_frame(Unk80362690* arg0) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    CannonballData* cbData = (CannonballData*)p->vehicleData;
++    Mtx4F sp58;
++
++    if (sPw64CbLanded) {
++        cannonPilotLand(cbData);
++        return D_8034F850 >= sPw64CbWait;
++    }
++    cannonMovementFrame(cbData, arg0->state);
++    if (cbData->unkD4 != 0) {
++        uvMat4Copy(&sp58, &cbData->unk14);
++        uvMat4RotateAxis(&sp58, 1.5707961f, 'x');
++    } else {
++        uvMat4Copy(&sp58, &cbData->unk58);
++        uvMat4RotateAxis(&sp58, cbData->zAxis, 'z');
++        uvMat4RotateAxis(&sp58, cbData->xAxis, 'x');
++    }
++    func_802EDAF0(p, &sp58, cbData->unk120, cbData->unk1D0, 0.0f, 1.0f, cbData->unk4, cbData->unk8, 0, cbData->unk11C, 1);
++    if (cbData->unkD4 == 2) {
++        sPw64CbLanded = TRUE;
++        sPw64CbWait = D_8034F850 + 3.0f;
++        sPw64CbPoints = pw64_cannon_score(cbData);
++        PW64_LOGF("split-screen cannonball: landed (frame << 12 | player << 8 | points)",
++                  ((u32)D_8034F858 << 12) | (pw64_player_cur << 8) | sPw64CbPoints);
++    }
++    return FALSE;
++}
++
++// Before the live player's view is drawn: its own points in TEXT_C_POINTS.
++void pw64_cannon_view_text(void) {
++    if (sPw64CbLanded && (((CannonballData*)D_80362690->unkC[0].vehicleData)->unkD5 == 2)) {
++        textFmtIntAt(textGetDataByIdx(TEXT_C_POINTS), sPw64CbPoints, 2, 0);
++    }
++}
++
++// Every player's shot of the round is done (player 1 live, also on return):
++// cannonLandedFrame's end + cannonEndShot for everyone in step. The target
++// tally after its 3rd shot (player 1's, "Next": the others'), then the next
++// shot, a new target's level (loaded once, then each player's cannon), or
++// the end of all four targets.
++s32 pw64_cannon_next_round(Unk80362690* arg0) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    CannonballData* cbData = (CannonballData*)p->vehicleData;
++    s32 shot = cbData->unkE;
++    s32 tgt = cbData->unkC;
++    s32 i;
++
++    if ((shot == 2) && (tgt < 3)) {
++        sndSetMusic(BGM_RESULTS);
++        sndSetMusicState(MUS_STATE_PLAY_SEQ);
++        func_8033FCD0(p->veh);
++        pw64_split_viewport(p->unk70, -1); // tallies are full screen
++        resultHandler(1);
++        pw64_split_viewport(p->unk70, 0);
++    }
++    if (++shot > 2) {
++        shot = 0;
++        tgt++;
++    }
++    if (tgt >= 4) {
++        for (i = pw64_level_players - 1; i >= 0; i--) {
++            pw64_player_switch(i);
++            cbData = (CannonballData*)p->vehicleData;
++            cbData->unkE = shot;
++            cbData->unkC = tgt;
++            p->test = 0;
++            cannonEndAllTgts(cbData);
++            hudText_8031D8E0(-1, 0, 0.0f);
++            hudWarningText(-1, 0.0f, 0.0f);
++            sPw64CbLanded = FALSE;
++        }
++        pw64_split_viewport(p->unk70, -1); // the final tallies
++        PW64_LOGF("split-screen cannonball: all targets done, players", pw64_level_players);
++        return GAME_STATE_RESULTS_CB;
++    }
++    sndSetMusic(BGM_CANNONBALL);
++    sndSetMusicState(MUS_STATE_PLAY_SEQ);
++    func_8033FCD0(p->veh);
++    if (tgt != cbData->unkC) {
++        uvEventPost(0x19, 0);
++        envSoundInit();
++        taskDeinitLevel();
++        windObjDeinit();
++        proxAnimDispatchInit();
++        level_8030BA60();
++        for (i = pw64_level_players - 1; i >= 0; i--) {
++            pw64_player_switch(i);
++            cbData = (CannonballData*)p->vehicleData;
++            cbData->unkE = shot;
++            cbData->unkC = tgt;
++            p->test++;
++            cannonLevelEnterLeave(cbData);
++            cannonEndTarget(cbData);
++        }
++        taskInitTest(p->cls, p->veh, p->test, &arg0->map, &arg0->terraId, &arg0->envId);
++        levelLoad(arg0->map, p->pilot, p->veh, 1);
++        hudInit();
++        hud_8031A2CC();
++        taskLoad();
++        windObjLoad();
++        uvChanTerra(p->unk70->unk22C, arg0->terraId);
++        uvEnvFunc(arg0->envId, 0, env_802E0CF0);
++        for (i = 0; i < pw64_level_players; i++) {
++            pw64_player_switch(i);
++            cbData = (CannonballData*)p->vehicleData;
++            if (i > 0) {
++                func_8034B5E0(i, p->unk70);
++                uvChanTerra(i, arg0->terraId);
++                uvChanEnv(i, arg0->envId);
++                hudInit();
++            }
++            cannonLoadLevel(i, p->pilot, cbData, p->unk70);
++            cannonLevelEnterLeave(cbData);
++            cbData->unkE = shot;
++            cbData->unkC = tgt;
++            if (i == 0) {
++                func_8034B5E0(p->unk70->unk22C, p->unk70);
++            }
++            pw64_split_viewport(p->unk70, i);
++            pw64_cannon_own(cbData);
++        }
++    }
++    for (i = pw64_level_players - 1; i >= 0; i--) {
++        pw64_player_switch(i);
++        cbData = (CannonballData*)p->vehicleData;
++        cbData->unkE = shot;
++        cbData->unkC = tgt;
++        sPw64CbLanded = FALSE;
++        cannonLevelEnterLeave(cbData);
++        camera_802D4DE8(cbData->camera, 0);
++        switch (shot) {
++        case 0:
++            hudWarningText(TEXT_CANON_1, 1.5f, 8.0f);
++            break;
++        case 1:
++            hudWarningText(TEXT_CANON_2, 1.5f, 8.0f);
++            break;
++        case 2:
++            hudWarningText(TEXT_CANON_3, 1.5f, 8.0f);
++            break;
++        }
++    }
++    func_80313E0C(0.0f);
++    PW64_LOGF("split-screen cannonball: next shot (frame << 8 | target << 4 | shot)",
++              ((u32)D_8034F858 << 8) | (tgt << 4) | shot);
++    return GAME_STATE_TEST_UPDATE;
++}
++
++// Quit from the pause menu: cannonFrame802D7B7C's restore of the saved
++// points, for every player (each from its own D_80359A98).
++void pw64_cannon_quit(Unk80362690* arg0) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    s32 i;
++    s32 k;
++
++    for (i = pw64_level_players - 1; i >= 0; i--) {
++        pw64_player_switch(i);
++        for (k = 0; k < 4; k++) {
++            p->unk74->unk40[p->cls].unk0[k][p->veh].unk2C = D_80359A98[k];
++            p->unk74->unk40[p->cls].unk0[k][p->veh].unk4 = 0;
++        }
++        p->test = 0;
++    }
++    D_8037DC84 = 1;
++}
