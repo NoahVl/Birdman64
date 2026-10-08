@@ -1,0 +1,22 @@
+--- a/src/app/sdsound.c
++++ b/src/app/sdsound.c
+@@ -233,5 +233,18 @@
+ STATIC_FUNC void sdsound_80334258(SkyDivingData* sdData) {
+     sdData->unk244 = func_8033F8CC(sdData->unk244);
+     sdData->unk245 = func_8033F8CC(sdData->unk245);
+-    uvEventRemoveCb(D_80371CB0, 1, 13, 18, 19, 16, 12, 22, 36);
++    // PW64 split-screen: remove this diver's own callback (cb + arg), not the
++    // last-registered one in the static: with two divers it holds player 2's.
++    // Same as the static with one diver.
++    {
++        EventCallbackInfo info = D_80371CB0;
++        info.cb = sdSoundCallback;
++        info.arg = sdData;
++        uvEventRemoveCb(info, 1, 13, 18, 19, 16, 12, 22, 36);
++    }
++}
++
++// PW64 split-screen: per-player sound callback info (pw64_players.c).
++void pw64_reg_skydiving_sound(void) {
++    PW64_REG(D_80371CB0);
+ }

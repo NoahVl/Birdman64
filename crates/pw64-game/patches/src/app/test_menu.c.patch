@@ -13,7 +13,9 @@
 +static s16 sPw64FreeText[16];
 +
 +static s32 pw64_free_offered(void) {
-+    return (pw64_players > 1) && pw64_split_vehicle(D_80362690->unkC[D_80362690->unk9C].veh);
++    s32 veh = D_80362690->unkC[D_80362690->unk9C].veh;
++
++    return (pw64_players > 1) && pw64_split_vehicle(veh) && (veh != VEHICLE_SKY_DIVING);
 +}
 +
  s32 testMenuMainRender(Unk80362690_Unk0* arg0, Unk80367710* arg1) {

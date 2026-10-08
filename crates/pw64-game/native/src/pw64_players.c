@@ -112,5 +112,8 @@ void pw64_players_init(void) {
     pw64_reg_birdman_move();
     pw64_reg_cannonball();
     pw64_reg_cannonball_pilot();
+    pw64_reg_skydiving();
+    pw64_reg_skydiving_drift();
+    pw64_reg_skydiving_sound();
     pw64_reg_task();
 }

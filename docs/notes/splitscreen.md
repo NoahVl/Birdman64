@@ -1,8 +1,8 @@
 # Split-screen (2-player local)
 
-Status: two pilots (hang glider, gyrocopter, rocket belt, jumble hopper, birdman or cannonball) fly the same test (top/left view = player 1,
-bottom/right = player 2), each on its own controller and camera, seeing each other. Other
-vehicles fall back to one player. Everything is gated: `pw64_level_players == 1` runs the
+Status: two pilots (every vehicle: hang glider, gyrocopter, rocket belt, jumble hopper, birdman,
+cannonball, sky diving) fly the same test (top/left view = player 1, bottom/right = player 2),
+each on its own controller and camera, seeing each other. Everything is gated: `pw64_level_players == 1` runs the
 original code paths. Hopper: only the crash head-shake sfx one-shots (`D_8036905C`) are
 per-player; the collision query scratch (`D_80368C00`..) stays shared.
 Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patches/`.
@@ -125,10 +125,13 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 ## Remaining work (from the per-player statics audit)
 - **Dobj cap:** dobjs are capped at 100 (each player's objectives use their own; beginner gc 1 = 3 rings,
   b:rb:2 = 15 rings → up to id 75); a failed clone logs and leaves that object missing for P2.
-- **Other vehicles:** register their audit lists; first fix our rate patches that
-  `pw64_fatal` on a second vehicle of the same type (birdman1 `sPw64FlutterOwner`,
-  code_BA190 `sPw64DriftOwner`). Gyro `D_8034F380` keeps last frame's buttons (Z edge).
-  Skydiving scoring statics; skydiving formation partners need a second set.
+- Gyro `D_8034F380` keeps last frame's buttons (Z edge).
+- **Sky diving** (skydiving.c.patch `pw64_sky_*`): each player has its own formation: partners
+  + slot shadow are owned dobjs (other view hides them), P2's whole formation 10 m right
+  (`pw64_sky_offset`); scores, countdown, drift registered. Rate owner checks (birdman1,
+  code_BA190) re-own instead of `pw64_fatal`: Retry's `pw64_players_sync` copied P1's owner.
+  Island level/pads load once (first diver below; terraId 9 = still sky); divers see each
+  other only while both in sky or both below. Count text printed per view. No free flight.
 - **Cannonball** (cannonball.c.patch `pw64_cannon_*`, game.c.patch `pw64_cannon_setup/frame_split`):
   lockstep rounds: both aim+fire the same shot; a landed player watches its fly-out until every
   shot is down + 3 s, then one `pw64_cannon_next_round` (target tally P1 → Next → P2, a new
@@ -139,8 +142,8 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - **Audio:** engine-sound events are broadcast to both players' handlers; one music
   sequence; one listener (kernel `D_80250E80[1]`), follows P1.
 - **Hard-wired player 0 in gameplay:** falco.c (bird targets P1), snap.c shutter,
-  env_sound.c:494, task.c:358-372, game.c:770 (splash billboards on camera 0),
-  code_B6580.c:24, code_BA190.c:235, skydiving.c:369.
+  env_sound.c:494, task.c:358-372, game.c:770 (splash billboards on camera 0).
+  Sky diving's pad-0 reads (code_B6580.c:24, code_BA190.c:235, skydiving.c:369) follow PW64_CONT.
 - **Free flight:** landing pads stay (radar shows the landing point); event 0x12 from
   crash effects reaches both players' sound handlers; respawn audio unverified.
 - Never run split-screen in attract/demo playback (single stream).

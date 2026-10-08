@@ -158,6 +158,9 @@ void pw64_reg_birdman_flutter(void); /* birdman1.c */
 void pw64_reg_birdman_move(void);   /* birdman2.c */
 void pw64_reg_cannonball(void);       /* cannonball.c: aim, scoring, round state */
 void pw64_reg_cannonball_pilot(void); /* code_60020.c: pilot wobble */
+void pw64_reg_skydiving(void);        /* skydiving.c: formation, scoring, countdown */
+void pw64_reg_skydiving_drift(void);  /* code_BA190.c: rate drift hold */
+void pw64_reg_skydiving_sound(void);  /* sdsound.c */
 void pw64_players_init(void);
 void pw64_reg_task(void); /* task.c: objective hit state (+ its modules) */
 /* Per-player objective dobjs (kernel dobj.c.patch): owning player + 1 per

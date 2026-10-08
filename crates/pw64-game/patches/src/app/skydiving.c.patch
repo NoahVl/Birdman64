@@ -8,7 +8,7 @@
  
  s32 D_80371960;
  s32 D_80371964;
-@@ -27,6 +28,11 @@
+@@ -27,6 +28,89 @@
  s32 D_8037196C;
  Unk80371970 D_80371970[4];
  
@@ -17,10 +17,176 @@
 +static f32 sPw64DriftAcc = 1.0f;
 +static f32 sPw64Drift[ARRAY_COUNT(D_80371970)][3];
 +
++// PW64 split-screen (splitscreen.md "Sky diving"): each player has its own
++// formation (D_80371970: partner dobjs owned by that player, so the other
++// view doesn't draw them), scores, countdown and drift state, registered
++// per player below.
++extern u8 D_80362748[][0x740]; // game.c.patch: one vehicle buffer per player
++static s32 D_80371B40;         // func_80331FE4's countdown (was function-local)
++// TEXT_COUNT_3..1 of this frame (-1 none), printed by pw64_sky_view_text
++// before the player's own view: the font queue is flushed in the first HUD
++// pass, so printed during the update player 2's count showed in player 1's.
++static s32 sPw64CountText = -1;
++// The ground terra under the sky (unk310): players 2.. enter with
++// terraId already 9 (player 1's EnterLeave).
++static s32 sPw64BelowTerra;
++
++void pw64_reg_skydiving(void) {
++    PW64_REG(D_80371960);
++    PW64_REG(D_80371964);
++    PW64_REG(D_80371968);
++    PW64_REG(D_8037196C);
++    PW64_REG(D_80371970);
++    PW64_REG(D_80371B40);
++    PW64_REG(sPw64CountText);
++    PW64_REG(sPw64DriftAcc);
++    PW64_REG(sPw64Drift);
++}
++
++// Before the live player's view is drawn (game.c.patch).
++void pw64_sky_view_text(void) {
++    s16* str;
++
++    if (sPw64CountText < 0) {
++        return;
++    }
++    uvFontSet(6);
++    uvFontScale(1.0, 1.0);
++    uvFontColor(0xFF, 0xFF, 0, 0xFF);
++    str = textGetDataByIdx(sPw64CountText);
++    uvFontPrintStr16(160 - ((uvFontStr16Width(str) - 16) / 2), 125, str, 0x14, 0xFFE);
++    sPw64CountText = -1;
++}
++
++// Player i's (live) formation moved by (dx, dy) after its EnterLeave: its
++// centre, start pose and partners, so the players don't share one slot.
++void pw64_sky_offset(SkyDivingData* sdData, f32 dx, f32 dy) {
++    s32 i;
++
++    sdData->unk2B8 += dx;
++    sdData->unk2BC += dy;
++    func_80332D94(sdData); // EnterLeave's start pose, at the new centre
++    uvDobjPosm(sdData->objId, 0, &sdData->unk10);
++    for (i = 0; i < 3; i++) {
++        D_80371970[i].unk10.m[3][0] += dx;
++        D_80371970[i].unk10.m[3][1] += dy;
++        uvDobjPosm(D_80371970[i].unk0, 0, &D_80371970[i].unk10);
++    }
++}
++
++// Divers in the sky (terra 9) and below it (the island) are in different
++// places: each view shows the other diver only while both are in the same
++// part (owner 0 = drawn in every view).
++static void pw64_sky_owners(void) {
++    SkyDivingData* sd;
++    s32 apart = FALSE;
++    s32 j;
++
++    for (j = 1; j < pw64_level_players; j++) {
++        if ((((SkyDivingData*)D_80362748[j])->unk264 == 1.0f) != (((SkyDivingData*)D_80362748[0])->unk264 == 1.0f)) {
++            apart = TRUE;
++        }
++    }
++    for (j = 0; j < pw64_level_players; j++) {
++        sd = (SkyDivingData*)D_80362748[j];
++        if (sd->objId < ARRAY_COUNT(pw64_dobj_owner)) {
++            pw64_dobj_owner[sd->objId] = apart ? (u8)(j + 1) : 0;
++        }
++    }
++}
++
  Unk8034FFD0 D_8034FFD0[] = {
      {
       { 0.0f, 1.5f, 0.0f },
-@@ -1096,11 +1102,13 @@
+@@ -230,7 +314,12 @@
+     if (D_80362690->state == GAME_STATE_RESULTS) {
+         return;
+     }
+-    sdData->unk310 = D_80362690->terraId;
++    if ((pw64_level_players > 1) && (D_80362690->terraId == 9)) { // PW64 split-screen
++        sdData->unk310 = sPw64BelowTerra;
++    } else {
++        sdData->unk310 = D_80362690->terraId;
++        sPw64BelowTerra = sdData->unk310;
++    }
+     D_80362690->terraId = 9;
+     uvChanTerra(sdData->camera->unk22C, 9);
+     uvChanEnv(sdData->camera->unk22C, 1);
+@@ -938,6 +1027,9 @@
+ void skydivingBelow(SkyDivingData* sdData) {
+     s32 var_a1;
+     s32 i;
++    // PW64 split-screen: the island's level, pads and toys are loaded by the
++    // first player to fall out of the sky (terraId still 9) only.
++    s32 pw64World = (pw64_level_players < 2) || (D_80362690->terraId == 9);
+ 
+     camera_802D45C4(sdData->camera, sdData->unk58);
+     sdData->unk160.x = 0.0f;
+@@ -947,16 +1039,24 @@
+     D_80362690->terraId = sdData->unk310;
+     uvChanTerra(sdData->camera->unk22C, D_80362690->terraId);
+     if (D_80362690->terraId == 3) {
+-        uvLevelAppend(0x7D);
++        if (pw64World) {
++            uvLevelAppend(0x7D);
++        }
+         var_a1 = 0xD;
+     } else if (D_80362690->terraId == 1) {
+-        uvLevelAppend(0x78);
++        if (pw64World) {
++            uvLevelAppend(0x78);
++        }
+         var_a1 = 8;
+     } else if (D_80362690->terraId == 7) {
+-        uvLevelAppend(0x83);
++        if (pw64World) {
++            uvLevelAppend(0x83);
++        }
+         var_a1 = 0x13;
+     } else if (D_80362690->terraId == 0) {
+-        uvLevelAppend(0x73);
++        if (pw64World) {
++            uvLevelAppend(0x73);
++        }
+         var_a1 = 3;
+     } else {
+         _uvDebugPrintf("sdive_below: undefined environment\n");
+@@ -977,8 +1077,13 @@
+     }
+     sdData->unk258 = 0;
+     sdData->unk264 = sdData->unk10.m[3][2] * 0.05f;
+-    padsLoad();
+-    level_8030B868();
++    if (pw64World) {
++        padsLoad();
++        level_8030B868();
++    }
++    if (pw64_level_players > 1) {
++        pw64_sky_owners();
++    }
+ 
+     if (D_80371960 != 0x32) {
+         for (i = 0; i < 3; i++) {
+@@ -1031,7 +1136,6 @@
+ }
+ 
+ void func_80331FE4(SkyDivingData* sdData) {
+-    static s32 D_80371B40;
+     s16 textId;
+     s16* sp28;
+ 
+@@ -1070,7 +1174,9 @@
+                 }
+                 textId = TEXT_COUNT_1;
+             }
+-            if (textId != -1) {
++            if ((textId != -1) && (pw64_level_players > 1)) {
++                sPw64CountText = textId; // PW64 split-screen: pw64_sky_view_text
++            } else if (textId != -1) {
+                 sp28 = textGetDataByIdx(textId);
+                 uvFontPrintStr16(160 - ((uvFontStr16Width(sp28) - 16) / 2), 125, sp28, 0x14, 0xFFE);
+             }
+@@ -1096,11 +1202,13 @@
      Mtx4F sp88;
      Unk8034FFD0* temp_v0;
      s32 i;
@@ -34,7 +200,7 @@
  
      for (i = 0; i < 3; i++) {
          spC8 = &D_80371970[i];
-@@ -1119,9 +1127,16 @@
+@@ -1119,9 +1227,16 @@
          spC8->unk10.m[3][0] += spC8->unk4 * D_8034F854;
          spC8->unk10.m[3][1] += spC8->unk8 * D_8034F854;
          spC8->unk10.m[3][2] += spC8->unkC * D_8034F854;
@@ -54,3 +220,17 @@
  
          spC8->unk10.m[3][0] += 0.5f * spC8->unk64 * D_8034F854;
          spC8->unk10.m[3][1] += 0.5f * spC8->unk68 * D_8034F854;
+@@ -1250,6 +1365,7 @@
+         temp_fp->unk0 = uvDobjAllocIdx();
+         uvDobjModel(temp_fp->unk0, temp_fp->unk54);
+         uvDobjState(temp_fp->unk0, 2);
++        pw64_dobj_claim(temp_fp->unk0); // PW64 split-screen: this player's formation
+         uvJanimPoseLine(&sp78, temp_fp->unk56, 1.0f);
+         uvJanim_80200638(temp_fp->unk0, &sp78);
+         temp_fp->unk5C = 0.0f;
+@@ -1271,4 +1387,5 @@
+     sdData->shadowObjId = uvDobjAllocIdx();
+     uvDobjModel(sdData->shadowObjId, MODEL_SKYDIVING_SHADOW);
+     uvDobjState(sdData->shadowObjId, 2);
++    pw64_dobj_claim(sdData->shadowObjId); // PW64 split-screen: its slot marker
+ }

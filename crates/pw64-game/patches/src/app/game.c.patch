@@ -62,11 +62,16 @@
 +}
 +
 +// PW64 split-screen: vehicles whose tests take a second pilot (test setup)
-+// and offer Free flight (test_menu.c.patch).
++// and offer Free flight (test_menu.c.patch; not sky diving: its sky/island
++// switch has no respawn).
 +s32 pw64_split_vehicle(s32 veh) {
 +    return (veh == VEHICLE_HANG_GLIDER) || (veh == VEHICLE_GYROCOPTER) || (veh == VEHICLE_ROCKET_BELT) ||
-+           (veh == VEHICLE_JUMBLE_HOPPER) || (veh == VEHICLE_BIRDMAN);
++           (veh == VEHICLE_JUMBLE_HOPPER) || (veh == VEHICLE_BIRDMAN) || (veh == VEHICLE_SKY_DIVING);
 +}
++
++// PW64 split-screen sky diving (skydiving.c.patch).
++void pw64_sky_offset(SkyDivingData* sdData, f32 dx, f32 dy);
++void pw64_sky_view_text(void);
 +
 +// PW64 split-screen free flight (splitscreen.md "Free flight"): set by the
 +// test menu's Free flight item, cleared when the flight is left. The test's
@@ -186,7 +191,7 @@
 +    // Not in the test's first second: a hopper made to fall over in its
 +    // first frames faulted (uvMat4CopyF2L), and 10 m apart no pilots meet
 +    // that soon.
-+    if (!sPw64Collide || (pw64_level_players != 2) || (D_8034F850 < 1.0f)) {
++    if (!sPw64Collide || (pw64_level_players != 2) || (D_8034F850 < 1.0f) || (veh == VEHICLE_SKY_DIVING)) {
 +        return;
 +    }
 +    for (i = 0; i < 2; i++) {
@@ -355,6 +360,7 @@
 +    RocketBeltData* rb;
 +    JumbleHopperData* jh;
 +    BirdmanData* bm;
++    SkyDivingData* sd = NULL;
 +    Mtx4F* vehMtx;
 +    s32 i;
 +    f32 landNow;
@@ -389,13 +395,24 @@
 +            birdLoadLevel(i, p->pilot, bm, p->unk70);
 +            birdEnterLeave(bm);
 +            vehMtx = &bm->unk10;
++        } else if (p->veh == VEHICLE_SKY_DIVING) {
++            D_80367700 = sd = (SkyDivingData*)p->vehicleData;
++            skydivingLoadLevel(i, p->pilot, sd, p->unk70);
++            skydivingEnterLeave(sd);
++            vehMtx = &sd->unk10;
 +        } else {
 +            D_803676F0 = hg = (HangGliderData*)p->vehicleData;
 +            hangGliderLoadLevel(i, p->pilot, hg, p->unk70);
 +            hangGliderEnterLeave(hg);
 +            vehMtx = &hg->unk10;
 +        }
-+        pw64_offset_start(i, vehMtx);
++        if (p->veh == VEHICLE_SKY_DIVING) {
++            // The whole formation 10 m along the start's right axis (the
++            // diver is held within 20 m of its formation's centre).
++            pw64_sky_offset(sd, 10.0f * i * vehMtx->m[0][0], 10.0f * i * vehMtx->m[0][1]);
++        } else {
++            pw64_offset_start(i, vehMtx);
++        }
 +        func_802EDD9C(p, vehMtx);
 +        hudInit();
 +        camera_802D4DE8(p->unk70, 0);
@@ -433,6 +450,9 @@
 +            } else if (p->veh == VEHICLE_CANNONBALL) {
 +                cannonLevelEnterLeave(p->vehicleData);
 +                cannonEndTarget(p->vehicleData);
++            } else if (p->veh == VEHICLE_SKY_DIVING) {
++                skydivingEnterLeave(p->vehicleData);
++                func_8032FE4C(p->vehicleData);
 +            } else {
 +                hangGliderEnterLeave(p->vehicleData);
 +                func_802EF328(p->vehicleData);
@@ -780,6 +800,9 @@
 +        case VEHICLE_BIRDMAN:
 +            bird_802CEB68(p->vehicleData, p->unk78);
 +            break;
++        case VEHICLE_SKY_DIVING:
++            skydivingMovementFrame(p->vehicleData, arg0->state);
++            break;
 +        }
 +    }
 +    uvGfxBegin();
@@ -1080,11 +1103,15 @@
      }
      func_8033F6F8(&sp6C->unk2C, &sp6C->unk2C);
      uvGfxBegin();
++    if (pw64_level_players > 1) {
++        pw64_sky_view_text(); // PW64 split-screen: player 1's sky diving count
++    }
      func_8034B624(sp6C->unk70);
 +    // PW64 split-screen: one world pass per further player, on its own
 +    // camera/channel/viewport with its state live (camera code runs here).
 +    for (pw64I = 1; pw64I < pw64_level_players; pw64I++) {
 +        pw64_player_switch(pw64I);
++        pw64_sky_view_text();
 +        func_8034B624(sp6C->unk70);
 +    }
 +    pw64_player_switch(0);
