@@ -88,6 +88,11 @@ pub fn running_lock() -> PathBuf {
 /// so a slow file manager never delays the exit, and failures are logged
 /// only (there is nothing better to do once the report box is up).
 pub fn open_in_file_manager(dir: &Path) {
+    // Unit tests confirm every settings row, "Open save folder" included:
+    // never pop a file manager window from `cargo test`.
+    if cfg!(test) {
+        return;
+    }
     #[cfg(windows)]
     let opened = std::process::Command::new("explorer").arg(dir).spawn();
     #[cfg(not(windows))]
