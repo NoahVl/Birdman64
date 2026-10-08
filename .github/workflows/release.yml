@@ -237,6 +237,19 @@ jobs:
           ln -sf birdman64.png appdir/.DirIcon
           cp packaging/linux/AppRun appdir/AppRun
           chmod +x appdir/AppRun
+          # winit loads libxkbcommon(-x11) at run time for the keyboard;
+          # minimal systems (and the AppImage catalog's test machine) lack the
+          # X11 part, and the window then panics. Bundled as a fallback that
+          # AppRun uses only when the host has none. Taken from the .debs, not
+          # installed, so the window test below runs without them.
+          mkdir -p tmp/xkb appdir/usr/lib/birdman64/fallback
+          (cd tmp/xkb && apt-get download libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1)
+          for d in tmp/xkb/*.deb; do dpkg-deb -x "$d" tmp/xkb/root; done
+          for l in libxkbcommon.so.0 libxkbcommon-x11.so.0 libxcb-xkb.so.1; do
+            cp -L "tmp/xkb/root/usr/lib/x86_64-linux-gnu/$l" appdir/usr/lib/birdman64/fallback/
+          done
+          cp tmp/xkb/root/usr/share/doc/libxkbcommon0/copyright appdir/usr/lib/birdman64/licenses/libxkbcommon-copyright.txt
+          cp tmp/xkb/root/usr/share/doc/libxcb-xkb1/copyright appdir/usr/lib/birdman64/licenses/libxcb-copyright.txt
           tar -czf birdman64-linux-x64.tar.gz -C dist Birdman64
 
       # Smoke test: the real first-run path with NO PW64_DATA_DIR set, so
@@ -288,6 +301,8 @@ jobs:
           if command -v zenity || command -v kdialog; then
             echo "a file dialog tool is installed; this test needs none"; exit 1
           fi
+          # Informational: without it the AppImage's bundled fallback is used.
+          /sbin/ldconfig -p | grep libxkbcommon-x11 || echo "host has no libxkbcommon-x11"
           mkdir -p tmp/noromdir && cd tmp/noromdir   # no ROM in the cwd
           Xvfb :99 -screen 0 1280x800x24 & XPID=$!
           export DISPLAY=:99
