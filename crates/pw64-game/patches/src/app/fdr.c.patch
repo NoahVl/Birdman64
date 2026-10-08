@@ -8,14 +8,86 @@
  
  #define FDR_SIZE 200
  
-@@ -53,6 +54,10 @@ Unk8035FDA0* D_803619C0;
- Unk803619C8 D_803619C8[FDR_SIZE];
- s32 D_80362008;
- 
-+// PW64 rate: recorder time of the last pose sample / fdr_802E66DC pending.
-+static f32 sPw64FdrSampleTime;
-+static s32 sPw64FdrForced;
-+
+@@ -37,22 +38,68 @@ typedef struct {
+-s32 D_8034F0A0 = 0; // some bool flag
+-s32 D_8034F0A4 = 0; // index for D_8035AF70
+-s32 D_8034F0A8 = 0;
+-s32 D_8034F0AC = 0;
+ f32 pad_D_8034F0B0 = 1.0f;
+
+-s32 D_8035AF60; // vehicle id?
+-u8 D_8035AF64;  // state
+-f32 D_8035AF68;
+-Unk8035AF70 D_8035AF70[FDR_SIZE];
+-Unk8035B5B0 D_8035B5B0[FDR_SIZE];
+-Unk8035B5B0* D_8035C230;
+-Unk8035C238 D_8035C238[FDR_SIZE];
+-Unk8035C238* D_8035FD98;
+-Unk8035FDA0 D_8035FDA0[FDR_SIZE];
+-Unk8035FDA0* D_803619C0;
+-Unk803619C8 D_803619C8[FDR_SIZE];
+-s32 D_80362008;
++// PW64 split-screen: one flight recorder per player, so each player's
++// flight can be replayed. Every fdr global is a field of the live player's
++// recorder (sPw64FdrFor's while PW64_FDR_ALL inits them all); single-player
++// only ever uses entry 0. Not a pw64_player_register region: the rings hold
++// pointers into their own player's arrays (and ~32 KB would be copied per
++// switch).
++typedef struct {
++    s32 f0a0; // some bool flag
++    s32 f0a4; // index for D_8035AF70
++    s32 f0a8;
++    s32 f0ac;
++    s32 af60; // vehicle id?
++    u8 af64;  // state
++    f32 af68;
++    Unk8035AF70 af70[FDR_SIZE];
++    Unk8035B5B0 b5b0[FDR_SIZE];
++    Unk8035B5B0* c230;
++    Unk8035C238 c238[FDR_SIZE];
++    Unk8035C238* fd98;
++    Unk8035FDA0 fda0[FDR_SIZE];
++    Unk8035FDA0* x19c0;
++    Unk803619C8 x19c8[FDR_SIZE];
++    s32 x2008;
++    // PW64 rate: recorder time of the last pose sample / fdr_802E66DC pending.
++    f32 sampleTime;
++    s32 forced;
++} Pw64Fdr;
++static Pw64Fdr sPw64Fdr[PW64_MAX_PLAYERS];
++static s32 sPw64FdrFor = -1;
++#define PW64_FDR (sPw64Fdr[(sPw64FdrFor >= 0) ? sPw64FdrFor : pw64_player_cur])
++#define D_8034F0A0 (PW64_FDR.f0a0)
++#define D_8034F0A4 (PW64_FDR.f0a4)
++#define D_8034F0A8 (PW64_FDR.f0a8)
++#define D_8034F0AC (PW64_FDR.f0ac)
++#define D_8035AF60 (PW64_FDR.af60)
++#define D_8035AF64 (PW64_FDR.af64)
++#define D_8035AF68 (PW64_FDR.af68)
++#define D_8035AF70 (PW64_FDR.af70)
++#define D_8035B5B0 (PW64_FDR.b5b0)
++#define D_8035C230 (PW64_FDR.c230)
++#define D_8035C238 (PW64_FDR.c238)
++#define D_8035FD98 (PW64_FDR.fd98)
++#define D_8035FDA0 (PW64_FDR.fda0)
++#define D_803619C0 (PW64_FDR.x19c0)
++#define D_803619C8 (PW64_FDR.x19c8)
++#define D_80362008 (PW64_FDR.x2008)
++#define sPw64FdrSampleTime (PW64_FDR.sampleTime)
++#define sPw64FdrForced (PW64_FDR.forced)
++// Test setup (player 1 live) starts every player's recorder.
++#define PW64_FDR_ALL(call)                                                       \
++    do {                                                                         \
++        if ((sPw64FdrFor < 0) && (pw64_player_cur == 0)) {                       \
++            for (sPw64FdrFor = 0; sPw64FdrFor < PW64_MAX_PLAYERS; sPw64FdrFor++) { \
++                call;                                                            \
++            }                                                                    \
++            sPw64FdrFor = -1;                                                    \
++        } else {                                                                 \
++            call;                                                                \
++        }                                                                        \
++    } while (0)
+
  STATIC_FUNC void fdrControls(f32, f32);
  STATIC_FUNC s32 fdrGetControls(f32*, f32*);
  STATIC_FUNC void fdr_802E7214(Mtx4F*, u16);
@@ -23,11 +95,7 @@
      if (D_8035AF64 == 0) {
          return;
      }
-+    // PW64 split-screen: one recorder (and its clock): player 1 only.
-+    if (pw64_player_cur != 0) {
-+        return;
-+    }
- 
+
      if (D_8035AF64 != 4) {
          D_8035AF68 += D_8034F854;
      }
@@ -57,9 +125,6 @@
  }
  
  void fdr_802E66DC(void) {
-+    if (pw64_player_cur != 0) { // PW64 split-screen: player 1 only
-+        return;
-+    }
      D_8035AF60 = 1;
 -    D_8034F0A0 = 1;
 +    // PW64 rate: forced sampling was every frame; flag fdr_802E682C's vehicle
@@ -67,18 +132,35 @@
 +    D_8034F0A0 = (D_8035AF68 - sPw64FdrSampleTime >= PW64_REF_DT - 1e-4f);
 +    sPw64FdrForced = TRUE;
  }
- 
- void fdrSetBlen(f32 arg0) {
-@@ -130,6 +151,9 @@ void fdrSetBlen(f32 arg0) {
- }
- 
- void fdr_802E682C(f32* arg0, u8 count, u8 arg2) {
-+    if (pw64_player_cur != 0) { // PW64 split-screen: player 1 only
-+        return;
+
+-void fdrSetBlen(f32 arg0) {
++// PW64 split-screen: links every player's rings (PW64_FDR_ALL).
++static void pw64_fdr_set_blen(f32 arg0);
++void fdrSetBlen(f32 arg0) {
++    PW64_FDR_ALL(pw64_fdr_set_blen(arg0));
++}
++
++static void pw64_fdr_set_blen(f32 arg0) {
+     s32 temp_ft5;
+     s32 i;
+
+@@ -146,3 +164,14 @@ void fdr_802E6870(f32* arg0, u8 count, u8* arg2) {
+-void fdr_802E68B0(u8 arg0) {
++// PW64 split-screen: start (1) resets every player's recorder at test setup
++// (player 1 live, PW64_FDR_ALL); replay (3) is the live player's.
++static void pw64_fdr_802E68B0(u8 arg0);
++void fdr_802E68B0(u8 arg0) {
++    if (arg0 == 1) {
++        PW64_FDR_ALL(pw64_fdr_802E68B0(1));
++    } else {
++        pw64_fdr_802E68B0(arg0);
 +    }
-     if (D_8034F0A0 != 0) {
-         fdr_802E6EE4(arg0, count);
-     }
++}
++
++static void pw64_fdr_802E68B0(u8 arg0) {
+     f32 var_fv0;
+     s32 var_a0_2;
+     s32 i;
 @@ -160,6 +184,8 @@ void fdr_802E68B0(u8 arg0) {
          D_8035C230 = D_8035B5B0;
          D_803619C0 = D_8035FDA0;

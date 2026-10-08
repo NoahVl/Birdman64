@@ -32,15 +32,6 @@
      unkC = &D_80362690->unkC[D_80362690->unk9C];
      if (D_80362690->unkC[D_80362690->unk9C].unk7B != 0) {
          return 0;
-@@ -194,6 +216,9 @@ u8 resultListPhoto(void) {
- u8 resultListReplay(void) {
-     Unk80362690_Unk0* unkC;
-     s32 ret;
-
-+    if (pw64_results_player != 0) { // PW64 split-screen: player 1's flight
-+        return 0;
-+    }
-     unkC = &D_80362690->unkC[D_80362690->unk9C];
 @@ -391,9 +416,17 @@ s32 resultMenuChoose(s32 arg0) {
          case 2:
 +            // PW64 split-screen: another player's tally ends here.
@@ -58,6 +49,16 @@
              if (((unkC->veh != VEHICLE_CANNONBALL) || (unkC->unk8B != 0)) && (unkC->veh != VEHICLE_BIRDMAN)) {
                  ret = totResultHandler();
              } else {
+                 ret = GAME_STATE_TEST_DETAILS;
+             }
+             sScreenFadeDuration = 1.5f;
+             break;
+         case 1:
++            // PW64 split-screen: the shown tally's player's own flight (its
++            // recorder, vehicle and full-screen camera); no-op for player 1.
++            pw64_player_switch(pw64_results_player);
+             func_8032C540(D_80362690);
++            pw64_player_switch(0);
 @@ -557,5 +589,8 @@ void resultDrawTally(s32 arg0) {
              uvFontPrintStr16(X_TOTAL, Y_TOTAL, sPtsDeductedStr, 4, 0xFFE);
          }

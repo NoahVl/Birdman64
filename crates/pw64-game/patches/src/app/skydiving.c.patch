@@ -74,6 +74,52 @@
 +    }
 +}
 +
++// Partner (func_803329C0) of a two-diver test: never the other player's
++// pilot either (the original sets only leave out the diver's own). The
++// partners are the other half of {Lark, Goose, Hawk | Kiwi, Ibis, Robin};
++// a clash takes the first pilot of the diver's own half that is neither
++// diver. Its model and pose line are loaded: a clash means the two divers
++// are in different halves, and each pilot's level has the other half's.
++static const u16 sPw64SkyModel[PILOT_COUNT] = {
++    MODEL_SKYDIVING_LARK, MODEL_SKYDIVING_GOOSE, MODEL_SKYDIVING_HAWK,
++    MODEL_SKYDIVING_KIWI, MODEL_SKYDIVING_IBIS,  MODEL_SKYDIVING_ROBIN,
++};
++static const u16 sPw64SkyPose[PILOT_COUNT] = { 0x52, 0x58, 0x5D, 0x4D, 0x4E, 0x4F };
++
++static s32 pw64_sky_pilot(u16 model) {
++    s32 k;
++
++    for (k = 0; k < PILOT_COUNT; k++) {
++        if (sPw64SkyModel[k] == model) {
++            return k;
++        }
++    }
++    return -1;
++}
++
++static void pw64_sky_partner(SkyDivingData* sdData, Unk80371970* partner) {
++    s32 own;
++    s32 other;
++    s32 k;
++
++    if (pw64_level_players < 2) {
++        return;
++    }
++    own = pw64_sky_pilot(sdData->unk1C0);
++    // Player 1's formation is built before player 2's diver exists.
++    other = (pw64_player_cur == 0) ? pw64_p2_pilot : pw64_sky_pilot(((SkyDivingData*)D_80362748[0])->unk1C0);
++    if ((own < 0) || (other < 0) || (other == own) || (partner->unk54 != sPw64SkyModel[other])) {
++        return;
++    }
++    for (k = 0; k < PILOT_COUNT; k++) {
++        if (((k / 3) == (own / 3)) && (k != own)) {
++            partner->unk54 = sPw64SkyModel[k];
++            partner->unk56 = sPw64SkyPose[k];
++            return;
++        }
++    }
++}
++
 +// Divers in the sky (terra 9) and below it (the island) are in different
 +// places: each view shows the other diver only while both are in the same
 +// part (owner 0 = drawn in every view).
@@ -221,6 +267,7 @@
          spC8->unk10.m[3][0] += 0.5f * spC8->unk64 * D_8034F854;
          spC8->unk10.m[3][1] += 0.5f * spC8->unk68 * D_8034F854;
 @@ -1250,6 +1365,7 @@
++        pw64_sky_partner(sdData, temp_fp); // PW64 split-screen
          temp_fp->unk0 = uvDobjAllocIdx();
          uvDobjModel(temp_fp->unk0, temp_fp->unk54);
          uvDobjState(temp_fp->unk0, 2);

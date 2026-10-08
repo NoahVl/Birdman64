@@ -78,7 +78,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   run per flying player (`pw64_test_time_split`); results when all are done. Results
   (`pw64_results_split`): every view keeps drawing; results.c reads `D_80364210[unk9C=0]`, so
   "Next" on P1's tally swaps each other player's struct in for a Next-only tally, then P1's
-  class totals + Retry/Quit (applies to all). Only P1 is saved. Tallies/replay full screen (see Remaining work).
+  class totals + Retry/Quit (applies to all). Only P1 is saved. Tallies/replays full screen (see Remaining work).
 - **Free flight** (test_menu.c.patch, game.c.patch `pw64_free_*`): split-only item in the
   test menu's bottom-right slot (Sample photo's; replaces it on Shutter Bug tests) for
   `pw64_split_vehicle`s; returns like Start with `pw64_free_flight = 1` (cleared on menu entry
@@ -117,7 +117,9 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - The kernel z clear (`uvGfx_80222A98`) sets a full-screen scissor right after
   `uvGfxViewport`: P2's near geometry and the sun flare drew over P1's half. chan.c.patch
   re-issues `uvGfxViewport(arg0)` after both z clears when split.
-- fdr.c flight recorder is P1-only, else its clock runs 2×. Photo shutter is P1-only.
+- fdr.c flight recorder: one per player (`sPw64Fdr[pw64_player_cur]`, every fdr global a
+  macro onto it; not a registered region: rings point into their own arrays, ~32 KB/switch).
+  Test setup's start (P1 live) resets all (`PW64_FDR_ALL`). Photo shutter is P1-only.
 - `hgSoundEvent13` removed the last-registered sound callback (P2's): now removes its own.
   Same fix for the rocket belt (`rbSoundEvent13`) and the gyro (`gyrocopter_sound.c`
   func_8030B168: static D_80369E50 rebuilt per gyro with the caller's `gcData`).
@@ -156,8 +158,10 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - Never run split-screen in attract/demo playback (single stream).
 - **Results:** from the tally on, each tally draws only its player's view, full screen
   (`pw64_results_full`; both halves left the 1-row view gap as a dark seam across it).
-  P1's replay is full screen too (camera 0 already is). P2 replay = a 2nd fdr recorder (not
-  cheap). P2's results aren't stored past the session (no save slot).
+  Each tally's Replay replays that player's flight full screen (results.c.patch: switch to
+  `pw64_results_player` around func_8032C540). P2's results aren't stored past the session.
+- Other pilots: glider toys skip both pilots (4 left = max toys); sky partners swap a clash
+  with the other diver for the first of the diver's own half (both halves' models loaded).
 - Hopper hit (`pw64_jh_fall`): state 6 goes to `unk134` (last landing; origin before one → stuck in
   state 9 / fault), so it falls only on the ground at its own spot; hit in the air → on landing.
 - Widescreen/fill-screen + split
