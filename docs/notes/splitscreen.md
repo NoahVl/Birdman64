@@ -81,6 +81,12 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   frame. A player's end → crash pose + white fade, frozen 1.6 s, `pw64_free_respawn`: vehicle
   EnterLeave (in-place reset to db_getstart) + crash latches + P2 offset; a landing respawns at
   its own sequence's white step (unk7C 3). Pause: P1 only (any time).
+- **Collisions** (game.c.patch `pw64_collide_*`): `pw64_split_collide` latched at test setup;
+  once per frame after both vehicle updates, sphere test on the vehicles' world matrices
+  (radius 4 m glider, 3 gyro, 2.5 birdman, 1 rocket belt/hopper; P2 starts 10 m away), skipped
+  for done/respawning players, non-flying states and the first second. Hit → per player under
+  switch(i), the vehicle's own hard-impact state (glider/gyro/belt/birdman tumble state → crash
+  → their unk7C test-end or free-flight respawn; hopper falls over, test goes on).
 - **Glyph encoding** (`native/src/pw64_text.c`): font 6 glyph = index in its STRG table:
   `0-9` 0x00, `A-Z` 0x0A, `a-z` 0x24, space 0x42, punctuation after; 0x60.. = bold 0-9A-Za-z
   (main/pause menus). Strings end 0xFFE, -1. `pw64_text_encode[_style]` builds them (bold:
@@ -120,6 +126,9 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   split-screen in attract/demo playback (single stream).
 - **Results:** the replay draws only P1's (top) view; the bottom keeps its last frame.
   P2's results aren't stored anywhere past the session (no save slot).
+- Hopper fall-over in split: P2 waits in state 9 (get-up) for its 7 s timeout (camera
+  follow-distance check never met), P1 gets up at once. A test-start fall-over faulted.
+- a:rb:1: P2 is "FINISHED" at once (its 10 m offset start ends its test), collisions or not.
 - Ground starts: P2's offset keeps P1's ground height. Widescreen/fill-screen + split
   untested (the view scissor may fight the renderer's Hor+ extension). Cockpit views that
   hide their own pilot dobj hide it for the other view too (dobj state is global).
@@ -139,8 +148,8 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - **Free flight entry:** a native "Free flight" item in the game's own test menu (split-screen
   only), not a settings toggle. Menu text = our own strings encoded to the game font's glyph
   indices (menu.c items are 16-bit glyph strings); the same helper serves later P2 menus.
-- **Interactions toggle:** a Settings > Controls row next to the split-screen rows (setting done: `pw64_split_collide`). On = pilots collide (new sphere test → existing crash path);
-  off = pass through. Objectives per player either way. Default off.
+- **Interactions toggle:** a Settings > Controls row next to the split-screen rows (`pw64_split_collide`). On = pilots collide (sphere test → each vehicle's own
+  hard-impact path, Architecture "Collisions"); off = pass through. Objectives per player either way. Default off.
 - **Layout:** top/bottom (default) and left/right in settings. Deferred: one window per
   player / multi-monitor (`fb_present` already takes a target rect).
 - **Audio:** both players mixed; optional pan per side for left/right.

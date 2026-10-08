@@ -1,5 +1,10 @@
 --- a/src/app/game.c
 +++ b/src/app/game.c
+@@ -27,3 +27,4 @@
+ #include "app/snap.h"
+ #include "app/snd.h"
++#include "app/smoke.h" // PW64: pilot collisions (gyrocopter smoke)
+ #include "app/test_menu.h"
 @@ -45,9 +45,11 @@
  
  Unk80362690* D_80362690;
@@ -70,6 +75,140 @@
 +// player at its start (sPw64Respawn: game time to respawn at, 0 = flying).
 +int pw64_free_flight;
 +static f32 sPw64Respawn[PW64_MAX_PLAYERS];
++
++// PW64 split-screen pilot collisions (splitscreen.md "Collisions"): the
++// original game has no vehicle-vs-vehicle test. With pw64_split_collide on
++// (latched at test start), two pilots whose spheres touch both take their
++// vehicle's own hard-impact path, the one a fast hit on a building or tree
++// takes: hang glider, gyrocopter, rocket belt and birdman tumble (scream,
++// crash music, smoke) and crash; the jumble hopper falls over.
++static s32 sPw64Collide;
++
++// Sphere radius (m) around the vehicle's origin: about half the span.
++static f32 pw64_collide_radius(s32 veh) {
++    switch (veh) {
++    case VEHICLE_HANG_GLIDER:
++        return 4.0f; // ~9 m wing
++    case VEHICLE_GYROCOPTER:
++        return 3.0f; // rotor disc
++    case VEHICLE_BIRDMAN:
++        return 2.5f; // ~5 m wings
++    default:
++        return 1.0f; // rocket belt / jumble hopper: one pilot
++    }
++}
++
++static Mtx4F* pw64_collide_mtx(s32 veh, void* data) {
++    switch (veh) {
++    case VEHICLE_GYROCOPTER:
++        return &((GyrocopterData*)data)->unk10;
++    case VEHICLE_ROCKET_BELT:
++        return &((RocketBeltData*)data)->unk10;
++    case VEHICLE_JUMBLE_HOPPER:
++        return &((JumbleHopperData*)data)->unk74;
++    case VEHICLE_BIRDMAN:
++        return &((BirdmanData*)data)->unk10;
++    default:
++        return &((HangGliderData*)data)->unk10;
++    }
++}
++
++// Flying or on the ground, not already tumbling/crashed/landed.
++static s32 pw64_collide_live(s32 veh, void* data) {
++    switch (veh) {
++    case VEHICLE_GYROCOPTER:
++        return ((GyrocopterData*)data)->unkC0 <= 1;
++    case VEHICLE_ROCKET_BELT:
++        return ((RocketBeltData*)data)->unk90 <= 1;
++    case VEHICLE_JUMBLE_HOPPER:
++        return ((JumbleHopperData*)data)->unk4C <= 5; // 6..9: fallen over, getting up
++    case VEHICLE_BIRDMAN:
++        return ((BirdmanData*)data)->unk104 == 0;
++    default:
++        return ((HangGliderData*)data)->unk8C <= 1;
++    }
++}
++
++// The live player's vehicle takes its own hard-impact state; its movement,
++// sound and status code run the rest (test end / free-flight respawn).
++static void pw64_collide_crash(s32 veh, void* data) {
++    HangGliderData* hg;
++    GyrocopterData* gc;
++    RocketBeltData* rb;
++    BirdmanData* bm;
++
++    switch (veh) {
++    case VEHICLE_GYROCOPTER: // func_8030877C: hard hit
++        gc = data;
++        gc->unk96 = smokeCreate();
++        smokeProps(gc->unk96, SMOKE_PROP_1(0, 0, 0), SMOKE_PROP_2(20.0f), SMOKE_PROP_3(2.0f), SMOKE_PROP_5(0.0f, 0.0f, 0.0f), SMOKE_PROP_END);
++        gc->unkC0 = 2;
++        break;
++    case VEHICLE_ROCKET_BELT: // func_8032975C: impact over 21.8 m/s
++        rb = data;
++        rb->unk90 = 2;
++        rb->unk91 = 0;
++        rb->unk4 &= ~4;
++        rb->unk114 = 1000.0f;
++        rb->unk118 = 1000.0f;
++        break;
++    case VEHICLE_JUMBLE_HOPPER: // func_803006E8: bad landing, falls over
++        ((JumbleHopperData*)data)->unk4C = 6;
++        sndPlaySfx(SFX_CRASH_LANDING_REVEAL);
++        break;
++    case VEHICLE_BIRDMAN: // bird_802D0080: object hit
++        bm = data;
++        bm->unk106 = 1;
++        bm->unk104 = 1;
++        bm->unk4 = (bm->unkE0 != 0) ? 0xF7FB : 0xF7F8; // 0xF7F8 = D_8035963C
++        break;
++    default: // hangGlider_802F3A80: object hit at speed
++        hg = data;
++        hg->unk8D = 1;
++        hg->unk8C = 2;
++        hg->unk4 = (hg->unk5C != 0) ? 0xF7FB : 0xF7F8; // 0xF7F8 = D_8036830C
++        break;
++    }
++}
++
++// Once per frame after every player's vehicle update (player 0 live).
++static void pw64_collide_frame(void) {
++    s32 veh = D_80362690->unkC[0].veh; // every player flies the same vehicle
++    Mtx4F* a;
++    Mtx4F* b;
++    f32 dx;
++    f32 dy;
++    f32 dz;
++    f32 r;
++    s32 i;
++
++    // Not in the test's first second: a hopper made to fall over in its
++    // first frames faulted (uvMat4CopyF2L), and 10 m apart no pilots meet
++    // that soon.
++    if (!sPw64Collide || (pw64_level_players != 2) || (D_8034F850 < 1.0f)) {
++        return;
++    }
++    for (i = 0; i < 2; i++) {
++        if (sPw64Done[i] || (sPw64Respawn[i] != 0.0f) || !pw64_collide_live(veh, D_80362748[i])) {
++            return;
++        }
++    }
++    a = pw64_collide_mtx(veh, D_80362748[0]);
++    b = pw64_collide_mtx(veh, D_80362748[1]);
++    dx = a->m[3][0] - b->m[3][0];
++    dy = a->m[3][1] - b->m[3][1];
++    dz = a->m[3][2] - b->m[3][2];
++    r = 2.0f * pw64_collide_radius(veh);
++    if ((SQ(dx) + SQ(dy) + SQ(dz)) >= SQ(r)) {
++        return;
++    }
++    for (i = 0; i < 2; i++) {
++        pw64_player_switch(i);
++        pw64_collide_crash(veh, D_80362690->unkC[0].vehicleData);
++    }
++    pw64_player_switch(0);
++    PW64_LOGF("split-screen: pilots collided (time*10 << 8 | veh)", ((u32)(D_8034F850 * 10.0f) << 8) | veh);
++}
 +
  typedef s32 (*GameStateUpdateFunc)(Unk80362690*);
  
@@ -567,6 +706,7 @@
 +        pw64_players_sync();
 +        uvMemSet(sPw64Done, 0, sizeof(sPw64Done));
 +        uvMemSet(sPw64Respawn, 0, sizeof(sPw64Respawn));
++        sPw64Collide = pw64_split_collide; // fixed for this test
 +    }
      switch (temp_s0->veh) {
      case VEHICLE_HANG_GLIDER:
@@ -680,6 +820,9 @@
 +    }
 +    }
 +    pw64_player_switch(0);
++    if (pw64_level_players > 1) {
++        pw64_collide_frame(); // PW64 split-screen: pilots touching crash
++    }
      uvEventPost(0x16, 0);
 -    if (taskFrameUpdate(&sp6C->unk2C, sp6C->unk20) == 1) {
 +    if (pw64_level_players > 1) {
