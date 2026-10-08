@@ -352,6 +352,13 @@ pub fn run_game(
 ) -> os::Stop {
     // Single-threaded OS core: shared mutable HLE state behind a RefCell.
     let hle = std::rc::Rc::new(std::cell::RefCell::new(hle::Hle::new(gpu, sink)));
+    let throttle = std::env::var_os("PW64_NO_THROTTLE").is_none();
+    // Non-throttled runs (scripted checks) use the virtual clock: host speed
+    // must not reach game dt or retrace delivery (sweep.md "Determinism").
+    // `PW64_WALL_CLOCK=1` keeps the host clock (old behaviour).
+    if !throttle && std::env::var_os("PW64_WALL_CLOCK").is_none() {
+        os::set_virtual_clock();
+    }
     os::set_present_rate(rate);
     {
         let h = hle.clone();
@@ -407,7 +414,7 @@ pub fn run_game(
         max_retraces: std::env::var("PW64_MAX_RETRACES")
             .ok()
             .and_then(|v| v.parse().ok()),
-        throttle: std::env::var_os("PW64_NO_THROTTLE").is_none(),
+        throttle,
     };
     let stop = os::run(&cfg);
     audio::finish();

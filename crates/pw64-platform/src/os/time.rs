@@ -44,7 +44,17 @@ pub(crate) struct Clock {
     last_read: AtomicU64,
     /// Counts absorbed as paused wall time by stall detection so far.
     stalled: AtomicU64,
+    /// Virtual clock (non-throttled runs, [`Self::set_virtual`]): host wall
+    /// time never reaches the count; it advances only by [`Self::skip`] and
+    /// [`Self::tick`]. Makes scripted headless runs bit-identical.
+    virt: bool,
 }
+
+/// Virtual clock: counts per OS-call checkpoint ([`Clock::tick`]). Small (a
+/// frame makes a few hundred calls, so dt stays ~1/60 s), but non-zero so a
+/// thread that polls the clock between OS calls (`osYieldThread` spins in
+/// snap.c, NOBLOCK receive loops) still reaches its deadline.
+pub const VIRTUAL_TICK_COUNTS: u64 = 47; // ~1 µs
 
 impl Clock {
     pub(crate) fn new() -> Self {
@@ -55,11 +65,30 @@ impl Clock {
             frozen: None,
             last_read: AtomicU64::new(u64::MAX),
             stalled: AtomicU64::new(0),
+            virt: false,
         }
     }
 
-    /// Host wall time since boot, in counts.
+    /// Switches to the virtual clock, restarting the count at 0. Before boot
+    /// only (the game must not have read the clock yet).
+    pub(crate) fn set_virtual(&mut self) {
+        *self = Self::new();
+        self.virt = true;
+    }
+
+    /// Virtual clock: one OS-call checkpoint's worth of time
+    /// ([`VIRTUAL_TICK_COUNTS`]). No-op on the wall clock or while frozen.
+    pub(crate) fn tick(&mut self) {
+        if self.virt && self.frozen.is_none() {
+            self.skipped += VIRTUAL_TICK_COUNTS;
+        }
+    }
+
+    /// Host wall time since boot, in counts (always 0 on the virtual clock).
     fn wall(&self) -> u64 {
+        if self.virt {
+            return 0;
+        }
         (self.start.elapsed().as_nanos() * COUNT_RATE as u128 / 1_000_000_000) as u64
     }
 
@@ -230,6 +259,26 @@ mod tests {
             let r = c.now();
             assert!(r >= f + ms(1) && r < f + ms(21), "{r} vs {f}");
         }
+    }
+
+    /// Determinism: the virtual clock ignores host time; only skips and
+    /// checkpoint ticks move it (frozen: skips only).
+    #[test]
+    fn virtual_clock_ignores_wall_time() {
+        let mut c = Clock::new();
+        std::thread::sleep(Duration::from_millis(2));
+        c.set_virtual();
+        assert_eq!(c.now(), 0);
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(c.now(), 0, "wall time must not reach the count");
+        c.tick();
+        c.skip(1000);
+        assert_eq!(c.now(), VIRTUAL_TICK_COUNTS + 1000);
+        c.freeze();
+        c.tick();
+        assert_eq!(c.now(), VIRTUAL_TICK_COUNTS + 1000);
+        c.unfreeze();
+        assert_eq!(c.now(), VIRTUAL_TICK_COUNTS + 1000);
     }
 
     /// P5: a host stall longer than the 250 ms threshold (system
