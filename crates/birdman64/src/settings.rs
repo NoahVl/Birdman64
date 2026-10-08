@@ -783,8 +783,9 @@ impl Overlay {
             input::bind_button(name, b);
             self.end_capture();
         } else if cap.started.elapsed() >= CAPTURE_TIMEOUT {
-            self.capture_error = Some("No button pressed. Select the row to try again.".into());
+            // Ended first (it clears the red line), then the message.
             self.end_capture();
+            self.capture_error = Some("No button pressed. Select the row to try again.".into());
         }
     }
 
@@ -3637,6 +3638,28 @@ mod tests {
         });
         o.on_key(KeyCode::Escape, false, true);
         assert!(o.capture.is_none());
+    }
+
+    /// A timed-out gamepad Bind capture ends with the red line still set:
+    /// `end_capture` clears the line, so the timeout message is set after
+    /// it (like in `poll_p2_capture`).
+    #[test]
+    fn gamepad_capture_timeout_keeps_red_line() {
+        let mut o = Overlay::new();
+        o.page = Page::Controls;
+        o.capture = Some(Capture {
+            kind: Kind::Gamepad,
+            slot: 3,
+            name: "A",
+            started: Instant::now() - CAPTURE_TIMEOUT,
+        });
+        o.poll_capture();
+        assert!(o.capture.is_none());
+        assert!(o.capture_error.is_some());
+        assert_eq!(
+            o.capture_error.as_deref(),
+            Some("No button pressed. Select the row to try again.")
+        );
     }
 
     #[test]
