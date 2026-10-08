@@ -100,14 +100,9 @@ pub fn parse(s: &str) -> Result<Start, String> {
             ));
         }
     };
-    let pilot = match parts.get(3).map(String::as_str) {
-        None | Some("lark") => 0,
-        Some("goose") => 1,
-        Some("hawk") => 2,
-        Some("kiwi") => 3,
-        Some("ibis") => 4,
-        Some("robin" | "hooter") => 5,
-        Some(p) => return Err(format!("unknown pilot `{p}`")),
+    let pilot = match parts.get(3) {
+        None => 0,
+        Some(p) => parse_pilot(p)?,
     };
     let file = match parts.get(4).map(String::as_str) {
         None | Some("1") => 0,
@@ -121,6 +116,36 @@ pub fn parse(s: &str) -> Result<Start, String> {
         test,
         pilot,
     })
+}
+
+/// Pilot name → decomp `PILOT_*` id (lark 0, goose 1, hawk 2, kiwi 3,
+/// ibis 4, robin/hooter 5), case-insensitive.
+pub fn parse_pilot(s: &str) -> Result<i32, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "lark" => Ok(0),
+        "goose" => Ok(1),
+        "hawk" => Ok(2),
+        "kiwi" => Ok(3),
+        "ibis" => Ok(4),
+        "robin" | "hooter" => Ok(5),
+        p => Err(format!("unknown pilot `{p}` (lark, goose, hawk, kiwi, ibis, robin)")),
+    }
+}
+
+/// Called by the patched title state on a `PW64_START` boot (split-screen):
+/// player 2's pilot from `PW64_P2_PILOT`, or -1 (unset/invalid: player 1's).
+#[unsafe(no_mangle)]
+pub extern "C-unwind" fn pw64_p2_pilot_env() -> i32 {
+    let Ok(v) = std::env::var("PW64_P2_PILOT") else {
+        return -1;
+    };
+    match parse_pilot(&v) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[start] ignoring PW64_P2_PILOT: {e}");
+            -1
+        }
+    }
 }
 
 static ASKED: AtomicBool = AtomicBool::new(false);
@@ -204,6 +229,17 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn parses_pilots() {
+        let names = ["lark", "goose", "hawk", "kiwi", "ibis", "robin"];
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(parse_pilot(n), Ok(i as i32));
+        }
+        assert_eq!(parse_pilot(" Hooter "), Ok(5));
+        assert!(parse_pilot("bob").is_err());
+        assert!(parse_pilot("").is_err());
     }
 
     #[test]

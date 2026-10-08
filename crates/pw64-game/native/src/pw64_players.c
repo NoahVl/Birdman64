@@ -12,7 +12,7 @@ int pw64_players = 1;
 int pw64_level_players = 1;
 int pw64_player_cur = 0;
 
-#define PW64_MAX_REGIONS 128
+#define PW64_MAX_REGIONS 192
 #define PW64_SLOT_BYTES 0x14000 /* objective arrays (pw64_reg_task) ~29 KB */
 
 typedef struct {

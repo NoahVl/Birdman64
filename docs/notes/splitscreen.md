@@ -16,7 +16,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   game's own globals; only the current player's copy is live. Registered regions
   (`PW64_REG(sym)` inside per-file `pw64_reg_<file>()`, called from `pw64_players_init`;
   explicit, no constructors because of the three build modes) are swapped by
-  `pw64_player_switch(i)`. Fixed arena: 64 regions, 32 KB per slot, `pw64_fatal` on overflow.
+  `pw64_player_switch(i)`. Fixed arena: 192 regions, 80 KB per slot, `pw64_fatal` on overflow.
   `pw64_players_sync()` copies live state to the other slots (used before P1's vehicle load,
   so P2 starts from the reset HUD/radar/shadow state). Function-local statics are hoisted to
   file scope to be registered.
@@ -87,6 +87,11 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   frame. A player's end → crash pose + white fade, frozen 1.6 s, `pw64_free_respawn`: vehicle
   EnterLeave (in-place reset to db_getstart) + crash latches + P2 offset; a landing respawns at
   its own sequence's white step (unk7C 3).
+- **P2 pilot** (`pw64_p2_pilot`, -1 = P1's): after P1's pick, game.c.patch syncs + switches to P2 and reruns
+  `func_802DD200` (P2's pad via PW64_CONT; B → P1's pass again); pilot_select.c.patch labels "PLAYER n" and
+  keeps a cursor per player. `pw64_setup_players`/`pw64_cannon_setup` set P2's `unkC[0].pilot`; level.c.patch
+  `levelComputeAppend` also appends P2's pilot level (models). The hang glider pose tree (code_51E30 globals:
+  per-pilot anim ids + pointers into hgData) is registered per player. `PW64_P2_PILOT` (PW64_START boots only).
 - **Pause** (`pw64_pause_player`/`pw64_pause_menu`): any player's Start pauses everyone (not
   in their own landing/crash sequence unless finished or in free flight); the menu runs with
   the pauser live, so their pad (PW64_CONT) drives it; the choice runs with P1 live. Split

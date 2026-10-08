@@ -12,3 +12,7 @@ int pw64_split = 0; /* 0 off, 1 on (two players; set before boot) */
  * the viewports and the renderer tags read for the rest of the test. */
 int pw64_split_layout = 0;
 int pw64_split_lr = 0;
+
+/* Player 2's pilot (PILOT_*), -1 = fly player 1's. Only player 2's vehicle
+ * load and the level's model list read it (game.c.patch, level.c.patch). */
+int pw64_p2_pilot = -1;

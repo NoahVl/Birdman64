@@ -29,8 +29,37 @@
      uvMat4SetQuaternionRotation(arg3, arg1->unk0[sp2C].unk0, arg1->unk0[sp2C].unk4, arg1->unk0[sp2C].unk8, arg1->unk0[sp2C].unkC);
  }
 +
++// code_51E30.c: the pilot's pose blend tree. app_firstfunc sets its anim
++// ids per pilot and func_802EE530 points its weights into the live
++// hgData; one copy per player, else player 1's pilot animates with player
++// 2's pilot anims and inputs. Links inside the tree are to its own nodes,
++// which stay at the same addresses across a swap.
++extern f32 D_803571F0, D_803571F4, D_803571F8, D_803571FC;
++extern f32 D_80357200, D_80357204, D_80357208, D_8035720C;
++extern Unk802CAC48 D_8034E788, D_8034E794, D_8034E7A0, D_8034E7AC, D_8034E7B8;
++extern Unk8034E788 D_8034E7C4, D_8034E7D4, D_8034E7E4, D_8034E7F4;
++extern Unk8034E788* D_8034E804;
++
 +// PW64 split-screen: per-player hang glider pose/anim state (pw64_players.c).
 +void pw64_reg_hang_glider0(void) {
++    PW64_REG(D_803571F0);
++    PW64_REG(D_803571F4);
++    PW64_REG(D_803571F8);
++    PW64_REG(D_803571FC);
++    PW64_REG(D_80357200);
++    PW64_REG(D_80357204);
++    PW64_REG(D_80357208);
++    PW64_REG(D_8035720C);
++    PW64_REG(D_8034E788);
++    PW64_REG(D_8034E794);
++    PW64_REG(D_8034E7A0);
++    PW64_REG(D_8034E7AC);
++    PW64_REG(D_8034E7B8);
++    PW64_REG(D_8034E7C4);
++    PW64_REG(D_8034E7D4);
++    PW64_REG(D_8034E7E4);
++    PW64_REG(D_8034E7F4);
++    PW64_REG(D_8034E804);
 +    PW64_REG(D_80367A40);
 +    PW64_REG(D_80367BF0);
 +    PW64_REG(D_80367DA0);

@@ -187,6 +187,11 @@ void pw64_listener_set(int i, void* mat);
 /* Split-screen free flight (game.c.patch, test_menu.c.patch): 1 while a
  * flight started from the test menu's Free flight item runs. */
 extern int pw64_free_flight;
+/* Split-screen: player 2's pilot (native/src/pw64_split.c), -1 = player
+ * 1's. Set by the pilot select's second pass (game.c.patch) or, on a
+ * PW64_START boot, by PW64_P2_PILOT (pw64-platform start.rs). */
+extern int pw64_p2_pilot;
+int pw64_p2_pilot_env(void);
 /* Our ASCII text in the game's 16-bit glyph strings (native/src/pw64_text.c):
  * glyphs + 0xFFE + -1 into out[max]; returns the glyph count. */
 int pw64_text_encode(const char* ascii, short* out, int max);

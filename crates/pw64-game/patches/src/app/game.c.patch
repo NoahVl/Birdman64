@@ -249,6 +249,7 @@
 +        fileMenu_802E8FF4(spF);
 +        unkC->veh = spV;
 +        unkC->pilot = spP;
++        pw64_p2_pilot = pw64_p2_pilot_env(); // split-screen: PW64_P2_PILOT
 +        if (IS_BONUS_VEHICLE(spV) && (spV != VEHICLE_BIRDMAN)) {
 +            unkC->cls = spT; // the bonus test menu stores its pick in cls
 +            unkC->test = 0; // bonus tasks are keyed [cls][test=0][veh];
@@ -264,6 +265,31 @@
      if (uvControllerCheckInserted(0) == 0) {
          func_8032D90C();
      }
+@@ -420,6 +483,24 @@ s32 gameUpdateStatePilotSelect(Unk80362690* arg0) {
+
+     ptr->unk0 = i;
+     pilot = func_802DD200(sp1C->unk70, ptr);
++    // PW64 split-screen: player 2 then picks their own pilot on the same
++    // screen, with player 2 live (PW64_CONT: their pad; pilot_select.c.patch
++    // labels each pass and keeps each player's cursor). B there goes back
++    // to player 1's pick. Synced first: outside a test player 2's slot is
++    // just a copy of player 1's state (test setup syncs it again anyway).
++    while ((pilot != -1) && (pw64_players > 1) && pw64_split_vehicle(sp1C->veh)) {
++        s32 pw64P2;
++
++        pw64_players_sync();
++        pw64_player_switch(1);
++        pw64P2 = func_802DD200(sp1C->unk70, ptr);
++        pw64_player_switch(0);
++        if (pw64P2 != -1) {
++            pw64_p2_pilot = pw64P2;
++            break;
++        }
++        pilot = func_802DD200(sp1C->unk70, ptr);
++    }
+     func_8032D51C(0);
+     if (pilot == -1) {
+         return GAME_STATE_VEHICLE_CLASS_SELECT;
 @@ -428,6 +510,412 @@ s32 gameUpdateStatePilotSelect(Unk80362690* arg0) {
      return GAME_STATE_TEST_OVERVIEW;
  }
@@ -370,6 +396,9 @@
 +
 +    for (i = 1; i < pw64_level_players; i++) {
 +        pw64_player_switch(i);
++        if (pw64_p2_pilot >= 0) {
++            p->pilot = pw64_p2_pilot; // their own pick (models: level.c.patch)
++        }
 +        p->unk70 = &D_80362E88[i];
 +        p->unk74 = &D_80364210[i];
 +        p->vehicleData = D_80362748[i];
@@ -683,6 +712,9 @@
 +    pw64_players_sync();
 +    for (i = 1; i < pw64_level_players; i++) {
 +        pw64_player_switch(i);
++        if (pw64_p2_pilot >= 0) {
++            p->pilot = pw64_p2_pilot; // their own pick (models: level.c.patch)
++        }
 +        p->unk70 = &D_80362E88[i];
 +        p->unk74 = &D_80364210[i];
 +        p->vehicleData = D_80362748[i];
