@@ -173,6 +173,17 @@ PW64_LONG32 pw64_dobj_clone(PW64_LONG32 src);     /* copy for the current player
 /* Kernel controller reads (controller.c.patch): with 2+ players, pad 0
  * means "the current player's pad", so hardcoded-0 sites follow the swap. */
 #define PW64_CONT(i) ((pw64_players > 1 && (i) == 0) ? pw64_player_cur : (i))
+/* Split-screen sound events (kernel audio_event.c.patch): vehicle sound
+ * handlers are owned by the player live when they registered. A post made
+ * while pw64_evt_scope = i (>= 0) reaches only player i's handlers; an
+ * unscoped one (-1) reaches all but muted players' (pw64_evt_mute bit i:
+ * finished or respawning). pw64_evt_post_player posts in player i's scope. */
+extern int pw64_evt_scope;
+extern unsigned int pw64_evt_mute;
+void pw64_evt_post_player(int i, int event);
+/* Listener pose of player i > 0 (kernel audio_emitter.c.patch, a Mtx4F*):
+ * positional emitters are heard from the nearest player's listener. */
+void pw64_listener_set(int i, void* mat);
 /* Split-screen free flight (game.c.patch, test_menu.c.patch): 1 while a
  * flight started from the test menu's Free flight item runs. */
 extern int pw64_free_flight;

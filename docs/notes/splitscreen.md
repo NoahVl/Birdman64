@@ -139,13 +139,15 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   RESULTS state). Scoring statics, aim sweep, fly-out camera, wobble (code_60020) registered;
   TEXT_C_POINTS is one shared string: re-formatted per view before each draw. Each cannon dobj
   is owned (same pillar), pilots shared. cbsound removes its own cb. P2 bests are session-only.
-- **Audio:** engine-sound events are broadcast to both players' handlers; one music
-  sequence; one listener (kernel `D_80250E80[1]`), follows P1.
+- **Audio** (both mixed; kernel audio_event.c/audio_emitter.c.patch): a handler registered with 0x16 in its list (= vehicle sound) is owned by the live player and runs with its context live; posts in `pw64_evt_scope` i (per-player loops, nested in an owned handler) reach only i's handlers, unscoped ones reach all. World handlers (env, snd) get unscoped posts only.
+  Finish/free-flight end: scoped 0x12 + `pw64_evt_mute` bit (blocks 1/0x13/0x16, not 0xD teardown); respawn re-arms crash latches, unmutes, 0x13; mute cleared at the tally.
+  Engines are non-positional (always local). Positional emitters use the nearest player's listener (`pw64_listener_set`, P2's pose/camera).
+  Hang glider/gyro crashes already self-muted per vehicle (P1 re-unmuted next 0x16), so the A/B WAVs barely differ; the leak hit env-sound fade and non-crash finishes. Open: one music sequence (P2's crash stinger replaces P1's music).
 - **Hard-wired player 0 in gameplay:** falco.c (bird targets P1), snap.c shutter,
   env_sound.c:494, task.c:358-372, game.c:770 (splash billboards on camera 0).
   Sky diving's pad-0 reads (code_B6580.c:24, code_BA190.c:235, skydiving.c:369) follow PW64_CONT.
-- **Free flight:** landing pads stay (radar shows the landing point); event 0x12 from
-  crash effects reaches both players' sound handlers; respawn audio unverified.
+- **Free flight:** landing pads stay (radar shows the landing point); respawn audio
+  (unmute + 0x13, see Audio) not run-tested.
 - Never run split-screen in attract/demo playback (single stream).
 - **Results:** from the tally on, each tally draws only its player's view, full screen
   (`pw64_results_full`; both halves left the 1-row view gap as a dark seam across it).

@@ -1,0 +1,81 @@
+--- a/src/kernel/audio_emitter.c
++++ b/src/kernel/audio_emitter.c
+@@ -307,6 +307,54 @@
+ #pragma GCC diagnostic push
+ #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+ #endif
++// PW64 split-screen (pw64_native.h): further players' listener poses
++// (player 1's is D_80250E80[0], set by snd.c). A positional emitter is
++// heard as from the nearest listener (distance and pan), so each player
++// hears what is near them; vehicle engines are not positional.
++static Mtx4F sPw64Listener[PW64_MAX_PLAYERS];
++
++void pw64_listener_set(int i, void* mat) {
++    if ((i > 0) && (i < PW64_MAX_PLAYERS)) {
++        uvMat4Copy(&sPw64Listener[i], (Mtx4F*)mat);
++    }
++}
++
++// uvEmitter_80201D08's squared distance from listener `l` (its 2/default
++// branches) and the vector its pan is projected from.
++static f32 pw64_emitter_dist(uvaEmitter_t* emitter, s32 attr, Mtx4F* l, Vec3F* d) {
++    Vec3F p;
++    Vec3F n;
++    f32 t;
++
++    p.x = l->m[3][0];
++    p.y = l->m[3][1];
++    p.z = l->m[3][2];
++    if (attr & 2) {
++        d->x = p.x - emitter->unk40.x;
++        d->y = p.y - emitter->unk40.y;
++        d->z = p.z - emitter->unk40.z;
++        if (uvVec3Dot(d, &emitter->unk58) >= 0.0f) {
++            n.x = -emitter->unk58.x;
++            n.y = -emitter->unk58.y;
++            n.z = -emitter->unk58.z;
++            d->x = p.x - emitter->unk4C.x;
++            d->y = p.y - emitter->unk4C.y;
++            d->z = p.z - emitter->unk4C.z;
++            t = uvVec3Dot(d, &n);
++            if (t >= 0.0f) {
++                d->x = p.x - ((t * n.x) + emitter->unk4C.x);
++                d->y = p.y - ((t * n.y) + emitter->unk4C.y);
++                d->z = p.z - ((t * n.z) + emitter->unk4C.z);
++            }
++        }
++    } else {
++        d->x = emitter->m1.m[3][0] - p.x;
++        d->y = emitter->m1.m[3][1] - p.y;
++        d->z = emitter->m1.m[3][2] - p.z;
++    }
++    return SQ(d->x) + SQ(d->y) + SQ(d->z);
++}
++
+ void uvEmitter_80201D08(u8 emitterId, u16 arg1) {
+     s32 pan;
+     f32 vol;
+@@ -368,6 +416,23 @@
+             sp94.z = emitter->m1.m[3][2] - sp3C.m[3][2];
+             sp84 = SQ(sp94.x) + SQ(sp94.y) + SQ(sp94.z);
+         }
++        // PW64 split-screen: the nearest player's listener.
++        if ((pw64_level_players > 1) && ((attr & 2) || !(attr & EMITTER_ATTR_1))) {
++            s32 pw64I;
++            Vec3F pw64D;
++            f32 pw64Sq;
++
++            for (pw64I = 1; pw64I < pw64_level_players; pw64I++) {
++                pw64Sq = pw64_emitter_dist(emitter, attr, &sPw64Listener[pw64I], &pw64D);
++                if (pw64Sq < sp84) {
++                    sp84 = pw64Sq;
++                    sp94 = pw64D;
++                    spA0.x = sPw64Listener[pw64I].m[0][0];
++                    spA0.y = sPw64Listener[pw64I].m[0][1];
++                    spA0.z = sPw64Listener[pw64I].m[0][2];
++                }
++            }
++        }
+ 
+         if (emitter->far < sp84) {
+             emitter->playPan = 0x40;

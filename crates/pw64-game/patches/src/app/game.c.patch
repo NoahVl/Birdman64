@@ -210,8 +210,10 @@
 +    }
 +    for (i = 0; i < 2; i++) {
 +        pw64_player_switch(i);
++        pw64_evt_scope = i;
 +        pw64_collide_crash(veh, D_80362690->unkC[0].vehicleData);
 +    }
++    pw64_evt_scope = -1;
 +    pw64_player_switch(0);
 +    PW64_LOGF("split-screen: pilots collided (time*10 << 8 | veh)", ((u32)(D_8034F850 * 10.0f) << 8) | veh);
 +}
@@ -466,6 +468,7 @@
 +    pw64_player_switch(0);
 +    pw64_split_viewport(p->unk70, -1); // the menus' map view is full-screen
 +    pw64_level_players = 1;
++    pw64_evt_mute = 0;
 +}
 +
 +// PW64 split-screen: player i (live) has ended its test. What
@@ -480,6 +483,10 @@
 +        return;
 +    }
 +    sPw64Done[i] = TRUE;
++    // Its sounds stop as at a one-player test end (0x12: engine/wind off),
++    // then its handlers get nothing more (no later 0x16 can unmute them).
++    pw64_evt_post_player(i, 0x12);
++    pw64_evt_mute |= 1u << i;
 +    if (p->unk79 != 0) {
 +        switch (p->veh) {
 +        case VEHICLE_HANG_GLIDER:
@@ -514,6 +521,8 @@
 +    if (sPw64Respawn[i] != 0.0f) {
 +        return;
 +    }
++    pw64_evt_post_player(i, 0x12); // sounds off until the respawn (as pw64_player_finish)
++    pw64_evt_mute |= 1u << i;
 +    if (p->unk79 != 0) {
 +        switch (p->veh) {
 +        case VEHICLE_HANG_GLIDER:
@@ -556,12 +565,14 @@
 +    case VEHICLE_GYROCOPTER:
 +        D_803676F4 = gc = (GyrocopterData*)p->vehicleData;
 +        gc->unk662 = 0; // crash splash/explosion done (func_802F5910)
++        gc->unk678 = 0xC0; // sound crash latches (gyrocopter_sound.c init value)
 +        gyrocopterEnterLeave(gc);
 +        vehMtx = &gc->unk10;
 +        break;
 +    case VEHICLE_ROCKET_BELT:
 +        D_803676F8 = rb = (RocketBeltData*)p->vehicleData;
 +        rb->unk33A = 0; // crash splash/explosion done (rocketBelt_80327614)
++        rb->unk384 = ~0x3F; // sound crash latches (rbSoundInit value)
 +        rocketBeltEnterLeave(rb);
 +        vehMtx = &rb->unk10;
 +        break;
@@ -573,11 +584,13 @@
 +    case VEHICLE_BIRDMAN:
 +        D_80367704 = bm = (BirdmanData*)p->vehicleData;
 +        bm->unk2F0 = 0; // crash pose placed (bird_802CD0F8)
++        bm->unk410 = ~0x3F; // sound crash latches (bmSoundInit value)
 +        birdEnterLeave(bm);
 +        vehMtx = &bm->unk10;
 +        break;
 +    default:
 +        D_803676F0 = hg = (HangGliderData*)p->vehicleData;
++        hg->unk318 = 0xFFFFFFC0; // sound crash latches (hgSoundInit value)
 +        hangGliderEnterLeave(hg);
 +        vehMtx = &hg->unk10;
 +        break;
@@ -590,6 +603,9 @@
 +    p->unk80 = 0.0f;
 +    camera_802D4DE8(p->unk70, 0);
 +    hud_8031DAA8(2, 1.0f);
++    // Its sounds back on: unmute, then 0x13 (as leaving the pause menu).
++    pw64_evt_mute &= ~(1u << i);
++    pw64_evt_post_player(i, 0x13);
 +    sPw64Respawn[i] = 0.0f;
 +    PW64_LOGF("free flight: player respawned (time*10 << 16 | player)", ((u32)(D_8034F850 * 10.0f) << 16) | i);
 +}
@@ -661,6 +677,7 @@
 +    pw64_split_viewport(p->unk70, 0);
 +    uvMemSet(sPw64Done, 0, sizeof(sPw64Done));
 +    uvMemSet(sPw64Respawn, 0, sizeof(sPw64Respawn));
++    pw64_evt_mute = 0;
 +    sPw64Collide = FALSE;
 +    pw64_cannon_own(p->vehicleData);
 +    pw64_players_sync();
@@ -698,12 +715,15 @@
 +    func_80313D74();
 +    for (i = 0; i < pw64_level_players; i++) {
 +        pw64_player_switch(i);
++        pw64_evt_scope = i;
 +        D_803676FC = (CannonballData*)p->vehicleData;
 +        if (!pw64_cannon_player_frame(arg0)) {
 +            roundDone = FALSE;
 +        }
 +        pw64_task_player_update(&p->unk2C, p->unk20);
++        pw64_listener_set(i, &p->unk70->unk108); // player 1's: below
 +    }
++    pw64_evt_scope = -1;
 +    pw64_player_switch(0);
 +    uvEventPost(0x16, 0);
 +    pw64_task_world_update(&p->unk2C, p->unk20);
@@ -787,6 +807,7 @@
 +
 +    for (i = pw64_level_players - 1; i >= 0; i--) {
 +        pw64_player_switch(i);
++        pw64_evt_scope = i; // its landing's 0x12 is its own (muted anyway)
 +        switch (p->veh) {
 +        case VEHICLE_HANG_GLIDER:
 +            func_802EEB00(p->vehicleData, p->unk78);
@@ -805,6 +826,7 @@
 +            break;
 +        }
 +    }
++    pw64_evt_scope = -1;
 +    uvGfxBegin();
 +    proxAnimUpdate();
 +    pw64_task_world_update(&p->unk2C, 0.0f);
@@ -888,6 +910,7 @@
 +        hudGetState()->renderFlags = 0;
 +        hud_8031DAA8(0, 0.0f);
 +        sPw64Done[i] = FALSE; // no more "FINISHED"
++        pw64_evt_mute = 0;    // tally/replay as for one player
 +    }
 +    pw64_player_switch(0);
 +    // From the tally on, player 1's view is full screen (also for its
@@ -969,6 +992,7 @@
 +        pw64_players_sync();
 +        uvMemSet(sPw64Done, 0, sizeof(sPw64Done));
 +        uvMemSet(sPw64Respawn, 0, sizeof(sPw64Respawn));
++        pw64_evt_mute = 0;
 +        sPw64Collide = pw64_split_collide; // fixed for this test
 +    }
      switch (temp_s0->veh) {
@@ -1043,6 +1067,7 @@
 +    // a single pass, switch(0) is a no-op. The loop body is not reindented.
 +    for (pw64I = 0; pw64I < pw64_level_players; pw64I++) {
 +    pw64_player_switch(pw64I);
++    pw64_evt_scope = (pw64_level_players > 1) ? pw64I : -1; // its sound events reach only its handlers
 +    pw64Saved = gameState;
 +    if ((pw64_level_players > 1) && sPw64Done[pw64I]) {
 +        continue; // finished: frozen, waits for the others
@@ -1088,8 +1113,10 @@
 +            }
 +        }
 +        gameState = pw64Saved;
++        pw64_listener_set(pw64I, &sp6C->unk2C); // player 1's: func_8033F6F8 below
 +    }
 +    }
++    pw64_evt_scope = -1;
 +    pw64_player_switch(0);
 +    if (pw64_level_players > 1) {
 +        pw64_collide_frame(); // PW64 split-screen: pilots touching crash
