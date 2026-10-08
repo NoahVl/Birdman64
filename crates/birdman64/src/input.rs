@@ -954,6 +954,22 @@ impl Sources {
     }
 }
 
+/// Splits an optional trailing `#<index>` off a pad name: `"Xbox
+/// Controller#2"` → `("Xbox Controller", Some(2))`; a name without a valid
+/// `#<digits>` suffix → `(name, None)` (old configs keep working). The
+/// index is 1-based among the pads matching the base name — `0`, or an
+/// index past the last same-name pad, matches nothing.
+fn split_index(name: &str) -> (&str, Option<usize>) {
+    match name.rsplit_once('#') {
+        Some((base, digits))
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            (base.trim(), Some(digits.parse().unwrap_or(usize::MAX)))
+        }
+        _ => (name, None),
+    }
+}
+
 /// Which input method drives player 2 in split-screen (`[splitscreen]
 /// p2_input` / `PW64_P2_INPUT`). Player 1 gets everything not assigned to
 /// player 2.
@@ -961,9 +977,11 @@ impl Sources {
 pub enum P2Input {
     /// The keyboard.
     Keyboard,
-    /// gilrs pads: every connected one (`None`), or only the first whose
-    /// name contains the substring (case-insensitive) — the rest stay
-    /// player 1.
+    /// gilrs pads: every connected one (`None`), or only pads whose name
+    /// contains the substring (case-insensitive) — without a trailing
+    /// `#k` the FIRST matching pad goes to player 2, with `#k` the k-th
+    /// (1-based, connect order) among the pads matching the base name.
+    /// The rest stay player 1.
     Gamepad(Option<String>),
     /// The virtual BLE pads (`ble.rs`).
     Ble,
@@ -971,7 +989,8 @@ pub enum P2Input {
 
 impl P2Input {
     /// Parses a `p2_input` value: `"keyboard"`, `"gamepad"` (every gilrs
-    /// pad), `"gamepad:<name substring>"` or `"ble"`. `None` if not
+    /// pad), `"gamepad:<name substring>"` (optionally `name#k`: the k-th
+    /// pad among those matching the name) or `"ble"`. `None` if not
     /// understood.
     pub fn parse(s: &str) -> Option<P2Input> {
         let s = s.trim();
@@ -1201,14 +1220,33 @@ fn route(s: &Sources, p2: Option<&P2Input>, focused: bool) -> [Pad; 2] {
     // whichever player owns it.
     if focused {
         // Each gilrs pad: to P2 if p2 is Gamepad(None), or Gamepad(Some(n))
-        // and its name contains n (case-insensitive; only the FIRST
-        // matching pad goes to P2, the rest to P1); else P1.
+        // and its name matches — a name with a trailing `#k` picks the k-th
+        // pad (in connect order) among the ones matching the base name
+        // ("Xbox Controller#2" = the second of two identical pads);
+        // without an index only the FIRST matching pad goes to P2.
+        // Everything else stays P1.
+        let p2_pad = match p2 {
+            Some(P2Input::Gamepad(Some(n))) => Some(split_index(n)),
+            _ => None,
+        };
         let mut p2_pad_taken = false;
+        let mut same_name = 0usize;
         for (name, pad) in &s.gamepads {
             let to_p2 = match p2 {
                 Some(P2Input::Gamepad(None)) => true,
-                Some(P2Input::Gamepad(Some(n))) => {
-                    !p2_pad_taken && name.to_ascii_lowercase().contains(&n.to_ascii_lowercase())
+                Some(P2Input::Gamepad(Some(_))) => {
+                    let (base, idx) = p2_pad.unwrap();
+                    let matches =
+                        name.to_ascii_lowercase().contains(&base.to_ascii_lowercase());
+                    match idx {
+                        None => matches && !p2_pad_taken,
+                        Some(k) => {
+                            if matches {
+                                same_name += 1;
+                            }
+                            matches && same_name == k
+                        }
+                    }
                 }
                 _ => false,
             };
@@ -1613,9 +1651,29 @@ pub fn spawn() {
                                 && b != settings_btn =>
                         {
                             if SOURCE_CAPTURE.load(Ordering::Relaxed) {
-                                let name = gilrs.gamepad(ev.id).name().to_string();
+                                // The pad itself, by name — but when several
+                                // connected pads share the name, a `#k`
+                                // suffix picks the pressed one (its 1-based
+                                // position among the same-name pads).
+                                let g = gilrs.gamepad(ev.id);
+                                let same: Vec<_> = gilrs
+                                    .gamepads()
+                                    .filter(|(_, gp)| {
+                                        gp.is_connected() && gp.name() == g.name()
+                                    })
+                                    .collect();
+                                let value = if same.len() > 1 {
+                                    let k = same
+                                        .iter()
+                                        .position(|(id, _)| *id == ev.id)
+                                        .unwrap_or(0)
+                                        + 1;
+                                    format!("{}#{k}", g.name())
+                                } else {
+                                    g.name().to_string()
+                                };
                                 *CAPTURED_SOURCE.lock().unwrap() =
-                                    Some(P2Input::Gamepad(Some(name)));
+                                    Some(P2Input::Gamepad(Some(value)));
                                 SOURCE_CAPTURE.store(false, Ordering::Relaxed);
                             } else {
                                 *CAPTURED_BUTTON.lock().unwrap() = Some(b);
@@ -2603,6 +2661,84 @@ mod tests {
             route(&s, Some(&P2Input::Gamepad(None)), true),
             [IDLE, pad(CONT_B | CONT_R)]
         );
+    }
+
+    /// Two same-name pads: a `#k` name picks the k-th of them (connect
+    /// order); without an index the first matches (unchanged behaviour).
+    #[test]
+    fn route_gamepad_name_index_p2() {
+        let s = sources(
+            &[
+                ("Xbox Controller", pad(CONT_B)),
+                ("Xbox Controller", pad(CONT_R)),
+                ("Joy-Con", pad(CONT_L)),
+            ],
+            IDLE,
+            IDLE,
+            IDLE,
+            Vec::new(),
+        );
+        // #2: the second same-name pad goes to P2, the first stays P1.
+        assert_eq!(
+            route(
+                &s,
+                Some(&P2Input::Gamepad(Some("Xbox Controller#2".into()))),
+                true
+            ),
+            [pad(CONT_B | CONT_L), pad(CONT_R)]
+        );
+        // #1 is the first same-name pad.
+        assert_eq!(
+            route(
+                &s,
+                Some(&P2Input::Gamepad(Some("Xbox Controller#1".into()))),
+                true
+            ),
+            [pad(CONT_R | CONT_L), pad(CONT_B)]
+        );
+        // #3 with only two matching pads: no gamepad goes to P2.
+        assert_eq!(
+            route(
+                &s,
+                Some(&P2Input::Gamepad(Some("Xbox Controller#3".into()))),
+                true
+            ),
+            [pad(CONT_B | CONT_R | CONT_L), IDLE]
+        );
+        // No index: the first match (old configs keep working).
+        assert_eq!(
+            route(
+                &s,
+                Some(&P2Input::Gamepad(Some("Xbox Controller".into()))),
+                true
+            ),
+            [pad(CONT_R | CONT_L), pad(CONT_B)]
+        );
+    }
+
+    /// `split_index`: the optional trailing `#<index>` off a pad name.
+    #[test]
+    fn split_index_cases() {
+        assert_eq!(split_index("Xbox Controller"), ("Xbox Controller", None));
+        assert_eq!(
+            split_index("Xbox Controller#2"),
+            ("Xbox Controller", Some(2))
+        );
+        assert_eq!(split_index("Joy-Con (L/R)#12"), ("Joy-Con (L/R)", Some(12)));
+        // A space before `#` is trimmed off the base name.
+        assert_eq!(split_index("Pad #2"), ("Pad", Some(2)));
+        // No digits (or a bare `#`): part of the name, no index.
+        assert_eq!(split_index("Pad#"), ("Pad#", None));
+        assert_eq!(split_index("Pad#x"), ("Pad#x", None));
+        assert_eq!(split_index("Pad#2x"), ("Pad#2x", None));
+    }
+
+    /// `P2Input` round-trips the `#k` pad index through the config spelling.
+    #[test]
+    fn p2_input_index_round_trip() {
+        let p = P2Input::parse("gamepad:Xbox Controller#2").unwrap();
+        assert_eq!(p, P2Input::Gamepad(Some("Xbox Controller#2".into())));
+        assert_eq!(p.to_config(), "gamepad:Xbox Controller#2");
     }
 
     /// Player 2 owns the BLE pads.

@@ -2354,19 +2354,29 @@ struct P2Choice {
 
 /// The Player-2 controller choices (`P2Input` cycling): All gamepads, one
 /// per connected pad (by name), the keyboard and the Switch 2 pads over
-/// Bluetooth. A configured pad that isn't connected keeps its row ("\<name>
-/// (not connected)"), so cycling doesn't lose it. Pure: the pad names come
-/// from `input::connected_pad_names`, the configured value from
+/// Bluetooth. Pads sharing a name (two "Xbox Controller"s) list as
+/// distinct rows: the k-th of them is spelled `name#k` (labelled
+/// `name (k)`), so routing can tell them apart; unique names are
+/// unchanged. A configured pad that isn't connected keeps its row
+/// ("\<name> (not connected)"), so cycling doesn't lose it. Pure: the pad
+/// names come from `input::connected_pad_names`, the configured value from
 /// `input::resolve_p2` / `input::p2_input`.
 fn p2_choices(pads: &[String], saved: &input::P2Input) -> Vec<P2Choice> {
     let mut out = vec![P2Choice {
         input: input::P2Input::Gamepad(None),
         label: "All gamepads".into(),
     }];
-    for name in pads {
+    for (i, name) in pads.iter().enumerate() {
+        let same = pads.iter().filter(|n| *n == name).count();
+        let k = pads[..i].iter().filter(|n| *n == name).count() + 1;
+        let (value, label) = if same > 1 && k > 1 {
+            (format!("{name}#{k}"), format!("{name} ({k})"))
+        } else {
+            (name.clone(), name.clone())
+        };
         out.push(P2Choice {
-            input: input::P2Input::Gamepad(Some(name.clone())),
-            label: name.clone(),
+            input: input::P2Input::Gamepad(Some(value)),
+            label,
         });
     }
     if let input::P2Input::Gamepad(Some(n)) = saved {
@@ -3387,6 +3397,40 @@ mod tests {
         let choices = p2_choices(&pads, &saved);
         assert_eq!(choices[3].label, "Retro (not connected)");
         assert_eq!(p2_select(&choices, &saved), 3);
+    }
+
+    /// SS-UI: two connected pads sharing a name list as distinct choices —
+    /// the second is `name (2)` with the value `gamepad:name#2`; unique
+    /// names are unchanged.
+    #[test]
+    fn p2_choices_duplicate_pads() {
+        let pads = vec![
+            "Xbox Controller".to_string(),
+            "Xbox Controller".to_string(),
+        ];
+        let all = input::P2Input::Gamepad(None);
+        let choices = p2_choices(&pads, &all);
+        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "All gamepads",
+                "Xbox Controller",
+                "Xbox Controller (2)",
+                "Keyboard",
+                "Switch 2 (Bluetooth)"
+            ]
+        );
+        assert_eq!(
+            choices[2].input.to_config(),
+            "gamepad:Xbox Controller#2"
+        );
+        // The saved `#2` value selects the second row and counts as
+        // connected (no extra "(not connected)" row is added).
+        let saved = input::P2Input::Gamepad(Some("Xbox Controller#2".into()));
+        let choices = p2_choices(&pads, &saved);
+        assert_eq!(choices.len(), 5, "no extra not-connected row");
+        assert_eq!(p2_select(&choices, &saved), 2);
     }
 
     /// SS-UI: the Split row stages and saves like the other restart rows;
