@@ -389,11 +389,18 @@ mod tests {
 
     /// Creating a stack (PAGE_GUARD) must not move the caller's TEB
     /// StackLimit (it made `__chkstk` probe into a neighbour's guard page).
+    /// The limit may still drop by the caller's own stack growth, so check
+    /// that it stays out of the new slot rather than that it never moves.
     #[cfg(windows)]
     #[test]
     fn new_stack_keeps_the_callers_stack_limit() {
         let before = teb_stack_limit();
-        let _s = LowStack::new();
-        assert_eq!(teb_stack_limit(), before);
+        let s = LowStack::new();
+        let after = teb_stack_limit();
+        assert!(after <= before, "limit rose: {before:#x} -> {after:#x}");
+        assert!(
+            !(s.slot..=s.top()).contains(&after),
+            "limit moved into the new stack: {after:#x}"
+        );
     }
 }
