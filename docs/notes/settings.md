@@ -561,7 +561,7 @@ Code: `crates/birdman64/src/settings.rs` (overlay + nav + config write), hooks i
 
 ## Split-screen rows on the Controls page (SS-UI)
 
-- `Opt::Split` (restart row, like Fill screen; → `[splitscreen] enabled`) and
+- `Opt::Split` (live: `input::request_split`, applied at the game's next menu state; stages `input::split_wanted()`; → `[splitscreen] enabled`) and
   `Opt::P2Input` (live while split-screen runs via `input::set_p2`; greyed while staged
   Split is Off; → `[splitscreen] p2_input`), between the gamepad reset and the BLE row.
 - `Opt::Collisions` "Pilots collide" (live: `pw64_game::set_split_collide`, read at each

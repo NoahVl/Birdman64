@@ -374,6 +374,7 @@ pub fn run_game(
         os::set_retrace_hook(move |r| {
             park_if_quit();
             input::script_tick(r.number);
+            input::split_tick();
             // The window re-read the monitor's refresh rate (move to
             // another monitor, fullscreen): apply it here, on the game
             // thread — the kernel state is not shared with the window.

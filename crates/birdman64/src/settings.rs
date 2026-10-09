@@ -178,8 +178,9 @@ enum Opt {
     /// Switch 2 pads over Bluetooth LE (`ble.rs`, Controls page): live,
     /// switches the scanner on/off without a restart.
     Ble,
-    /// Split-screen, two players on one screen (Controls page): a restart
-    /// row, the C flag and controller presence are set before boot.
+    /// Split-screen, two players on one screen (Controls page): live, the
+    /// game switches in its next menu state that holds no test (same switch
+    /// as the main menu's Players item).
     Split,
     /// Which input method drives player 2 in split-screen (Controls page):
     /// live while split-screen runs (`input::set_p2`).
@@ -260,9 +261,6 @@ struct Running {
     msaa: u32,
     widescreen: Option<f32>,
     fill_screen: bool,
-    /// Split-screen (`input::splitscreen_enabled`): the C flag and the
-    /// controller-2 presence are set before boot.
-    split: bool,
 }
 
 /// The S8b keep-resolution countdown: what to go back to when an applied
@@ -296,10 +294,10 @@ pub struct Overlay {
     /// defaults": saving removes the key (the file follows the display)
     /// instead of pinning a value. Cleared by any Widescreen row change.
     widescreen_follow: bool,
-    /// S7: the restart-only values (MSAA, widescreen aspect, fill screen,
-    /// split-screen) this session last saved; `open` stages these instead of
-    /// the running ones while that restart is pending.
-    saved_restart: Option<(u32, Option<f32>, bool, bool)>,
+    /// S7: the restart-only values (MSAA, widescreen aspect, fill screen)
+    /// this session last saved; `open` stages these instead of the running
+    /// ones while that restart is pending.
+    saved_restart: Option<(u32, Option<f32>, bool)>,
     fps: Vec<opts::Fps>,
     fps_sel: usize,
     vsync: bool,
@@ -345,7 +343,8 @@ pub struct Overlay {
     pause_background: bool,
     /// Switch 2 pads over BLE (live: `ble::set_enabled` on change).
     ble: bool,
-    /// Staged split-screen (restart-only, like widescreen).
+    /// Split-screen (live: `input::request_split` on change; the game
+    /// applies it in its next menu state that holds no test).
     split: bool,
     /// Staged pilot collisions (live from the next test start, like P2's
     /// controller routing; greyed while the staged Split value is off).
@@ -418,7 +417,6 @@ impl Overlay {
             msaa: opts::msaa(),
             widescreen: opts::widescreen(),
             fill_screen: opts::fill_screen(),
-            split: input::splitscreen_enabled(),
         };
         let staged_fill = running.fill_screen;
         // Staged lists up front so the overlay is consistent before open()
@@ -426,10 +424,9 @@ impl Overlay {
         // these in tests).
         let (widescreen, widescreen_sel) = widescreen_choices(running.widescreen);
         let (fps, fps_sel) = fps_choices(opts::Fps::Monitor);
-        let running_split = running.split;
         // The Player-2 controller row: the configured routing (the live one
         // while split-screen runs) and the connected pads.
-        let saved_p2 = input::p2_input().unwrap_or_else(input::resolve_p2);
+        let saved_p2 = input::p2_current();
         let p2 = p2_choices(&input::connected_pad_names(), &saved_p2);
         let p2_sel = p2_select(&p2, &saved_p2);
         Self {
@@ -443,7 +440,7 @@ impl Overlay {
             fill_screen: staged_fill,
             widescreen_follow: false,
             saved_restart: None,
-            split: running_split,
+            split: input::split_wanted(),
             collisions: input::split_collisions(),
             split_layout: input::split_layout(),
             p2_choices: p2,
@@ -617,27 +614,27 @@ impl Overlay {
         }
     }
 
-    /// S7: stages the restart-only rows (MSAA, widescreen, fill screen,
-    /// split-screen) from what this session last saved (that restart is
-    /// still pending), else from the running values, so a saved change can
-    /// be undone before the restart. The banner and "(restart)" marks keep
-    /// comparing against `running`.
+    /// S7: stages the restart-only rows (MSAA, widescreen, fill screen)
+    /// from what this session last saved (that restart is still pending),
+    /// else from the running values, so a saved change can be undone before
+    /// the restart. The banner and "(restart)" marks keep comparing against
+    /// `running`. Split-screen (live) stages the game's state, or a switch
+    /// still waiting for a menu (the main menu's item may have changed it).
     fn stage_restart_rows(&mut self) {
-        let (msaa, widescreen, fill, split) = self.saved_restart.unwrap_or((
+        let (msaa, widescreen, fill) = self.saved_restart.unwrap_or((
             self.running.msaa,
             self.running.widescreen,
             self.running.fill_screen,
-            self.running.split,
         ));
         self.msaa = msaa;
         (self.widescreen, self.widescreen_sel) = widescreen_choices(widescreen);
         self.fill_screen = fill;
-        self.split = split;
+        self.split = input::split_wanted();
         self.widescreen_follow = false;
         // The Player-2 controller row stages the routing as it stands: the
         // live one while split-screen runs (a live change has been saved by
-        // then), the configured one otherwise.
-        let saved_p2 = input::p2_input().unwrap_or_else(input::resolve_p2);
+        // then), this session's choice or the configured one otherwise.
+        let saved_p2 = input::p2_current();
         self.p2_choices = p2_choices(&input::connected_pad_names(), &saved_p2);
         self.p2_sel = p2_select(&self.p2_choices, &saved_p2);
     }
@@ -655,7 +652,6 @@ impl Overlay {
                         self.msaa,
                         choice_aspect(&self.widescreen[self.widescreen_sel]),
                         self.fill_screen,
-                        self.split,
                     ));
                     let pending = self.pending_restart();
                     if !pending.is_empty() {
@@ -821,7 +817,7 @@ impl Overlay {
     /// The captured pad was connected a press ago; if it dropped since, it
     /// keeps its own row, so the screen shows what was applied.
     fn apply_p2(&mut self, p2: input::P2Input) {
-        let saved_p2 = input::p2_input().unwrap_or_else(input::resolve_p2);
+        let saved_p2 = input::p2_current();
         self.p2_choices = p2_choices(&input::connected_pad_names(), &saved_p2);
         let sel = self.p2_choices.iter().position(|c| c.input == p2);
         self.p2_sel = match sel {
@@ -840,10 +836,9 @@ impl Overlay {
                 self.p2_choices.len() - 1
             }
         };
-        // Live: while split-screen runs, the routing changes at once.
-        if input::splitscreen_enabled() {
-            input::set_p2(Some(p2));
-        }
+        // Live: while split-screen runs, the routing changes at once (else
+        // it is kept for the next switch-on).
+        input::stage_p2(p2);
     }
 
     /// The next key of a keyboard capture (`on_key` routed it here).
@@ -1231,8 +1226,8 @@ impl Overlay {
                         .map(|i| Row::Bind(Kind::Gamepad, i)),
                 );
                 rows.push(Row::Reset(Kind::Gamepad));
-                // Split-screen (2 players): on/off needs a restart; player
-                // 2's controller is live while it runs.
+                // Split-screen (2 players): on/off and player 2's
+                // controller are live.
                 rows.push(Row::Opt(Opt::Split));
                 rows.push(Row::Opt(Opt::P2Input));
                 rows.push(Row::P2Assign);
@@ -1410,8 +1405,8 @@ impl Overlay {
                 );
                 self.text_row(ui, kb.len() + 1 + gp.len(), "Reset gamepad to defaults");
                 ui.add_space(4.0);
-                // Split-screen (2 players): the on/off is a restart row;
-                // player 2's controller routes live while it runs.
+                // Split-screen (2 players): on/off and player 2's
+                // controller are live.
                 ui.strong("Split-screen");
                 self.opt_row(ui, at(Row::Opt(Opt::Split)), Opt::Split);
                 self.opt_row(ui, at(Row::Opt(Opt::P2Input)), Opt::P2Input);
@@ -1697,7 +1692,7 @@ impl Overlay {
             Opt::Split => (
                 "Split-screen (2 players)",
                 if self.split { "On" } else { "Off" }.into(),
-                restart(self.split != self.running.split),
+                "",
             ),
             Opt::P2Input => (
                 "Player 2 controller",
@@ -1736,9 +1731,6 @@ impl Overlay {
         if self.fill_screen != self.running.fill_screen {
             out.push("Fill screen");
         }
-        if self.split != self.running.split {
-            out.push("Split-screen");
-        }
         // Live rows staged but not confirmed yet: Save writes them, so a
         // restart applies them.
         if self.display_mode_choice() != self.running_mode {
@@ -1750,8 +1742,8 @@ impl Overlay {
         out
     }
 
-    /// The restart rows (Anti-aliasing, Widescreen, Fill screen,
-    /// Split-screen) as rich text: the value turns orange while the staged
+    /// The restart rows (Anti-aliasing, Widescreen, Fill screen) as rich
+    /// text: the value turns orange while the staged
     /// value differs from the running one, and the weak "(restart)" suffix
     /// is always there. `None` for the other rows (plain text, built in
     /// `opt_row`).
@@ -1773,11 +1765,6 @@ impl Overlay {
                 "Fill screen",
                 if self.fill_screen { "On" } else { "Off" }.into(),
                 self.fill_screen != self.running.fill_screen,
-            ),
-            Opt::Split => (
-                "Split-screen (2 players)",
-                if self.split { "On" } else { "Off" }.into(),
-                self.split != self.running.split,
             ),
             _ => return None,
         };
@@ -1964,11 +1951,14 @@ impl Overlay {
                     } as usize;
                     // Live: while split-screen runs, the routing changes at
                     // once (staged_settings saves it either way).
-                    if input::splitscreen_enabled() {
-                        input::set_p2(Some(self.p2_choices[self.p2_sel].input.clone()));
-                    }
+                    input::stage_p2(self.p2_choices[self.p2_sel].input.clone());
                 }
-                Opt::Split => self.split = !self.split,
+                // Live: the game switches in its next menu state that holds
+                // no test (at once on the menus).
+                Opt::Split => {
+                    self.split = !self.split;
+                    input::request_split(self.split);
+                }
                 // The Pilot-collisions row is disabled while the staged
                 // Split value is off (greyed, like the P2 row above).
                 Opt::Collisions if !self.split => {}
@@ -2643,7 +2633,10 @@ fn help(row: Row) -> &'static str {
                 "Play with Switch 2 Joy-Con or a Pro Controller 2 over Bluetooth. Experimental: \
                  may not work with every PC."
             }
-            Opt::Split => "Two players on one screen. Needs a restart.",
+            Opt::Split => {
+                "Two players on one screen (also on the main menu). \
+                 Switched during a test, it applies after the test."
+            }
             Opt::P2Input => "Which controller player 2 uses. Everything else is player 1.",
             Opt::Collisions => {
                 "On: the two pilots can crash into each other. Applies from the next test."
@@ -3433,7 +3426,7 @@ mod tests {
         assert_eq!(p2_select(&choices, &saved), 2);
     }
 
-    /// SS-UI: the Split row stages and saves like the other restart rows;
+    /// SS-UI: the Split row toggles (live, no restart) and saves;
     /// the Player-2 controller row is disabled while split-screen is off
     /// and cycles (and saves) once it is on. A live routing change is out
     /// of scope here (`set_p2` needs a real boot with split-screen on).
@@ -3452,7 +3445,7 @@ mod tests {
         assert!(o.split);
         let d = changed_since(o.staged_settings(), &snap);
         assert_eq!(d.splitscreen_enabled, Some(true));
-        assert_eq!(o.pending_restart(), vec!["Split-screen"]);
+        assert!(o.pending_restart().is_empty(), "split-screen switches live");
         // While split-screen is off the P2 row does nothing (disabled).
         o.p2_choices = p2_choices(
             &["Pad A".to_string(), "Pad B".to_string()],
@@ -3846,13 +3839,11 @@ mod tests {
             o.running.widescreen
         );
         assert_eq!(o.fill_screen, o.running.fill_screen);
-        assert_eq!(o.split, o.running.split);
-        o.saved_restart = Some((8, Some(21.0 / 9.0), true, true));
+        o.saved_restart = Some((8, Some(21.0 / 9.0), true));
         o.stage_restart_rows();
         assert_eq!(o.msaa, 8);
         assert_eq!(o.widescreen[o.widescreen_sel].as_deref(), Some("21:9"));
         assert!(o.fill_screen);
-        assert!(o.split, "split-screen stages the saved value too");
         assert!(!o.widescreen_follow);
     }
 

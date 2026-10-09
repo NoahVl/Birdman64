@@ -37,3 +37,21 @@
      if (!(gControllerInfo[idx].button & button) && (gControllerInfo[idx].prevButton & button)) {
          return 1;
      }
+@@ -104,1 +109,16 @@
+ }
++
++// PW64 split-screen live switch (game.c.patch pw64_split_apply): enumerates
++// controller idx after boot, like uvControllerInit does for a pad present
++// at osContInit (which runs once), or drops it again.
++void pw64_cont_enable(int idx, int on) {
++    ControllerInfo* c = &gControllerInfo[idx];
++    s32 j;
++
++    for (j = 0; j < UV_MAX_AXES; j++) {
++        c->stickAxes[j] = 0.0f;
++    }
++    c->button = c->prevButton = 0;
++    c->enumerate = on ? TRUE : FALSE;
++    c->connected = on ? TRUE : FALSE;
++    gControllerPattern = on ? (gControllerPattern | (1 << idx)) : (gControllerPattern & ~(1 << idx));
++}

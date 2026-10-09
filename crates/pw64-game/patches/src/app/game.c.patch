@@ -257,17 +257,65 @@
          func_8032B3D0(&D_80364210[i]);
          func_8034B5E0(temp_s0->unk70->unk22C, temp_s0->unk70);
      }
-+    // PW64 split-screen: player 2 = camera/kernel channel 1, its own
-+    // results struct; then register the per-player state.
-+    pw64_players = pw64_split ? 2 : 1;
-+    if (pw64_players > 1) {
++    // PW64 split-screen: on before boot -> player 2 is set up here (later
++    // switches: the main menu's Players item, the settings row).
++    if (pw64_split) {
++        pw64_split = 0;
++        pw64_split_apply(1);
++    }
++}
++
++// PW64 split-screen on/off, only where no test is loaded (no per-player
++// state is in use). Player 2 = camera/kernel channel 1 + its own results
++// struct + the per-player state registry, set up once (switching off keeps
++// them, unused: every split path is gated on pw64_players/level_players);
++// kernel pad 2 is enumerated while on (controller.c.patch).
++void pw64_split_apply(int on) {
++    static int sP2Ready;
++
++    on = (on != 0);
++    if (on == pw64_split) {
++        return;
++    }
++    pw64_split = on;
++    pw64_players = on ? 2 : 1;
++    if (on && !sP2Ready) {
++        sP2Ready = 1;
 +        cameraInit(1, &D_80362E88[1]);
 +        func_8032B3D0(&D_80364210[1]);
 +        pw64_players_init();
 +    }
++    pw64_cont_enable(1, on);
++    PW64_LOGF("split-screen: switched (players)", (u32)pw64_players);
++}
++
++// A settings-row request (pw64_split_req, Rust); called in menu states
++// that hold no test (gameUpdate, and every title frame).
++void pw64_split_poll(void) {
++    s32 req = pw64_split_req;
++
++    if (req >= 0) {
++        pw64_split_req = -1;
++        pw64_split_apply(req);
++    }
  }
- 
+
  void func_802EBBB8(void) {
+@@ -175,2 +276,15 @@ void gameUpdate(void) {
+     }
++    // PW64 split-screen: a settings-row switch waits for a menu state that
++    // holds no test (after a test's teardown, before pilot select).
++    switch (D_80362690->state) {
++    case GAME_STATE_TITLE:
++    case GAME_STATE_FILE_MENU:
++    case GAME_STATE_OPTIONS:
++    case GAME_STATE_VEHICLE_CLASS_SELECT:
++    case GAME_STATE_TEST_OVERVIEW:
++    case GAME_STATE_TEST_DETAILS:
++        pw64_split_poll();
++        break;
++    }
+     D_80362690->state = sGameStateUpdateFuncs[D_80362690->state](D_80362690);
 @@ -178,7 +240,27 @@ void gameUpdate(void) {
  
  s32 gameUpdateStateTitle(Unk80362690* arg0) {

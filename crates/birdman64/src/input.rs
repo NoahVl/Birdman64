@@ -22,7 +22,7 @@
 use crate::config;
 use gilrs::{Axis, Button, Gilrs};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use winit::keyboard::KeyCode;
@@ -1027,13 +1027,6 @@ pub fn set_p2(p: Option<P2Input>) {
     publish(&mut SOURCES.lock().unwrap());
 }
 
-/// The player-2 routing in force right now (`None` = split-screen off:
-/// everything goes to player 1). The settings screen stages its
-/// Player-2 controller row from this while split-screen runs.
-pub fn p2_input() -> Option<P2Input> {
-    p2_setting()
-}
-
 /// The player-2 routing in force right now (`None` = split-screen off).
 fn p2_setting() -> Option<P2Input> {
     P2.lock().unwrap().clone()
@@ -1170,8 +1163,135 @@ pub(crate) fn resolve_p2() -> P2Input {
 /// Without it nothing happens (defaults = single-player).
 pub fn apply_splitscreen() {
     if splitscreen_enabled() {
+        SPLIT_LIVE.store(true, Ordering::Relaxed);
         pw64_platform::headless::set_controllers_present(2);
         set_p2(Some(resolve_p2()));
+    }
+}
+
+/// Split-screen as the input routing last followed it ([`split_tick`]).
+static SPLIT_LIVE: AtomicBool = AtomicBool::new(false);
+
+/// Player 2's routing chosen this session while split-screen was off (the
+/// settings row, or the live routing when split-screen was switched off),
+/// so switching it on again uses it rather than the boot-time config.
+static P2_STAGED: Mutex<Option<P2Input>> = Mutex::new(None);
+
+/// Whether split-screen is on right now (the game's flag, as of the last
+/// retrace): the settings Controls page stages its row from this.
+pub fn split_live() -> bool {
+    SPLIT_LIVE.load(Ordering::Relaxed)
+}
+
+/// A settings-row switch the game hasn't applied yet (it waits for a menu
+/// state with no test): 0 none, 1 off, 2 on.
+static SPLIT_REQ: AtomicU8 = AtomicU8::new(0);
+
+/// The settings row's live split-screen switch: asks the game
+/// (`pw64_game::request_split`); [`split_tick`] follows once applied.
+pub fn request_split(on: bool) {
+    // Unit tests drive the settings rows in parallel: no process-wide state.
+    if cfg!(test) {
+        return;
+    }
+    SPLIT_REQ.store(1 + u8::from(on), Ordering::Relaxed);
+    pw64_game::request_split(on);
+}
+
+/// Split-screen as the settings row shows it: a pending switch, else the
+/// game's state.
+pub fn split_wanted() -> bool {
+    match SPLIT_REQ.load(Ordering::Relaxed) {
+        0 => split_live(),
+        r => r == 2,
+    }
+}
+
+/// Player 2's routing as it stands: the live one while split-screen runs,
+/// else this session's staged choice, else the configured one.
+pub fn p2_current() -> P2Input {
+    p2_setting()
+        .or_else(|| P2_STAGED.lock().unwrap().clone())
+        .unwrap_or_else(resolve_p2)
+}
+
+/// A new player-2 routing (settings row / capture): live at once while
+/// split-screen runs, else kept for the next switch-on.
+pub fn stage_p2(p: P2Input) {
+    if split_live() {
+        set_p2(Some(p));
+    } else if !cfg!(test) {
+        // (Not in unit tests: parallel settings tests would see it.)
+        *P2_STAGED.lock().unwrap() = Some(p);
+    }
+}
+
+/// Every retrace (game thread): follows a live split-screen switch by the
+/// game (its main-menu Players item, or a settings request it applied):
+/// controller 2's presence, player 2's routing and `[splitscreen] enabled`
+/// in `pw64.toml`. While on, also tells the main menu whether player 2's
+/// controller is missing.
+pub fn split_tick() {
+    let on = pw64_game::split_on();
+    // A request the game applied (or overrode with its own item) is done.
+    if pw64_game::split_req_pending().is_none() {
+        SPLIT_REQ.store(0, Ordering::Relaxed);
+    }
+    if on != SPLIT_LIVE.load(Ordering::Relaxed) {
+        if on {
+            let p2 = P2_STAGED.lock().unwrap().take().unwrap_or_else(resolve_p2);
+            SPLIT_LIVE.store(true, Ordering::Relaxed);
+            pw64_platform::headless::set_controllers_present(2);
+            set_p2(Some(p2));
+        } else {
+            *P2_STAGED.lock().unwrap() = p2_setting();
+            SPLIT_LIVE.store(false, Ordering::Relaxed);
+            set_p2(None);
+            pw64_platform::headless::set_controllers_present(1);
+        }
+        eprintln!("[input] split-screen {}", if on { "on" } else { "off" });
+        let saved = config::save_settings(config::SavedSettings {
+            splitscreen_enabled: Some(on),
+            ..Default::default()
+        });
+        if let Err(e) = saved {
+            eprintln!("[input] split-screen not saved: {e}");
+        }
+    }
+    if on {
+        let missing = {
+            let s = SOURCES.lock().unwrap();
+            let names: Vec<&str> = s.gamepads.iter().map(|(n, _)| n.as_str()).collect();
+            let script2 = !SCRIPT2.lock().unwrap().0.is_empty();
+            p2_missing(&names, script2, &p2_current())
+        };
+        pw64_game::set_split_hint(missing);
+    }
+}
+
+/// Whether split-screen lacks a device for one of the players under `p2`
+/// (the main menu's "Connect a second controller" hint): `pads` = the
+/// connected gilrs pad names, `script2` = a `PW64_INPUT_SCRIPT_P2` drives
+/// player 2. The keyboard is always there; BLE pads aren't checked.
+fn p2_missing(pads: &[&str], script2: bool, p2: &P2Input) -> bool {
+    match p2 {
+        // Player 1 then needs a pad (the keyboard is player 2's).
+        P2Input::Keyboard => pads.is_empty(),
+        P2Input::Gamepad(None) => !script2 && pads.is_empty(),
+        P2Input::Gamepad(Some(n)) => {
+            let (base, idx) = split_index(n);
+            let base = base.to_ascii_lowercase();
+            let found = pads
+                .iter()
+                .filter(|p| p.to_ascii_lowercase().contains(&base))
+                .count();
+            let ok = match idx {
+                None => found > 0,
+                Some(k) => k >= 1 && found >= k,
+            };
+            !script2 && !ok
+        }
+        P2Input::Ble => false,
     }
 }
 
@@ -2714,6 +2834,23 @@ mod tests {
             ),
             [pad(CONT_R | CONT_L), pad(CONT_B)]
         );
+    }
+
+    /// `p2_missing`: the main menu's "Connect a second controller" hint.
+    #[test]
+    fn p2_missing_cases() {
+        let all = P2Input::Gamepad(None);
+        assert!(p2_missing(&[], false, &all));
+        assert!(!p2_missing(&[], true, &all), "a P2 script drives player 2");
+        assert!(!p2_missing(&["Xbox Controller"], false, &all));
+        assert!(p2_missing(&[], false, &P2Input::Keyboard), "player 1 has no pad");
+        assert!(!p2_missing(&["Pad"], false, &P2Input::Keyboard));
+        let named = |n: &str| P2Input::Gamepad(Some(n.into()));
+        assert!(!p2_missing(&["Xbox Controller"], false, &named("xbox")));
+        assert!(p2_missing(&["DualSense"], false, &named("xbox")));
+        assert!(p2_missing(&["Xbox Controller"], false, &named("Xbox Controller#2")));
+        assert!(!p2_missing(&["Xbox Controller", "Xbox Controller"], false, &named("Xbox Controller#2")));
+        assert!(!p2_missing(&[], false, &P2Input::Ble));
     }
 
     /// `split_index`: the optional trailing `#<index>` off a pad name.

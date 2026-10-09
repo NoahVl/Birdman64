@@ -43,6 +43,12 @@ unsafe extern "C" {
     /// native/src/pw64_split.c: split-screen layout, 0 = top/bottom, 1 =
     /// left/right.
     static mut pw64_split_layout: i32;
+    /// native/src/pw64_split.c: pending live split-screen switch (0/1, -1 =
+    /// none); the game applies and clears it in a menu state.
+    static mut pw64_split_req: i32;
+    /// native/src/pw64_split.c: 1 = player 2's controller isn't connected
+    /// (the main menu shows a hint).
+    static mut pw64_split_hint: i32;
 }
 
 /// Hor+ widescreen for the C side: widens the CPU culling frustum of the
@@ -96,6 +102,64 @@ pub fn set_split(layout: u8) {
     #[cfg(feature = "dylib")]
     unsafe {
         *dylib::game().split = layout as i32
+    };
+}
+
+/// Whether split-screen is on in the game right now (`pw64_split`): the
+/// boot value from [`set_split`], or a live switch by the main menu's
+/// Players item or a [`request_split`] the game has applied.
+pub fn split_on() -> bool {
+    // SAFETY: plain C global, read volatile (the game thread writes it).
+    #[cfg(feature = "static")]
+    let v = unsafe { core::ptr::addr_of!(pw64_split).read_volatile() };
+    // SAFETY: same global, exported by the loaded game module.
+    #[cfg(feature = "dylib")]
+    let v = unsafe { dylib::game().split.read_volatile() };
+    v != 0
+}
+
+/// Asks the game to switch split-screen on/off live (splitscreen.md "Live
+/// switch"): it applies the request in its next menu state that holds no
+/// test (title, file/class/test menus) and then [`split_on`] follows. May be
+/// called any time (the settings row).
+pub fn request_split(on: bool) {
+    // SAFETY: plain C global; the game reads and clears it on its thread.
+    #[cfg(feature = "static")]
+    unsafe {
+        core::ptr::addr_of_mut!(pw64_split_req).write_volatile(on as i32)
+    };
+    // SAFETY: same global, exported by the loaded game module.
+    #[cfg(feature = "dylib")]
+    unsafe {
+        dylib::game().split_req.write_volatile(on as i32)
+    };
+}
+
+/// The [`request_split`] the game hasn't applied yet (`None`: nothing
+/// pending).
+pub fn split_req_pending() -> Option<bool> {
+    // SAFETY: plain C global, read volatile (the game thread clears it).
+    #[cfg(feature = "static")]
+    let v = unsafe { core::ptr::addr_of!(pw64_split_req).read_volatile() };
+    // SAFETY: same global, exported by the loaded game module.
+    #[cfg(feature = "dylib")]
+    let v = unsafe { dylib::game().split_req.read_volatile() };
+    (v >= 0).then_some(v != 0)
+}
+
+/// Main-menu hint for the C side: true = player 2's controller isn't
+/// connected ("Connect a second controller" under the menu while
+/// split-screen is on). May be called any time.
+pub fn set_split_hint(missing: bool) {
+    // SAFETY: plain C flag; the game reads it on its own thread.
+    #[cfg(feature = "static")]
+    unsafe {
+        pw64_split_hint = missing as i32
+    };
+    // SAFETY: same global, exported by the loaded game module.
+    #[cfg(feature = "dylib")]
+    unsafe {
+        *dylib::game().split_hint = missing as i32
     };
 }
 

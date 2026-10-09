@@ -109,6 +109,15 @@ int pw64_present_active(void);
  * pw64_split_out_aspect (pw64_widescreen.c): the output aspect a
  * left/right view extends into (0 = none: plain 4:3 halves). */
 extern int pw64_split;
+/* Live switch (splitscreen.md "Live switch"): pw64_split_apply(on) sets
+ * pw64_split/pw64_players (+ player 2's one-time setup and kernel pad 2) —
+ * only where no test is loaded; pw64_split_poll applies a pending Rust
+ * request (pw64_split_req, settings row). pw64_cont_enable: controller.c.patch. */
+extern int pw64_split_req;
+extern int pw64_split_hint;
+void pw64_split_apply(int on);
+void pw64_split_poll(void);
+void pw64_cont_enable(int idx, int on);
 extern int pw64_split_layout;
 extern int pw64_split_lr;
 void pw64_split_viewport(void* camera, int i);
@@ -123,7 +132,8 @@ extern int pw64_split_collide;
  * player's copy is live. Registered regions are swapped on a switch
  * (live -> slot[cur], slot[i] -> live). Registration is explicit (no
  * constructors: the game module also builds as a dylib with our CRT
- * replacement) and runs from gameInit when pw64_players > 1. */
+ * replacement) and runs once, on the first switch to 2 players
+ * (pw64_split_apply: gameInit or the live switch). */
 #define PW64_MAX_PLAYERS 2
 extern int pw64_players;    /* 1; 2 with split-screen (gameInit: pw64_split ? 2 : 1) */
 extern int pw64_player_cur; /* whose state is live in the globals */

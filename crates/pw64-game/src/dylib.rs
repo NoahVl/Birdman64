@@ -46,6 +46,10 @@ pub struct Game {
     pub split_collide: *mut i32,
     /// `pw64_split_layout` (pw64_split.c): 0 top/bottom, 1 left/right.
     pub split_layout: *mut i32,
+    /// `pw64_split_req` (pw64_split.c): pending live switch, -1 = none.
+    pub split_req: *mut i32,
+    /// `pw64_split_hint` (pw64_split.c): 1 = player 2 has no controller.
+    pub split_hint: *mut i32,
     /// `D_802B892C` (memory.c): the sample global memmap checks.
     pub sample_global: *const u32,
     /// `[start, end)` of the module image.
@@ -161,6 +165,8 @@ fn bind_module(h: *mut c_void, path: &Path) -> Result<(), String> {
             split: sym(c"pw64_split")?.cast(),
             split_collide: sym(c"pw64_split_collide")?.cast(),
             split_layout: sym(c"pw64_split_layout")?.cast(),
+            split_req: sym(c"pw64_split_req")?.cast(),
+            split_hint: sym(c"pw64_split_hint")?.cast(),
             sample_global: sym(c"D_802B892C")?.cast(),
             range,
         };

@@ -12,6 +12,11 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   `pw64_game::set_split` from `input::splitscreen_enabled()`). gameInit sets
   `pw64_players = pw64_split ? 2 : 1`; `pw64_level_players` = players in the current test
   (1 for vehicles not supported yet; logged via `PW64_LOGF`, visible with `PW64_TRACE_OS`).
+- **Live switch:** title main menu item 3 "1 Player"/"2 Players" (title_screen.c.patch, last so Start/Option keep
+  their places; box grows down; hint "Connect a second controller" while `pw64_split_hint`) calls
+  `pw64_split_apply` (game.c.patch: P2 camera/results/registry once, `pw64_cont_enable` pad 2). Settings row →
+  `pw64_split_req`, applied by `pw64_split_poll` in title..test-menu states (none mid-test). Rust `input::split_tick`
+  (each retrace) follows `pw64_split`: controller presence, `set_p2`, saves `[splitscreen] enabled`.
 - **Player context switch** (`native/src/pw64_players.c`): per-player state lives in the
   game's own globals; only the current player's copy is live. Registered regions
   (`PW64_REG(sym)` inside per-file `pw64_reg_<file>()`, called from `pw64_players_init`;
@@ -173,7 +178,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   present only with split-screen on). `input.rs` keeps a `Pad` per source and `route()`
   splits them by `P2Input` (`[splitscreen] p2_input` / `PW64_P2_INPUT`; default every
   gilrs pad → P2, keyboard → P1). `PW64_INPUT_SCRIPT_P2` drives controller 2. input.md.
-- Settings > Controls: "Split-screen (2 players)" (restart) + "Player 2 controller" (live).
+- Settings > Controls: "Split-screen (2 players)" + "Player 2 controller" (both live).
   settings.md.
 - Open: "press a button for player 2" capture; a single Joy-Con held sideways as its own pad.
 
