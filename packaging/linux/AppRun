@@ -16,4 +16,10 @@ if [ -z "$APPDIR" ]; then
     APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
     export APPDIR
 fi
+# Fallback libraries (release.yml): libxkbcommon-x11 and what it needs,
+# which winit loads at run time for the keyboard on X11. Only used when the
+# host has none, so an installed (newer) copy always wins.
+if ! { /sbin/ldconfig -p 2>/dev/null || ldconfig -p 2>/dev/null; } | grep -q 'libxkbcommon-x11\.so\.0'; then
+    export LD_LIBRARY_PATH="$APPDIR/usr/lib/birdman64/fallback${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 exec "$APPDIR/usr/bin/birdman64" "$@"

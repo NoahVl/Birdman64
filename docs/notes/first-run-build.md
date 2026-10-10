@@ -802,9 +802,15 @@ workspace clippy does not compile the dylib feature).
 - rfd 0.15.4 xdg_desktop_portal.rs: every portal error (including the service
   being absent AND the player cancelling, which ashpd reports as Err) falls
   back to zenity; zenity missing => None. So None + no zenity + no kdialog is
-  the "no dialog works" case (stderr instructions, exit 1); kdialog runs
+  the "no dialog works" case; kdialog runs
   `--getopenfilename . "<filters>"` with Qt filter syntax
   ("desc (*.z64 *.n64)\nAll files (*)").
+- No dialog at all (e.g. the AppImage catalog's Xvfb test, minimal WMs):
+  `rom_setup::resolve` returns `Ok(None)` and the window opens on
+  `rom_screen.rs` (drop the ROM on the window, or copy it next to the
+  AppImage/exe + "Check again"); it used to exit 1 with stderr instructions,
+  i.e. no window. Dev switches: `PW64_NO_FILE_DIALOG=1` forces this path on
+  any OS, `PW64_DROP_ROM=<file>` simulates a drop on the first frame.
 - `Rom::load` IO errors carry `std::io::Error` as root cause
   (`e.root_cause().is::<std::io::Error>()`), which rom_setup uses to show
   "Birdman64 couldn't read {file}: {e}" instead of the wrong-content box,

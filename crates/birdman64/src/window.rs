@@ -467,6 +467,9 @@ struct App {
     /// Next setup-screen repaint (progress bar animation between reports).
     #[cfg(feature = "first-run")]
     setup_frame: Instant,
+    /// No ROM yet and no file dialog on this system: the ROM screen while it
+    /// is up (before the setup screen / game).
+    rom_screen: Option<crate::rom_screen::Screen>,
     /// Toast notifications (bottom-left; the first-launch settings hint).
     toast: crate::toast::Toast,
     /// The first-launch hint has been handled this run (once, whatever the
@@ -484,8 +487,9 @@ struct App {
 
 /// Opens the window and runs the game in it. `setup`: the game module still
 /// has to be built (first-run feature; always false otherwise): the window
-/// shows the setup screen first.
-pub fn run(setup: bool) -> ! {
+/// shows the setup screen first. `ask_rom`: no ROM is loaded yet (no file
+/// dialog on this system): the ROM screen comes before everything else.
+pub fn run(setup: bool, ask_rom: bool) -> ! {
     #[cfg(not(feature = "first-run"))]
     let _ = setup;
     let el = match EventLoop::<UserEvent>::with_user_event().build() {
@@ -517,6 +521,7 @@ pub fn run(setup: bool) -> ! {
         setup: None,
         #[cfg(feature = "first-run")]
         setup_frame: Instant::now(),
+        rom_screen: ask_rom.then(crate::rom_screen::Screen::new),
         toast: crate::toast::Toast::new(),
         hint_shown: false,
         settings_shot: crate::hle::env_list("PW64_SETTINGS_SHOT").first().copied(),
@@ -825,6 +830,16 @@ impl App {
         // (a fullscreen switch may move the window to another monitor).
         self.gpu.as_mut().unwrap().set_display_mode(display_mode);
         self.apply_present();
+        // The ROM screen first (rom_screen.rs); `after_rom` once it has one.
+        if self.rom_screen.is_some() {
+            self.gpu.as_ref().unwrap().window.request_redraw();
+            return;
+        }
+        self.after_rom();
+    }
+
+    /// A ROM is installed: the setup screen (first run) or the game.
+    fn after_rom(&mut self) {
         // First run (firstrun.rs): the setup screen builds the game module;
         // the game thread starts once it is loaded (`UserEvent::Setup`).
         #[cfg(feature = "first-run")]
@@ -943,6 +958,41 @@ impl App {
         }
         if let Some(g) = &self.gpu {
             g.window.request_redraw();
+        }
+    }
+
+    /// Draws the ROM screen instead of a game frame; on a loaded ROM it
+    /// closes and the setup screen or game follows.
+    fn redraw_rom_screen(&mut self) {
+        let (Some(g), Some(s)) = (&mut self.gpu, &mut self.rom_screen) else {
+            return;
+        };
+        let tex = match g.surface.get_current_texture() {
+            Ok(t) => t,
+            Err(wgpu::SurfaceError::Timeout) => return,
+            Err(_) => {
+                g.surface.configure(&g.device, &g.config);
+                return;
+            }
+        };
+        let view = tex.texture.create_view(&Default::default());
+        let (next, shot) = s.render(g, &view);
+        if shot && g.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
+            crate::hle::shot_png(&g.device, &g.queue, &tex.texture, "tmp/win_setup_rom.png");
+        }
+        g.window.pre_present_notify();
+        tex.present();
+        match next {
+            crate::rom_screen::Next::Stay => {}
+            // Nothing is running yet.
+            crate::rom_screen::Next::Quit => std::process::exit(0),
+            crate::rom_screen::Next::Loaded => {
+                self.rom_screen = None;
+                self.after_rom();
+                if let Some(g) = &self.gpu {
+                    g.window.request_redraw();
+                }
+            }
         }
     }
 
@@ -1219,16 +1269,14 @@ impl App {
         }
     }
 
-    /// False while the first-run setup screen is up (no game thread yet).
+    /// False while the ROM screen or the first-run setup screen is up (no
+    /// game thread yet).
     fn game_started(&self) -> bool {
         #[cfg(feature = "first-run")]
-        {
-            self.setup.is_none()
-        }
+        let setup = self.setup.is_some();
         #[cfg(not(feature = "first-run"))]
-        {
-            true
-        }
+        let setup = false;
+        self.rom_screen.is_none() && !setup
     }
 
     /// Opens/closes the settings overlay: pause the OS core (threads sit in
@@ -1426,6 +1474,10 @@ impl ApplicationHandler<UserEvent> for App {
                     self.show_cursor();
                 }
                 self.cursor = pos;
+                if let (Some(s), Some(g)) = (&mut self.rom_screen, &self.gpu) {
+                    s.pointer_moved(self.cursor.0, self.cursor.1, g.window.scale_factor() as f32);
+                    g.window.request_redraw();
+                }
                 #[cfg(feature = "first-run")]
                 if let (Some(s), Some(g)) = (&mut self.setup, &self.gpu) {
                     s.pointer_moved(self.cursor.0, self.cursor.1, g.window.scale_factor() as f32);
@@ -1440,6 +1492,12 @@ impl ApplicationHandler<UserEvent> for App {
                 button: MouseButton::Left,
                 ..
             } => {
+                if let (Some(s), Some(g)) = (&mut self.rom_screen, &self.gpu) {
+                    let (x, y) = self.cursor;
+                    let pressed = state == ElementState::Pressed;
+                    s.pointer_button(x, y, g.window.scale_factor() as f32, pressed);
+                    g.window.request_redraw();
+                }
                 #[cfg(feature = "first-run")]
                 if let (Some(s), Some(g)) = (&mut self.setup, &self.gpu) {
                     let (x, y) = self.cursor;
@@ -1465,6 +1523,16 @@ impl ApplicationHandler<UserEvent> for App {
                         g.toggle_fullscreen();
                     }
                     self.apply_present();
+                    return;
+                }
+                // The ROM screen takes the keyboard (Enter / Esc).
+                if let Some(s) = &mut self.rom_screen {
+                    if pressed && !event.repeat {
+                        s.on_key(code);
+                        if let Some(g) = &self.gpu {
+                            g.window.request_redraw();
+                        }
+                    }
                     return;
                 }
                 // First run: the setup screen takes the keyboard (Enter /
@@ -1510,7 +1578,18 @@ impl ApplicationHandler<UserEvent> for App {
                     input::on_key(code, pressed);
                 }
             }
+            // A file dropped onto the window: the ROM screen's way in.
+            WindowEvent::DroppedFile(path) => {
+                if let (Some(s), Some(g)) = (&mut self.rom_screen, &self.gpu) {
+                    s.dropped(path);
+                    g.window.request_redraw();
+                }
+            }
             WindowEvent::RedrawRequested => {
+                if self.rom_screen.is_some() {
+                    self.redraw_rom_screen();
+                    return;
+                }
                 #[cfg(feature = "first-run")]
                 if self.setup.is_some() {
                     if !self.redraw_setup() {

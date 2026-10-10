@@ -56,8 +56,9 @@ fn decide(
 /// Resolves and loads the ROM (`pw64_platform::pi::set_rom`): CLI arg →
 /// `PW64_ROM` → remembered `[rom] path` → the `rom/` + cwd/exe-dir scan →
 /// picker (interactive only). The error propagates to `main`'s usual
-/// message + exit(1).
-pub fn resolve(explicit: Option<&std::path::Path>) -> anyhow::Result<PathBuf> {
+/// message + exit(1). `Ok(None)`: no ROM yet and no file dialog on this
+/// system; the window asks for it (rom_screen.rs).
+pub fn resolve(explicit: Option<&std::path::Path>) -> anyhow::Result<Option<PathBuf>> {
     let env = std::env::var_os(pi::ROM_ENV).map(PathBuf::from);
     let cfg = config::get().rom.path.as_deref().map(PathBuf::from);
     let interactive = is_interactive();
@@ -65,10 +66,11 @@ pub fn resolve(explicit: Option<&std::path::Path>) -> anyhow::Result<PathBuf> {
     // the welcome text when the picker opens.
     let stale_rom =
         explicit.is_none() && env.is_none() && cfg.as_ref().is_some_and(|p| !p.is_file());
+    let found = |r: anyhow::Result<PathBuf>| r.map(Some);
     match decide(explicit.map(PathBuf::from), env, cfg, interactive) {
-        Decision::Use(p) => pi::load_rom(Some(&p)).map_err(|e| friendly_use_error(&p, e)),
+        Decision::Use(p) => found(pi::load_rom(Some(&p)).map_err(|e| friendly_use_error(&p, e))),
         Decision::Remembered(p) => match pi::load_rom(Some(&p)) {
-            Ok(p) => Ok(p),
+            Ok(p) => Ok(Some(p)),
             Err(e) if interactive => {
                 eprintln!("[pw64] remembered ROM unusable ({e:#}); searching again");
                 // F9: an unreadable remembered ROM (permissions, antivirus)
@@ -76,12 +78,12 @@ pub fn resolve(explicit: Option<&std::path::Path>) -> anyhow::Result<PathBuf> {
                 if is_io_error(&e) {
                     couldn_read_box(&p, &e);
                 }
-                pi::load_rom(None).or_else(|_| pick_and_remember(true))
+                found(pi::load_rom(None)).or_else(|_| pick_and_remember(true))
             }
             Err(e) => Err(e),
         },
-        Decision::Prompt => pi::load_rom(None).or_else(|_| pick_and_remember(stale_rom)),
-        Decision::Legacy => pi::load_rom(None),
+        Decision::Prompt => found(pi::load_rom(None)).or_else(|_| pick_and_remember(stale_rom)),
+        Decision::Legacy => found(pi::load_rom(None)),
     }
 }
 
@@ -158,49 +160,27 @@ pub fn is_interactive() -> bool {
 /// verify says why in a message box (a double-clicked exe's console closes
 /// on exit, so stderr alone would never be read) and re-opens the picker;
 /// cancel ends the process cleanly (nothing was started). The boxes show on
-/// Linux too: rfd works there, and the same help applies.
-fn pick_and_remember(stale_rom: bool) -> anyhow::Result<PathBuf> {
+/// Linux too: rfd works there, and the same help applies. `Ok(None)`: this
+/// system has no file dialog at all; the window asks instead (rom_screen.rs).
+fn pick_and_remember(stale_rom: bool) -> anyhow::Result<Option<PathBuf>> {
+    // Dev switch: act as if there were no file dialog (checks the in-window
+    // ROM screen on any system).
+    if std::env::var_os("PW64_NO_FILE_DIALOG").is_some() {
+        return Ok(None);
+    }
     if !welcome_to_birdman64(stale_rom) {
         no_rom_chosen();
     }
     let mut title = "Select your Pilotwings 64 (USA) ROM file";
-    let (path, rom) = loop {
-        let Some(path) = pick_rom(title) else {
-            no_rom_chosen();
+    loop {
+        let path = match pick_rom(title) {
+            Pick::File(p) => p,
+            Pick::Cancel => no_rom_chosen(),
+            Pick::NoDialog => return Ok(None),
         };
-        match pw64_rom::Rom::load(&path) {
-            Ok(rom) => break (path, rom),
-            Err(e) => {
-                eprintln!(
-                    "{} is not a usable Pilotwings 64 ROM ({e:#}); only the US (USA) ROM works",
-                    path.display()
-                );
-                // F9: an unreadable file (permissions, antivirus) is a
-                // different problem from the wrong content: say so plainly.
-                let (box_title, description) = if is_io_error(&e) {
-                    (
-                        "Couldn't read the file",
-                        format!(
-                            "Birdman64 couldn't read {}: {e:#}\n\nIf antivirus software is \
-                             involved, allow Birdman64 and pick the file again. Otherwise \
-                             please pick another file.",
-                            path.display()
-                        ),
-                    )
-                } else {
-                    let problem = match diagnose_message(&path) {
-                        Some(problem) => format!(
-                            "{problem}\n\nOnly the US (USA) version works (.z64, .n64 or .v64, \
-                             or a .zip containing one). Please pick another file."
-                        ),
-                        None => format!(
-                            "This file isn't a Pilotwings 64 ROM this game can use. \
-                             Only the US (USA) version works (.z64, .n64 or .v64, or a .zip \
-                             containing one). Please pick another file.\n\nDetails: {e:#}"
-                        ),
-                    };
-                    ("Not the right ROM", problem)
-                };
+        match use_rom_file(&path) {
+            Ok(abs) => return Ok(Some(abs)),
+            Err((box_title, description)) => {
                 rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Error)
                     .set_title(box_title)
@@ -209,16 +189,61 @@ fn pick_and_remember(stale_rom: bool) -> anyhow::Result<PathBuf> {
                 title = "That file didn't work — select the Pilotwings 64 (USA) ROM file";
             }
         }
+    }
+}
+
+/// A ROM file the player chose (picker, or dropped on the window): verify,
+/// remember in `pw64.toml`, install. `Err`: a title and a text saying why
+/// the file can't be used, for a box or the in-window ROM screen.
+pub fn use_rom_file(path: &Path) -> Result<PathBuf, (&'static str, String)> {
+    let rom = match pw64_rom::Rom::load(path) {
+        Ok(rom) => rom,
+        Err(e) => {
+            eprintln!(
+                "{} is not a usable Pilotwings 64 ROM ({e:#}); only the US (USA) ROM works",
+                path.display()
+            );
+            return Err(rom_problem(path, &e));
+        }
     };
     // Absolute, so the config works from any working directory. Not
-    // `canonicalize`: on Windows that yields a `\\?\C:\…` verbatim path.
-    let abs = std::path::absolute(&path).unwrap_or(path);
+    // `canonicalize`: on Windows that yields a `\?\C:\…` verbatim path.
+    let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     if let Err(e) = config::save_rom_path(&abs) {
         // The game still runs; the dialog simply shows again next time.
         eprintln!("[pw64] couldn't remember the ROM path ({e})");
     }
     pi::set_rom(rom);
     Ok(abs)
+}
+
+/// Why a chosen file can't be used: (title, text).
+fn rom_problem(path: &Path, e: &anyhow::Error) -> (&'static str, String) {
+    // F9: an unreadable file (permissions, antivirus) is a different
+    // problem from the wrong content: say so plainly.
+    if is_io_error(e) {
+        return (
+            "Couldn't read the file",
+            format!(
+                "Birdman64 couldn't read {}: {e:#}\n\nIf antivirus software is \
+                 involved, allow Birdman64 and pick the file again. Otherwise \
+                 please pick another file.",
+                path.display()
+            ),
+        );
+    }
+    let problem = match diagnose_message(path) {
+        Some(problem) => format!(
+            "{problem}\n\nOnly the US (USA) version works (.z64, .n64 or .v64, \
+             or a .zip containing one). Please pick another file."
+        ),
+        None => format!(
+            "This file isn't a Pilotwings 64 ROM this game can use. \
+             Only the US (USA) version works (.z64, .n64 or .v64, or a .zip \
+             containing one). Please pick another file.\n\nDetails: {e:#}"
+        ),
+    };
+    ("Not the right ROM", problem)
 }
 
 /// The welcome box before the first picker round: Ok proceeds to the file
@@ -264,9 +289,19 @@ fn no_rom_chosen() -> ! {
     std::process::exit(0);
 }
 
-/// Native open dialog filtered to N64 ROM files (any byte order). `None` on
-/// cancel. Only reached from [`pick_and_remember`], i.e. never in tests or CI.
-fn pick_rom(title: &str) -> Option<PathBuf> {
+/// What the file dialog gave.
+enum Pick {
+    File(PathBuf),
+    Cancel,
+    /// No dialog could be shown at all (Linux without the portal, zenity or
+    /// kdialog).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    NoDialog,
+}
+
+/// Native open dialog filtered to N64 ROM files (any byte order). Only
+/// reached from [`pick_and_remember`], i.e. never in tests or CI.
+fn pick_rom(title: &str) -> Pick {
     // rfd: the native dialog (Linux: the xdg desktop portal, then zenity on
     // a portal error). `None` is either a cancel (portal or zenity) or no
     // backend at all; rfd doesn't say which (rfd 0.15 xdg_desktop_portal.rs),
@@ -285,7 +320,7 @@ fn pick_rom(title: &str) -> Option<PathBuf> {
         .add_filter("All files", &["*"])
         .pick_file()
     {
-        return Some(p);
+        return Pick::File(p);
     }
     // F2 (Linux): no portal and no zenity. Try kdialog before giving up.
     #[cfg(target_os = "linux")]
@@ -295,34 +330,29 @@ fn pick_rom(title: &str) -> Option<PathBuf> {
         // picker, and with neither tool a cancel printed "no file dialog").
         // A missing backend fails at once.
         if started.elapsed() >= std::time::Duration::from_secs(1) {
-            return None;
+            return Pick::Cancel;
         }
         if linux_tool_exists("kdialog") {
-            return kdialog_pick(title);
+            return kdialog_pick(title).map_or(Pick::Cancel, Pick::File);
         }
         if linux_tool_exists("zenity") {
             // rfd reached zenity, so this was a cancel (or a one-off zenity
             // failure; the welcome loop treats it the same way).
-            return None;
+            return Pick::Cancel;
         }
-        // No dialog at all: no in-window screen to fall back to, so print
-        // clear instructions and stop with an error.
+        // No dialog at all: the window asks for the ROM instead
+        // (rom_screen.rs: drop the file on it, or put it in the scanned
+        // folder).
         eprintln!(
-            "error: Birdman64 needs to ask you for your game file (ROM), but this \
-             system has no file dialog it can use (none of xdg-desktop-portal, \
-             zenity or kdialog).\n\n\
-             To fix this, either install one of them (for example with your \
-             distribution's package manager), or tell Birdman64 where the ROM is \
-             and start it again: put the ROM file next to the Birdman64 program, \
-             set the path in pw64.toml ([rom] path), or set the PW64_ROM \
-             environment variable. Only the US (USA) ROM works."
+            "[pw64] no file dialog on this system (none of xdg-desktop-portal, zenity \
+             or kdialog): asking for the ROM in the window"
         );
-        std::process::exit(1);
+        Pick::NoDialog
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = started;
-        None
+        Pick::Cancel
     }
 }
 
