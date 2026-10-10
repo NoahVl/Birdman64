@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-10
+
+### Fixed
+
+- The settings screen (and the notifications and first-run setup screen) is
+  centered again on windows taller than 720 pixels, such as 1080p; it used to
+  sit right of and below the middle.
+
 ## [1.0.1] - 2026-10-08
 
 ### Fixed
@@ -53,6 +61,7 @@ First public release.
   tar.gz, with checksums and build provenance attestations.
 - `--version`, and crash reports written to `crash.log` in the data folder.
 
-[Unreleased]: https://github.com/NoahVl/Birdman64/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/NoahVl/Birdman64/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/NoahVl/Birdman64/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/NoahVl/Birdman64/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/NoahVl/Birdman64/releases/tag/v1.0.0
