@@ -25,6 +25,20 @@
          }
  
          gcData->unk9C = func_80313F08(&D_80368880, ABS_NOEQ(xAxisInput));
+@@ -438,9 +447,12 @@ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
+         if (gcData->unk5D != 0) {
+             gcData->unk2 |= 2;
+             uvDobjState(gcData->objId, gcData->unk2);
++            pw64_dobj_cockpit[gcData->objId] = 0; // PW64 split-screen
+         } else {
+             if (gcData->unk2 & 2) {
+                 gcData->unk2 &= ~2;
+             }
+             uvDobjState(gcData->objId, gcData->unk2);
++            // PW64 split-screen: hidden for this player's cockpit view only
++            // (dobj.c.patch _uvDobjsDraw still draws it in the other views).
++            pw64_dobj_cockpit[gcData->objId] = (u8)(pw64_player_cur + 1);
+         }
 @@ -484,12 +493,14 @@ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
                  hud->power = 0.0f;
              }
@@ -40,6 +54,12 @@
              } else {
                  if ((gcData->fuel <= 0.0f) && !gcData->fuelEmpty) {
                      hudWarningText(TEXT_FUEL_OUT, 1.5f, 8.0f);
+@@ -734,4 +745,5 @@ void func_802F764C(GyrocopterData* gcData) {
+     if (gcData->unkD0 != 0) {
+         gcData->camera->unk6 = 0;
+         gcData->unk2 = gcData->camera->unk6;
+         uvDobjState(gcData->objId, gcData->unk2);
++        pw64_dobj_cockpit[gcData->objId] = 0; // PW64 split-screen: sunk, hidden in every view
 @@ -1188,3 +1199,11 @@ void gyrocopterLoadPilot(u8 pilot, GyrocopterData* gcData) {
          break;
      }

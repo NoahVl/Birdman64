@@ -9,6 +9,11 @@
 +// a dobj owned by another player is neither drawn nor collided with.
 +// Freeing a dobj (model 0xFFFF) makes it shared again.
 +u8 pw64_dobj_owner[100];
++// Player + 1 whose cockpit (first-person) view hid this dobj, 0 = none: it
++// still draws in the other players' views. Set and cleared by the vehicle
++// (not by uvDobjState: the camera's collision probes toggle the state and
++// restore it every pass).
++u8 pw64_dobj_cockpit[100];
 +
 +void pw64_dobj_claim(s32 objId) {
 +    if ((pw64_level_players > 1) && (objId < 100) && (D_80263780[objId].modelId != 0xFFFF)) {
@@ -62,6 +67,7 @@
 
          var_t2->modelId = 0xFFFF;
 +        pw64_dobj_owner[objId] = 0; // PW64 split-screen: shared again
++        pw64_dobj_cockpit[objId] = 0;
          for (i = 0; i < D_80269F0A; i++) {
              if (objId == D_80269CB0[i]) {
                  for (j = i; j < D_80269F0A; j++) {
@@ -74,8 +80,11 @@
          }
          var_t2->modelId = modelId;
          var_t2->unk34 = 3;
-@@ -352,6 +403,9 @@ void _uvDobjsDraw(UnkStruct_80204D94* arg0, s32 arg1) {
-         if (!(var_s2->unk34 & 2) || (var_s2->unk34 & 4)) {
+@@ -352,6 +406,10 @@ void _uvDobjsDraw(UnkStruct_80204D94* arg0, s32 arg1) {
+-        if (!(var_s2->unk34 & 2) || (var_s2->unk34 & 4)) {
++        // PW64 split-screen: hidden only for its own player's cockpit view,
++        // still drawn in the other views.
++        if ((!(var_s2->unk34 & 2) && !PW64_DOBJ_COCKPIT_OTHER(i)) || (var_s2->unk34 & 4)) {
              continue;
          }
 +        if (PW64_DOBJ_OTHER(i)) { // PW64 split-screen: another view's objective

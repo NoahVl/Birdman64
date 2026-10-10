@@ -181,6 +181,11 @@ void pw64_reg_task(void); /* task.c: objective hit state (+ its modules) */
 extern unsigned char pw64_dobj_owner[100];
 #define PW64_DOBJ_OTHER(id) \
     (pw64_dobj_owner[id] != 0 &&pw64_dobj_owner[id] != pw64_player_cur + 1)
+/* Cockpit hide (dobj.c.patch): player + 1 whose first-person view hid the
+ * dobj (its state's visible bit off); the other views still draw it. */
+extern unsigned char pw64_dobj_cockpit[100];
+#define PW64_DOBJ_COCKPIT_OTHER(id) \
+    (pw64_dobj_cockpit[id] != 0 && pw64_dobj_cockpit[id] != pw64_player_cur + 1)
 void pw64_dobj_claim(PW64_LONG32 objId);          /* owned by the current player */
 PW64_LONG32 pw64_dobj_clone(PW64_LONG32 src);     /* copy for the current player */
 /* Kernel controller reads (controller.c.patch): with 2+ players, pad 0

@@ -176,8 +176,13 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - Hopper hit (`pw64_jh_fall`): state 6 goes to `unk134` (last landing; origin before one → stuck in
   state 9 / fault), so it falls only on the ground at its own spot; hit in the air → on landing.
 - Widescreen/fill-screen + split
-  untested (the view scissor may fight the renderer's Hor+ extension). Cockpit views that
-  hide their own pilot dobj hide it for the other view too (dobj state is global).
+  untested (the view scissor may fight the renderer's Hor+ extension).
+- Cockpit views: dobj state is global, so a vehicle hiding itself for its own first-person view
+  vanished from the other view too. Gyro fixed: `pw64_dobj_cockpit[obj]` = hiding player + 1
+  (set/cleared by the gyro each frame, cleared on its sinking crash), `_uvDobjsDraw` draws it in
+  other channels. Draws run per channel with that player live. Not via `uvDobjState`: the camera's
+  collision probes (`func_802DB050/DB224`) set and restore the state every pass. Rocket belt
+  hides only pilot parts (`uvDobjProps` 4/5, part flags global): same issue, not fixed.
 
 ## Input (per-player controller assignment)
 - `headless.rs` `PADS[4]` + `set_controller(n, ..)` + `set_controllers_present(n)` (pad 2
