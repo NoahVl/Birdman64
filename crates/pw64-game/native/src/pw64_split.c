@@ -21,6 +21,12 @@ int pw64_split_hint = 0;
 int pw64_split_layout = 0;
 int pw64_split_lr = 0;
 
+/* Share best score: 1 = when another player's run beat player 1's, player
+ * 1's save entry for the test is rescored with that run (game.c.patch
+ * pw64_share_best, after the tallies). Rust may set it any time
+ * (pw64_game::set_split_share, also live from the settings screen). */
+int pw64_split_share = 0;
+
 /* Player 2's pilot (PILOT_*), -1 = fly player 1's. Only player 2's vehicle
  * load and the level's model list read it (game.c.patch, level.c.patch). */
 int pw64_p2_pilot = -1;

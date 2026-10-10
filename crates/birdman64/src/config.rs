@@ -213,6 +213,9 @@ pub struct Splitscreen {
     /// `collisions` — the two split-screen pilots can crash into each other
     /// (`PW64_SPLIT_COLLIDE`).
     pub collisions: Option<bool>,
+    /// `share_scores` — the better run of the two players is saved to
+    /// player 1's file (`PW64_SPLIT_SHARE`).
+    pub share_scores: Option<bool>,
     /// `layout` — `"top_bottom"` or `"left_right"` (`PW64_SPLIT_LAYOUT`,
     /// `input::parse_split_layout`).
     pub layout: Option<String>,
@@ -565,6 +568,8 @@ fn from_table(table: &toml::Table) -> Config {
                     string_of(ss, "p2_input", "splitscreen.p2_input", &mut ignored);
                 cfg.splitscreen.collisions =
                     opt_bool_of(ss, "collisions", "splitscreen.collisions", &mut ignored);
+                cfg.splitscreen.share_scores =
+                    opt_bool_of(ss, "share_scores", "splitscreen.share_scores", &mut ignored);
                 cfg.splitscreen.layout = checked_string(
                     ss,
                     "layout",
@@ -704,6 +709,9 @@ pub struct SavedSettings {
     /// Split-screen pilot collisions (`[splitscreen] collisions`; None =
     /// leave as-is).
     pub splitscreen_collisions: Option<bool>,
+    /// Split-screen best-score sharing (`[splitscreen] share_scores`; None
+    /// = leave as-is).
+    pub splitscreen_share: Option<bool>,
     /// Split-screen view layout (`[splitscreen] layout`, the
     /// `SplitLayout::to_config` spelling; None = leave as-is).
     pub split_layout: Option<&'static str>,
@@ -858,6 +866,7 @@ fn builtin_default(section: &str, key: &str, low_end: bool) -> Option<toml::Valu
         ("splitscreen", "enabled") => Some(false.into()),
         ("splitscreen", "p2_input") => Some("gamepad".into()),
         ("splitscreen", "collisions") => Some(false.into()),
+        ("splitscreen", "share_scores") => Some(false.into()),
         ("splitscreen", "layout") => Some("top_bottom".into()),
         _ => None,
     }
@@ -1014,6 +1023,7 @@ pub(crate) fn apply(
     if u.splitscreen_enabled.is_some()
         || u.p2_input.is_some()
         || u.splitscreen_collisions.is_some()
+        || u.splitscreen_share.is_some()
         || u.split_layout.is_some()
     {
         let ss = table
@@ -1039,6 +1049,9 @@ pub(crate) fn apply(
         }
         if let Some(v) = u.splitscreen_collisions {
             sput("collisions", v.into());
+        }
+        if let Some(v) = u.splitscreen_share {
+            sput("share_scores", v.into());
         }
         if let Some(v) = u.split_layout {
             sput("layout", v.into());

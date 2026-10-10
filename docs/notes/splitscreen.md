@@ -84,6 +84,12 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   (`pw64_results_split`): every view keeps drawing; results.c reads `D_80364210[unk9C=0]`, so
   "Next" on P1's tally swaps each other player's struct in for a Next-only tally, then P1's
   class totals + Retry/Quit (applies to all). Only P1 is saved. Tallies/replays full screen (see Remaining work).
+- **Share best score** (`pw64_split_share`, `[splitscreen] share_scores` / `PW64_SPLIT_SHARE`, Controls row):
+  after the tallies, if another player's run total (read back from its entry) beats P1's, `pw64_share_best`
+  copies that run's header (bytes before `unk40`) into `D_80364210[0]` and reruns `func_8032B560` with that
+  player live and its finish-time `unkA1` (`sPw64TimeUp`; the global may be set by a later time-up).
+- `uvEventRemoveCb` (decomp bug, harmless with 1 player): cleared `unk0[count]`, which for a full list is
+  `.count` itself → -1, then the next add corrupts the previous event's count (crash). Clears `[count-1]`.
 - **Free flight** (test_menu.c.patch, game.c.patch `pw64_free_*`): split-only item in the
   test menu's bottom-right slot (Sample photo's; replaces it on Shutter Bug tests) for
   `pw64_split_vehicle`s; returns like Start with `pw64_free_flight = 1` (cleared on menu entry

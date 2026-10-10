@@ -188,6 +188,9 @@ enum Opt {
     /// Split-screen pilot collisions (Controls page): live from the next
     /// test start (`pw64_game::set_split_collide`, read at each test start).
     Collisions,
+    /// Split-screen "Share best score" (Controls page): live, read when the
+    /// results close (`pw64_game::set_split_share`).
+    ShareScores,
     /// Split-screen view layout, top/bottom or left/right (Controls page):
     /// live from the next test start (`pw64_game::set_split_layout`).
     SplitLayout,
@@ -349,6 +352,8 @@ pub struct Overlay {
     /// Staged pilot collisions (live from the next test start, like P2's
     /// controller routing; greyed while the staged Split value is off).
     collisions: bool,
+    /// Staged best-score sharing (live; greyed like collisions).
+    share_scores: bool,
     /// Staged split-screen layout (live from the next test start, like
     /// collisions; greyed while the staged Split value is off).
     split_layout: input::SplitLayout,
@@ -442,6 +447,7 @@ impl Overlay {
             saved_restart: None,
             split: input::split_wanted(),
             collisions: input::split_collisions(),
+            share_scores: input::split_share(),
             split_layout: input::split_layout(),
             p2_choices: p2,
             p2_sel,
@@ -524,6 +530,7 @@ impl Overlay {
         // Pilot collisions (live from the next test start): the flag as it
         // stands (env, file or a live change).
         self.collisions = input::split_collisions();
+        self.share_scores = input::split_share();
         self.split_layout = input::split_layout();
         self.fb = gpu.fb_size_for_scale(self.scale);
         // Display mode (live): stage the running one; Exclusive is left out
@@ -1233,6 +1240,7 @@ impl Overlay {
                 rows.push(Row::Opt(Opt::P2Input));
                 rows.push(Row::P2Assign);
                 rows.push(Row::Opt(Opt::Collisions));
+                rows.push(Row::Opt(Opt::ShareScores));
                 rows.push(Row::Opt(Opt::SplitLayout));
                 // Switch 2 pads over Bluetooth (experimental), under the
                 // controller section.
@@ -1413,6 +1421,7 @@ impl Overlay {
                 self.opt_row(ui, at(Row::Opt(Opt::P2Input)), Opt::P2Input);
                 self.p2_assign_row(ui, at(Row::P2Assign));
                 self.opt_row(ui, at(Row::Opt(Opt::Collisions)), Opt::Collisions);
+                self.opt_row(ui, at(Row::Opt(Opt::ShareScores)), Opt::ShareScores);
                 self.opt_row(ui, at(Row::Opt(Opt::SplitLayout)), Opt::SplitLayout);
                 ui.add_space(4.0);
                 self.opt_row(ui, at(Row::Opt(Opt::Ble)), Opt::Ble);
@@ -1454,6 +1463,7 @@ impl Overlay {
             || (o == Opt::P2Input && !self.split)
             // Pilot collisions only matter in split-screen: same greying.
             || (o == Opt::Collisions && !self.split)
+            || (o == Opt::ShareScores && !self.split)
             || (o == Opt::SplitLayout && !self.split);
         if disabled {
             let (name, value, hint) = self.row_text(o);
@@ -1703,6 +1713,11 @@ impl Overlay {
             Opt::Collisions => (
                 "Pilots collide",
                 if self.collisions { "On" } else { "Off" }.into(),
+                "",
+            ),
+            Opt::ShareScores => (
+                "Share best score",
+                if self.share_scores { "On" } else { "Off" }.into(),
                 "",
             ),
             Opt::SplitLayout => (
@@ -1970,6 +1985,12 @@ impl Overlay {
                     // saves it either way).
                     pw64_game::set_split_collide(self.collisions);
                 }
+                Opt::ShareScores if !self.split => {}
+                Opt::ShareScores => {
+                    self.share_scores = !self.share_scores;
+                    // Live: read when a test's results close.
+                    pw64_game::set_split_share(self.share_scores);
+                }
                 // Same greying as the collisions row.
                 Opt::SplitLayout if !self.split => {}
                 Opt::SplitLayout => {
@@ -2109,6 +2130,7 @@ impl Overlay {
             splitscreen_enabled: Some(self.split),
             p2_input: Some(self.p2_choices[self.p2_sel].input.to_config()),
             splitscreen_collisions: Some(self.collisions),
+            splitscreen_share: Some(self.share_scores),
             split_layout: Some(self.split_layout.to_config()),
             // The rebinding maps as they stand now (empty = defaults, so
             // the sub-table is dropped from the file).
@@ -2449,6 +2471,7 @@ fn changed_since(s: config::SavedSettings, snap: &config::SavedSettings) -> conf
             s.splitscreen_collisions,
             &snap.splitscreen_collisions,
         ),
+        splitscreen_share: keep(s.splitscreen_share, &snap.splitscreen_share),
         split_layout: keep(s.split_layout, &snap.split_layout),
         keyboard: keep(s.keyboard, &snap.keyboard),
         gamepad: keep(s.gamepad, &snap.gamepad),
@@ -2646,6 +2669,10 @@ fn help(row: Row) -> &'static str {
             Opt::P2Input => "Which controller player 2 uses. Everything else is player 1.",
             Opt::Collisions => {
                 "On: the two pilots can crash into each other. Applies from the next test."
+            }
+            Opt::ShareScores => {
+                "On: when player 2 scores more, player 2's run is saved to player 1's file \
+                 (only player 1's file is saved)."
             }
             Opt::SplitLayout => {
                 "Player 1 on top or on the left. Side by side suits a wide screen. Applies \
@@ -3122,6 +3149,7 @@ mod tests {
             splitscreen_enabled: Some(true),
             p2_input: Some("keyboard".into()),
             splitscreen_collisions: Some(true),
+            splitscreen_share: Some(true),
             split_layout: Some("left_right"),
             keyboard: Some(
                 [("A".to_string(), "KeyX".to_string())]
@@ -3155,6 +3183,7 @@ mod tests {
             splitscreen_enabled: Some(false),
             p2_input: Some("gamepad".into()),
             splitscreen_collisions: Some(false),
+            splitscreen_share: Some(false),
             split_layout: Some("top_bottom"),
             keyboard: Some(std::collections::BTreeMap::new()),
             gamepad: Some(std::collections::BTreeMap::new()),
@@ -3170,7 +3199,7 @@ mod tests {
              \n[input.keyboard]\nA = \"KeyX\"\n\n[input.gamepad]\nA = \"East\"\n\
              \n[input.ble]\nenabled = true\n\
              \n[splitscreen]\nenabled = true\np2_input = \"keyboard\"\ncollisions = true\n\
-             layout = \"left_right\"\n",
+             share_scores = true\nlayout = \"left_right\"\n",
         )
         .unwrap();
         config::apply(&mut table, &d, false).unwrap();
@@ -3205,6 +3234,7 @@ mod tests {
         assert!(ss.get("enabled").is_none());
         assert!(ss.get("p2_input").is_none());
         assert!(ss.get("collisions").is_none());
+        assert!(ss.get("share_scores").is_none());
         assert!(ss.get("layout").is_none());
     }
 
@@ -3288,7 +3318,7 @@ mod tests {
         o.confirm();
         assert_eq!(o.page, Page::Controls);
         let rows = o.rows();
-        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 4 + 1 + 1 + 1);
+        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 5 + 1 + 1 + 1);
         assert_eq!(rows[0], Row::Bind(Kind::Keyboard, 0));
         // The unused keyboard slots (L, the D-pad) moved last, after the
         // stick rows.
@@ -3306,10 +3336,11 @@ mod tests {
         assert_eq!(rows[32], Row::Opt(Opt::P2Input));
         assert_eq!(rows[33], Row::P2Assign);
         assert_eq!(rows[34], Row::Opt(Opt::Collisions));
-        assert_eq!(rows[35], Row::Opt(Opt::SplitLayout));
-        assert_eq!(rows[36], Row::Opt(Opt::Ble));
-        assert_eq!(rows[37], Row::Back);
-        o.sel = 37;
+        assert_eq!(rows[35], Row::Opt(Opt::ShareScores));
+        assert_eq!(rows[36], Row::Opt(Opt::SplitLayout));
+        assert_eq!(rows[37], Row::Opt(Opt::Ble));
+        assert_eq!(rows[38], Row::Back);
+        o.sel = 38;
         o.confirm();
         assert_eq!(o.page, Page::Main);
         assert_eq!(o.rows()[o.sel], Row::Controls);
@@ -3333,6 +3364,8 @@ mod tests {
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::SplitLayout));
         o.move_sel(-1);
+        assert_eq!(o.rows()[o.sel], Row::Opt(Opt::ShareScores));
+        o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Collisions));
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::P2Assign);
@@ -3342,7 +3375,7 @@ mod tests {
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Split));
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Reset(Kind::Gamepad));
-        for _ in 0..6 {
+        for _ in 0..7 {
             o.move_sel(1);
         }
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));

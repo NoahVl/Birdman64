@@ -46,6 +46,8 @@ pub struct Game {
     pub split_collide: *mut i32,
     /// `pw64_split_layout` (pw64_split.c): 0 top/bottom, 1 left/right.
     pub split_layout: *mut i32,
+    /// `pw64_split_share` (pw64_split.c): share the best score, 0 = off.
+    pub split_share: *mut i32,
     /// `pw64_split_req` (pw64_split.c): pending live switch, -1 = none.
     pub split_req: *mut i32,
     /// `pw64_split_hint` (pw64_split.c): 1 = player 2 has no controller.
@@ -165,6 +167,7 @@ fn bind_module(h: *mut c_void, path: &Path) -> Result<(), String> {
             split: sym(c"pw64_split")?.cast(),
             split_collide: sym(c"pw64_split_collide")?.cast(),
             split_layout: sym(c"pw64_split_layout")?.cast(),
+            split_share: sym(c"pw64_split_share")?.cast(),
             split_req: sym(c"pw64_split_req")?.cast(),
             split_hint: sym(c"pw64_split_hint")?.cast(),
             sample_global: sym(c"D_802B892C")?.cast(),

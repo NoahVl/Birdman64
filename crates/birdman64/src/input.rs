@@ -1051,16 +1051,14 @@ pub fn splitscreen_enabled() -> bool {
     crate::opts::precedence(env_enabled(), config::get().splitscreen.enabled, false)
 }
 
-/// Pilot collisions on/off: `PW64_SPLIT_COLLIDE` > `[splitscreen]
-/// collisions` > default off (the usual option precedence).
-fn env_collide() -> Option<bool> {
-    match std::env::var("PW64_SPLIT_COLLIDE").as_deref().map(str::trim) {
+/// An on/off split-screen env override (`PW64_SPLIT_COLLIDE`,
+/// `PW64_SPLIT_SHARE`): None when unset or not understood.
+fn env_flag(name: &str) -> Option<bool> {
+    match std::env::var(name).as_deref().map(str::trim) {
         Ok("1" | "true" | "yes" | "on") => Some(true),
         Ok("0" | "false" | "no" | "off") => Some(false),
         Ok(other) => {
-            eprintln!(
-                "[input] PW64_SPLIT_COLLIDE={other:?} not understood (use 1 or 0); ignoring"
-            );
+            eprintln!("[input] {name}={other:?} not understood (use 1 or 0); ignoring");
             None
         }
         Err(_) => None,
@@ -1072,7 +1070,22 @@ fn env_collide() -> Option<bool> {
 /// `[splitscreen] collisions` > default off. Also read by main and the
 /// settings screen's Controls page.
 pub fn split_collisions() -> bool {
-    crate::opts::precedence(env_collide(), config::get().splitscreen.collisions, false)
+    crate::opts::precedence(
+        env_flag("PW64_SPLIT_COLLIDE"),
+        config::get().splitscreen.collisions,
+        false,
+    )
+}
+
+/// Whether split-screen saves the better run of the two players to player
+/// 1's file (the C `pw64_split_share` flag, read when the results close):
+/// `PW64_SPLIT_SHARE` > `[splitscreen] share_scores` > default off.
+pub fn split_share() -> bool {
+    crate::opts::precedence(
+        env_flag("PW64_SPLIT_SHARE"),
+        config::get().splitscreen.share_scores,
+        false,
+    )
 }
 
 /// How the two split-screen views share the screen.

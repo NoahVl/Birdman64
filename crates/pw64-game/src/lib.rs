@@ -43,6 +43,8 @@ unsafe extern "C" {
     /// native/src/pw64_split.c: split-screen layout, 0 = top/bottom, 1 =
     /// left/right.
     static mut pw64_split_layout: i32;
+    /// native/src/pw64_split.c: share the best split-screen score, 0 = off.
+    static mut pw64_split_share: i32;
     /// native/src/pw64_split.c: pending live split-screen switch (0/1, -1 =
     /// none); the game applies and clears it in a menu state.
     static mut pw64_split_req: i32;
@@ -194,6 +196,23 @@ pub fn set_split_layout(left_right: bool) {
     #[cfg(feature = "dylib")]
     unsafe {
         *dylib::game().split_layout = left_right as i32
+    };
+}
+
+/// Split-screen "Share best score" for the C side: on = when player 2's run
+/// beat player 1's, player 1's save gets player 2's run (only player 1's
+/// results are saved). Read when the results close, so this may be called
+/// any time (also live from the settings screen).
+pub fn set_split_share(on: bool) {
+    // SAFETY: plain C flag; the game reads it on its own thread.
+    #[cfg(feature = "static")]
+    unsafe {
+        pw64_split_share = on as i32
+    };
+    // SAFETY: same global, exported by the loaded game module.
+    #[cfg(feature = "dylib")]
+    unsafe {
+        *dylib::game().split_share = on as i32
     };
 }
 

@@ -54,6 +54,9 @@
 +// time-up (unkA1) doesn't rescore an earlier finisher.
 +void pw64_task_deinit_player(void); // task.c.patch
 +static u8 sPw64Done[PW64_MAX_PLAYERS];
++// unkA1 (time-up) as it was at each player's finish: func_8032B560 reads
++// the global, which a later player's time-up may have set (pw64_share_best).
++static u8 sPw64TimeUp[PW64_MAX_PLAYERS];
 +// Results tally being shown for player n (0 = player 1; results.c.patch).
 +s32 pw64_results_player;
 +
@@ -626,6 +629,7 @@
 +            break;
 +        }
 +    }
++    sPw64TimeUp[i] = arg0->unkA1;
 +    p->unk78 = func_8032B560(p->unk74, p->cls, p->test, p->veh);
 +    hudText_8031D8E0(-1, 0.0f, 0.0f);
 +    hudWarningText(-1, 0.0f, 0.0f);
@@ -1013,6 +1017,63 @@
 +    }
 +}
 +
++// The points func_8032B560 gave a run (its sum, read back from the test's
++// entry: unk4 holds the landing points, unk2 is not added).
++static s32 pw64_run_points(Unk80364210* s, u8 cls, u8 test, u8 veh) {
++    Unk80364210_Unk0_Unk0* e = &s->unk40[cls].unk0[test][veh];
++    s32 n = e->unk4 + e->unk6 + e->unk8 + e->unkA + e->unkC + e->unkE + e->unk12 + e->unk14 + e->unk16 + e->unk18 +
++            e->unk1A + e->unk1C + e->unk1E + e->unk20 + e->unk22 + e->unk24 + s->unk38;
++
++    return (n < 0) ? 0 : (n > 100) ? 100 : n;
++}
++
++// PW64 split-screen "Share best score" (pw64_split_share): only player 1's
++// results are saved, so when another player's run scored more, player 1's
++// entry for this test is rescored with that run, after the tallies (each
++// still shows its own run): that run's header (score inputs) copied in,
++// its player live (rings, targets, balls are per player) with its own
++// time-up state. Personal best and medals follow the game's own rules.
++static void pw64_share_best(Unk80362690* arg0) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    u8 cls = p->cls;
++    u8 test = p->test;
++    u8 veh = p->veh;
++    s32 top = pw64_run_points(&D_80364210[0], cls, test, veh);
++    s32 best = 0;
++    s32 pts;
++    s32 i;
++    u8 timeUp;
++    u8* d;
++    u8* s;
++    u32 k;
++
++    if (!pw64_split_share || arg0->unkA4 || pw64_free_flight) {
++        return;
++    }
++    for (i = 1; i < pw64_level_players; i++) {
++        pts = pw64_run_points(&D_80364210[i], cls, test, veh);
++        if (pts > top) {
++            top = pts;
++            best = i;
++        }
++    }
++    if (best == 0) {
++        return;
++    }
++    d = (u8*)&D_80364210[0];
++    s = (u8*)&D_80364210[best];
++    for (k = 0; k < (u32)((u8*)&D_80364210[0].unk40 - d); k++) {
++        d[k] = s[k];
++    }
++    pw64_player_switch(best);
++    timeUp = arg0->unkA1;
++    arg0->unkA1 = sPw64TimeUp[best];
++    func_8032B560(&D_80364210[0], cls, test, veh);
++    arg0->unkA1 = timeUp;
++    pw64_player_switch(0);
++    PW64_LOGF("split-screen: shared best score (player << 8 | points)", (best << 8) | top);
++}
++
 +// PW64 split-screen: gameUpdateStateResults once every player is done
 +// (scores already taken at each finish): both views run until the tally,
 +// then player 1's full screen behind it; "Next" shows the others' tallies
@@ -1058,6 +1119,7 @@
 +        uvGfxEnd();
 +    }
 +    resultDeinit();
++    pw64_share_best(arg0); // before func_802ECE94's save
 +    func_802ECE94(arg0);
 +    if (var_v1 == GAME_STATE_TEST_SETUP) {
 +        sndPlaySfx(SFX_UI_TEST_START);

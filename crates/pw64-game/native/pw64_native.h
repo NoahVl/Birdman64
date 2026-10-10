@@ -127,6 +127,9 @@ float pw64_split_out_aspect(void);
  * start; Rust may set it any time (pw64_game::set_split_collide, also live
  * from the settings screen). */
 extern int pw64_split_collide;
+/* Share best score (native/src/pw64_split.c): 1 = the better run of the
+ * players is saved to player 1's file. Rust, any time. */
+extern int pw64_split_share;
 /* Split-screen players (native/src/pw64_players.c, splitscreen.md "M2"):
  * per-player state lives in the game's ordinary globals; only the current
  * player's copy is live. Registered regions are swapped on a switch
