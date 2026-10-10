@@ -54,6 +54,13 @@
              } else {
                  if ((gcData->fuel <= 0.0f) && !gcData->fuelEmpty) {
                      hudWarningText(TEXT_FUEL_OUT, 1.5f, 8.0f);
+@@ -537,3 +550,5 @@ void func_802F6DC8(GyrocopterData* gcData, u8 unkFlag) {
+         temp_fv1 = gcData->camera->clipNear * -0.105104235;
+         temp_fa0 = (-gcData->camera->clipNear * gcData->camera->clipY0) / gcData->camera->unk20;
+-        gcData->reticleY = (107.0f * temp_fv1) / temp_fa0;
++        // PW64 split-screen: 107 = the full view's half height (exactly 107
++        // there); a split view's guard half height / HUD scale (camera.c.patch).
++        gcData->reticleY = (pw64_split_reticle_half(gcData->camera) * temp_fv1) / temp_fa0;
 @@ -734,4 +745,5 @@ void func_802F764C(GyrocopterData* gcData) {
      if (gcData->unkD0 != 0) {
          gcData->camera->unk6 = 0;

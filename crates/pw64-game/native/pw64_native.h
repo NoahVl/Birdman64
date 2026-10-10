@@ -122,6 +122,10 @@ extern int pw64_split_layout;
 extern int pw64_split_lr;
 void pw64_split_viewport(void* camera, int i);
 float pw64_split_out_aspect(void);
+/* Gyro aim reticle (code_7CF30.c.patch func_802F6DC8): the HUD px per unit
+ * of projected NDC y for `camera`'s view; 107 (the N64 constant) unless the
+ * camera has a split viewport. */
+float pw64_split_reticle_half(void* camera);
 /* Pilot collisions (native/src/pw64_collide.c, splitscreen.md "Interactions
  * toggle"): 1 = the two pilots can crash into each other. Read at each test
  * start; Rust may set it any time (pw64_game::set_split_collide, also live

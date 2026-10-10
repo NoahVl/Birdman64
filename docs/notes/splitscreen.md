@@ -142,6 +142,15 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - At the start the other glider is just outside the FOV (camera ~18 m back, 10 m apart).
 - Leaving split left camera 0 on the top-half viewport (test menu map drawn in the top half
   only): `pw64_leave_players` restores it (`pw64_split_viewport(cam, -1)`).
+- **Gyro reticle** (code_7CF30.c `func_802F6DC8`): reticleY = 107·tan6°·zoom/clipY1 HUD px,
+  i.e. assumes the projection's half height = 107 px and HUD scale 1. Real half height = the
+  `uvGfxClipRect` guard viewport (view ±5 px: 112 full, 58 top/bottom); the split HUD scale k
+  multiplies the offset. Measured (beginner gc 1, zoom 0.8) offset drawn/true in N64 rows: single
+  24.6/26.9 (N64 too), tb 25.2/28.1, lr 4:3 12.5/26.9, lr 16:9 17.8/26.9. Fixed in split only:
+  107 → guard_half/k (`pw64_split_reticle_half`, camera.c.patch) → tb 27.75, lr 27.0.
+  Open: the tb frustum is sized from the 300×106 view, not the guard viewport (~6 % y stretch).
+- Missiles (`func_802F7178`) fly a fixed world ray 6° below the fire-time camera; the camera
+  keeps flying forward/up, so the missile always drifts below the reticle on screen (original).
 - Test runs: an exe copied out of `target/` with no `pw64.eep` beside it uses the per-user
   data dir (real save + toml): set `PW64_DATA_DIR` (and `PW64_EEP`) to the run dir.
 
