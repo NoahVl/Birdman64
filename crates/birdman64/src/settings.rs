@@ -864,6 +864,7 @@ impl Overlay {
         let raw = raw_input_zoom(
             gpu,
             native_ppp,
+            zoom,
             self.started.elapsed().as_secs_f64(),
             std::mem::take(&mut self.events),
         );
@@ -1893,21 +1894,26 @@ impl Overlay {
 }
 
 /// egui input for one frame over the whole surface; `native_ppp` = the
-/// window's physical px per point. The UI zoom (U1) lives in the egui
-/// context (`set_zoom_factor`), so the screen rect is divided by the native
-/// factor only. Shared with the first-run setup screen (firstrun.rs).
+/// window's physical px per point, `zoom` = the UI zoom (U1) also set on
+/// the egui context (`set_zoom_factor`). egui takes the screen rect in
+/// zoomed points (px / (native * zoom)); dividing by the native factor
+/// alone made egui see a screen `zoom` times too big, so anchored windows
+/// drifted right/down above 720 px. Shared with the first-run setup screen
+/// (firstrun.rs) and the toasts.
 pub(crate) fn raw_input_zoom(
     gpu: &Gpu,
     native_ppp: f32,
+    zoom: f32,
     time: f64,
     events: Vec<egui::Event>,
 ) -> egui::RawInput {
     let (w, h) = (gpu.config.width, gpu.config.height);
+    let ppp = native_ppp * zoom;
     let mut raw = egui::RawInput {
         time: Some(time),
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
-            egui::vec2(w as f32 / native_ppp, h as f32 / native_ppp),
+            egui::vec2(w as f32 / ppp, h as f32 / ppp),
         )),
         events,
         ..Default::default()

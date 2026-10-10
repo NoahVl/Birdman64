@@ -146,6 +146,7 @@ impl Screen {
         let raw = crate::settings::raw_input_zoom(
             gpu,
             ppp,
+            zoom,
             self.started.elapsed().as_secs_f64(),
             std::mem::take(&mut self.events),
         );
