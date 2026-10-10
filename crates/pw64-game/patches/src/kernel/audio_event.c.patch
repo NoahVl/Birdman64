@@ -115,23 +115,31 @@
      }
  }
  
-@@ -135,6 +202,7 @@
+@@ -135,7 +202,9 @@
                      for (j = i; j < var_a3->count - 1; j++) {
                          var_a3->unk0[j].cb = var_a3->unk0[j + 1].cb;
                          var_a3->unk0[j].arg = var_a3->unk0[j + 1].arg;
 +                        sPw64SysOwner[temp_v0][j] = sPw64SysOwner[temp_v0][j + 1];
                      }
-                     var_a3->unk0[var_a3->count].cb = NULL;
-                     var_a3->unk0[var_a3->count].arg = NULL;
-@@ -148,6 +216,7 @@
+-                    var_a3->unk0[var_a3->count].cb = NULL;
+-                    var_a3->unk0[var_a3->count].arg = NULL;
++                    // PW64: clear the vacated last slot; [count] of a full list overlaps .count (-> -1).
++                    var_a3->unk0[var_a3->count - 1].cb = NULL;
++                    var_a3->unk0[var_a3->count - 1].arg = NULL;
+                     var_a3->count--;
+@@ -148,7 +217,9 @@
                      for (j = i; j < var_a1->count - 1; j++) {
                          var_a1->unk0[j].cb = var_a1->unk0[j + 1].cb;
                          var_a1->unk0[j].arg = var_a1->unk0[j + 1].arg;
 +                        sPw64UserOwner[temp_v0][j] = sPw64UserOwner[temp_v0][j + 1];
                      }
-                     var_a1->unk0[var_a1->count].cb = NULL;
-                     var_a1->unk0[var_a1->count].arg = NULL;
-@@ -163,16 +232,18 @@
+-                    var_a1->unk0[var_a1->count].cb = NULL;
+-                    var_a1->unk0[var_a1->count].arg = NULL;
++                    // PW64: as above (full list of 4: unk0[4] is .count).
++                    var_a1->unk0[var_a1->count - 1].cb = NULL;
++                    var_a1->unk0[var_a1->count - 1].arg = NULL;
+                     var_a1->count--;
+@@ -163,16 +234,18 @@
      s32 count;
      s32 i;
      EventCallbackInfo sp64[10];
@@ -151,7 +159,7 @@
      }
  }
  
-@@ -181,16 +252,18 @@
+@@ -181,16 +254,18 @@
      s32 count;
      s32 i;
      EventCallbackInfo sp64[10];
@@ -171,7 +179,7 @@
      }
  }
  
-@@ -199,16 +272,18 @@
+@@ -199,16 +274,18 @@
      s32 count;
      s32 i;
      EventCallbackInfo sp64[10];
