@@ -42,8 +42,8 @@
 +// rings / pops balls / ... of their own copy; each copy has its own dobjs
 +// (pw64_task_setup_player), owned by that player: drawn only in that
 +// player's view and collided with only by that player (pw64_dobj_owner).
-+// Not per player: photos (snap.c, player 1's shutter only), falcos,
-+// teleports (task_803456D8 moves the shared terra: player 1 only).
++// Photos are per player too (snap.c.patch pw64_reg_snap). Not per player:
++// falcos, teleports (task_803456D8 moves the shared terra: player 1 only).
 +void pw64_rings_clone(void);
 +void pw64_balls_clone(void);
 +void pw64_targets_clone(void);

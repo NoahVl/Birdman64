@@ -1,5 +1,39 @@
 --- a/src/app/snap.c
 +++ b/src/app/snap.c
+@@ -80,1 +80,15 @@
+ s32 D_80350550 = 0;
++
++// PW64 split-screen: every player has their own shutter (Z held/aiming,
++// the first-frame latch, the "too many photos" buzz) and this test's photos
++// with their count, so each scores their own (func_80338614 runs with the
++// player live). Test setup syncs player 1's fresh snapInit state to all.
++// The album (D_80373060, the save file's) stays player 1's.
++void pw64_reg_snap(void) {
++    PW64_REG(D_80373390);
++    PW64_REG(D_8035052C);
++    PW64_REG(D_80350534);
++    PW64_REG(D_80350544);
++    PW64_REG(D_80350548);
++    PW64_REG(D_8035054C);
++}
+@@ -654,1 +668,1 @@
+-    var_a2 = demoGetButtons(0);
++    var_a2 = demoGetButtons(PW64_CONT(0)); // PW64 split-screen: the live player's pad
+@@ -664,1 +678,1 @@
+-        if ((D_80350548 == 0) && (((D_80350544 == 0) && (var_a2 & Z_TRIG)) || (demoButtonPress(0, Z_TRIG) != 0))) {
++        if ((D_80350548 == 0) && (((D_80350544 == 0) && (var_a2 & Z_TRIG)) || (demoButtonPress(PW64_CONT(0), Z_TRIG) != 0))) {
+@@ -683,1 +697,1 @@
+-            if ((D_80350544 != 0) && (!(var_a2 & Z_TRIG) || (demoButtonRelease(0, Z_TRIG) != 0))) {
++            if ((D_80350544 != 0) && (!(var_a2 & Z_TRIG) || (demoButtonRelease(PW64_CONT(0), Z_TRIG) != 0))) {
+@@ -694,1 +708,1 @@
+-    var_v1 = demoGetButtons(0);
++    var_v1 = demoGetButtons(PW64_CONT(0)); // PW64 split-screen: the live player's pad
+@@ -704,1 +718,1 @@
+-        if ((D_80350548 == 0) && (((D_80350544 == 0) && (var_v1 & Z_TRIG)) || ((demoButtonPress(0, Z_TRIG) != 0)))) {
++        if ((D_80350548 == 0) && (((D_80350544 == 0) && (var_v1 & Z_TRIG)) || ((demoButtonPress(PW64_CONT(0), Z_TRIG) != 0)))) {
+@@ -722,1 +736,1 @@
+-        if ((D_80350544 != 0) && (!(var_v1 & Z_TRIG) || (demoButtonRelease(0, Z_TRIG) != 0))) {
++        if ((D_80350544 != 0) && (!(var_v1 & Z_TRIG) || (demoButtonRelease(PW64_CONT(0), Z_TRIG) != 0))) {
 @@ -1572,1 +1572,6 @@
 -            while (uvClkGetSec(UV_CLKID_APP) < 0.1) { }
 +            // PW64: on the N64 retraces, the scheduler and the audio thread

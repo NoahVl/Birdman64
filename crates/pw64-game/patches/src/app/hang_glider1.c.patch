@@ -23,12 +23,7 @@
 +        sPw64TestTime += D_8034F854;
 +        hgData->unk8 = (f32)sPw64TestTime;
          shadow_803343D8(1);
--        func_80339C8C(hgData);
-+        // PW64 split-screen: the photo shutter state (snap.c) is shared;
-+        // only player 1 takes photos for now.
-+        if (pw64_player_cur == 0) {
-+            func_80339C8C(hgData);
-+        }
+         func_80339C8C(hgData);
          if (gameState == GAME_STATE_RESULTS) {
              fdr_802E65AC(&hgData->unk10, &D_80362690->terraId, &stickX, &stickY, &buttons);
          } else {

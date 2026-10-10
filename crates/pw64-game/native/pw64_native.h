@@ -176,6 +176,7 @@ void pw64_reg_skydiving_drift(void);  /* code_BA190.c: rate drift hold */
 void pw64_reg_skydiving_sound(void);  /* sdsound.c */
 void pw64_players_init(void);
 void pw64_reg_task(void); /* task.c: objective hit state (+ its modules) */
+void pw64_reg_snap(void); /* snap.c: shutter + this test's photos */
 /* Per-player objective dobjs (kernel dobj.c.patch): owning player + 1 per
  * dobj, 0 = shared. Draw and collision loops skip another player's dobj. */
 extern unsigned char pw64_dobj_owner[100];

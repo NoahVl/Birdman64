@@ -116,4 +116,5 @@ void pw64_players_init(void) {
     pw64_reg_skydiving_drift();
     pw64_reg_skydiving_sound();
     pw64_reg_task();
+    pw64_reg_snap();
 }

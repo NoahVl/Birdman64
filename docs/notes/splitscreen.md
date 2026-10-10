@@ -73,7 +73,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   free); `_uvDobjsDraw`, `uvDobj_8021771C` and both dobj collision loops (code_8170.c) skip
   another player's dobjs, so hits free/re-model only the player's own. Modules `pw64_dobj_claim`
   dobjs they allocate mid-test (child rings, split balls, next hover pad). Balls move per player.
-  `taskDeinitLevel` frees the other players' copies. P1-only: photos, falcos, teleports, the
+  `taskDeinitLevel` frees the other players' copies. P1-only: falcos, teleports, the
   decomp's `unkC[0].veh = ROCKET_BELT` on a ring/ball goal; bonus stars don't warp in split.
 - **Test end + results** (game.c.patch, results.c.patch): any per-player end (status 5,
   crash/landing flow, goal, fuel) only marks that player done (`pw64_player_finish`: landing
@@ -130,7 +130,12 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   re-issues `uvGfxViewport(arg0)` after both z clears when split.
 - fdr.c flight recorder: one per player (`sPw64Fdr[pw64_player_cur]`, every fdr global a
   macro onto it; not a registered region: rings point into their own arrays, ~32 KB/switch).
-  Test setup's start (P1 live) resets all (`PW64_FDR_ALL`). Photo shutter is P1-only.
+  Test setup's start (P1 live) resets all (`PW64_FDR_ALL`).
+- **Photos** (snap.c.patch `pw64_reg_snap`): shutter latches + this test's photos/count are per player
+  (setup's `pw64_players_sync` copies P1's fresh `snapInit`); pad reads `PW64_CONT(0)`. Scored at each
+  finish with the player live. Results: each tally's Check photo runs `func_8033E3A8(2)` with that player
+  live (the kernel's pad 0 = the live player's, so P2 browses with their pad); kept photos go to the
+  shared album (`D_80373060`, P1's save file). The viewer renders on channel 0 (fine: full screen then).
 - `hgSoundEvent13` removed the last-registered sound callback (P2's): now removes its own.
   Same fix for the rocket belt (`rbSoundEvent13`) and the gyro (`gyrocopter_sound.c`
   func_8030B168: static D_80369E50 rebuilt per gyro with the caller's `gcData`).
