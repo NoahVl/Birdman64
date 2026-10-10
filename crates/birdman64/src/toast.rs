@@ -74,8 +74,13 @@ impl Toast {
         if (self.ctx.zoom_factor() - zoom).abs() > f32::EPSILON {
             self.ctx.set_zoom_factor(zoom);
         }
-        let raw =
-            settings::raw_input_zoom(gpu, ppp, self.started.elapsed().as_secs_f64(), Vec::new());
+        let raw = settings::raw_input_zoom(
+            gpu,
+            ppp,
+            zoom,
+            self.started.elapsed().as_secs_f64(),
+            Vec::new(),
+        );
         let ctx = self.ctx.clone();
         let out = ctx.run(raw, |ctx| self.ui(ctx, now));
         settings::paint(
