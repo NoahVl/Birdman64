@@ -5,7 +5,26 @@
  #include "whale.h"
  #include "wind_objects.h"
 +#include <pw64_rate.h>
- 
++
++// PW64 split-screen: the pause loop redrew only the pauser's channel; the
++// other view kept whatever each swap buffer held (flickering, objects
++// jumping). Redraw every player's view with that player live, as the
++// normal frame does, then make the pauser live again for the menu.
++static void pw64_pause_views(Camera* camera) {
++    s32 who = pw64_player_cur;
++    s32 i;
++
++    if (pw64_level_players < 2) {
++        uvChan_80204FC4(camera->unk22C);
++        return;
++    }
++    for (i = 0; i < pw64_level_players; i++) {
++        pw64_player_switch(i);
++        uvChan_80204FC4(D_80362690->unkC[0].unk70->unk22C);
++    }
++    pw64_player_switch(who);
++}
+
  #if defined(VERSION_JP)
  #define CONTROLLER_MSG_LEN 0x14
 @@ -371,7 +372,11 @@ s32 func_8032CF28(Unk80362690* arg0) {
@@ -21,6 +40,9 @@
          menuCreateItems(99, 72, 6, 1.0f, 1.0f, sSkyDivingItems, 2);
          var_s0 = 0x38;
      } else if (sp40 != 0) {
+@@ -391,1 +416,1 @@ s32 func_8032CF28(Unk80362690* arg0) {
+-        uvChan_80204FC4(camera->unk22C);
++        pw64_pause_views(camera); // PW64 split-screen: every view
 @@ -406,7 +411,8 @@ s32 func_8032CF28(Unk80362690* arg0) {
      if (sp40 == 0 && var_s1 == 2) {
          var_s1 = 3;
