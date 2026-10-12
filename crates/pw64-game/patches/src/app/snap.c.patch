@@ -16,6 +16,35 @@
 +    PW64_REG(D_80350548);
 +    PW64_REG(D_8035054C);
 +}
++
++// PW64 split-screen: the shutter's subject checks projected through
++// channel 0 (player 1's camera), so player 2's photos never graded. Use
++// the live player's camera channel (0 in single player).
++#define PW64_SNAP_CHAN (D_80362690->unkC[D_80362690->unk9C].unk70->unk22C)
+@@ -330,1 +350,1 @@
+-            func_8034B354(0, sp84, &sp78);
++            func_8034B354(PW64_SNAP_CHAN, sp84, &sp78);
+@@ -438,1 +458,1 @@
+-                    func_8034B354(0, spFC, &spA8);
++                    func_8034B354(PW64_SNAP_CHAN, spFC, &spA8);
+@@ -458,1 +478,1 @@
+-                    func_8034B354(0, spFC, &spA8);
++                    func_8034B354(PW64_SNAP_CHAN, spFC, &spA8);
+@@ -478,1 +498,1 @@
+-                    func_8034B354(0, spFC, &spA8);
++                    func_8034B354(PW64_SNAP_CHAN, spFC, &spA8);
+@@ -498,1 +518,1 @@
+-                    func_8034B354(0, spFC, &spA8);
++                    func_8034B354(PW64_SNAP_CHAN, spFC, &spA8);
+@@ -518,1 +538,1 @@
+-                    func_8034B354(0, spFC, &spA8);
++                    func_8034B354(PW64_SNAP_CHAN, spFC, &spA8);
+@@ -537,1 +557,1 @@
+-                    func_8034B354(0, spFC, &spA8);
++                    func_8034B354(PW64_SNAP_CHAN, spFC, &spA8);
+@@ -561,1 +581,1 @@
+-                func_8034B354(0, spF0, &spA8);
++                func_8034B354(PW64_SNAP_CHAN, spF0, &spA8);
 @@ -654,1 +668,1 @@
 -    var_a2 = demoGetButtons(0);
 +    var_a2 = demoGetButtons(PW64_CONT(0)); // PW64 split-screen: the live player's pad
