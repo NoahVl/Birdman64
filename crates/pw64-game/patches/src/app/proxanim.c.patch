@@ -1,0 +1,21 @@
+--- a/src/app/proxanim.c
++++ b/src/app/proxanim.c
+@@ -119,4 +119,17 @@
+     dx = temp_v1->unk2C.m[3][0] - prox->pos.x;
+     dy = temp_v1->unk2C.m[3][1] - prox->pos.y;
+     dz = temp_v1->unk2C.m[3][2] - prox->pos.z;
+-    return uvLength3D(dx, dy, dz);
++    // PW64 split-screen: proximity effects (the oil plant's flame, which a
++    // Shutter Bug photo needs, fountains, ...) woke only near the live
++    // player (player 1 in proxAnimUpdate): use the nearest player.
++    if (pw64_level_players > 1) {
++        f32 d = uvLength3D(dx, dy, dz);
++        s32 i;
++
++        for (i = 1; i < pw64_level_players; i++) {
++            f32 di = pw64_player_dist(i, prox->pos.x, prox->pos.y, prox->pos.z);
++            d = (di < d) ? di : d;
++        }
++        return d;
++    }
++    return uvLength3D(dx, dy, dz);

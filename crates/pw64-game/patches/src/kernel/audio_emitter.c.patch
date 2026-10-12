@@ -16,6 +16,16 @@
 +    }
 +}
 +
++// Distance from player i's (> 0) vehicle pose to a point (proxanim.c.patch:
++// proximity effects wake up near any player).
++float pw64_player_dist(int i, float x, float y, float z) {
++    f32 dx = sPw64Listener[i].m[3][0] - x;
++    f32 dy = sPw64Listener[i].m[3][1] - y;
++    f32 dz = sPw64Listener[i].m[3][2] - z;
++
++    return uvSqrtF(SQ(dx) + SQ(dy) + SQ(dz));
++}
++
 +// uvEmitter_80201D08's squared distance from listener `l` (its 2/default
 +// branches) and the vector its pan is projected from.
 +static f32 pw64_emitter_dist(uvaEmitter_t* emitter, s32 attr, Mtx4F* l, Vec3F* d) {

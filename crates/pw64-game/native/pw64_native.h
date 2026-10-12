@@ -207,6 +207,7 @@ void pw64_evt_post_player(int i, int event);
 /* Listener pose of player i > 0 (kernel audio_emitter.c.patch, a Mtx4F*):
  * positional emitters are heard from the nearest player's listener. */
 void pw64_listener_set(int i, void* mat);
+float pw64_player_dist(int i, float x, float y, float z); /* from player i > 0 */
 /* Split-screen free flight (game.c.patch, test_menu.c.patch): 1 while a
  * flight started from the test menu's Free flight item runs. */
 extern int pw64_free_flight;
