@@ -198,10 +198,10 @@ pub struct InputMaps {
     pub ble: Option<bool>,
 }
 
-/// `[splitscreen]`: a second controller reaching the game as N64 controller
-/// 2, with the player choosing which input method is player 2
-/// (`input::P2Input`). The split-screen view itself is not implemented yet;
-/// off (the default), the game behaves exactly as single-player.
+/// `[splitscreen]`: two-player split-screen — a second controller reaches
+/// the game as N64 controller 2, with the player choosing which input
+/// method is player 2 (`input::P2Input`). Off (the default), the game
+/// behaves exactly as single-player.
 #[derive(Debug, Default)]
 pub struct Splitscreen {
     /// `enabled` — report controller 2 as present and route a second input

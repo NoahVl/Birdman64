@@ -414,11 +414,11 @@ pub fn run_game(
     pw64_game::set_split(u8::from(input::splitscreen_enabled()));
     // Pilot collisions (the game reads it at each test start; the settings
     // row changes it live from there).
-    pw64_game::set_split_collide(input::split_collisions());
+    input::apply_split_collide(input::split_collisions());
     // Share the best score (read when the results close; also live).
-    pw64_game::set_split_share(input::split_share());
+    input::apply_split_share(input::split_share());
     // View layout (latched at each test start; also live from settings).
-    pw64_game::set_split_layout(input::split_layout() == input::SplitLayout::LeftRight);
+    input::apply_split_layout(input::split_layout());
     os::boot(pw64_game::bootproc, std::ptr::null_mut());
     let cfg = os::RunConfig {
         max_retraces: std::env::var("PW64_MAX_RETRACES")

@@ -922,10 +922,18 @@ pub fn keyboard_pad(held: &[KeyCode]) -> Pad {
 
 /// Current sources; every update re-routes and publishes.
 struct Sources {
-    /// One entry per connected gilrs pad (name, pad) — per-player routing
-    /// needs the pads apart (a gamepad can be player 2 while another stays
-    /// player 1).
-    gamepads: Vec<(String, Pad)>,
+    /// One entry per connected gilrs pad (gilrs id, name, pad), in connect
+    /// order — per-player routing needs the pads apart (a gamepad can be
+    /// player 2 while another stays player 1).
+    gamepads: Vec<(usize, String, Pad)>,
+    /// Split-screen: which player owns each connected pad (gilrs id, true =
+    /// player 2), kept per connection by [`assign_pads`] so a pad never
+    /// changes player while it stays connected.
+    owners: Vec<(usize, bool)>,
+    /// The player-2 routing changed ([`set_p2`]) and no pad has been
+    /// assigned under it yet: the next [`assign_pads`] lays every pad out
+    /// afresh instead of only placing new ones.
+    p2_fresh: bool,
     held_keys: Vec<KeyCode>,
     /// `PW64_INPUT_SCRIPT` state for the current retrace.
     script: Pad,
@@ -970,6 +978,131 @@ fn split_index(name: &str) -> (&str, Option<usize>) {
     }
 }
 
+/// The one spelling of a pad assignment: trimmed, and `name#1` written as
+/// plain `name` (both mean the first pad of that name).
+fn canonical_pad_name(name: &str) -> String {
+    match split_index(name.trim()) {
+        (base, Some(1)) => base.to_string(),
+        _ => name.trim().to_string(),
+    }
+}
+
+/// The `p2_input` pad value for the k-th (1-based, connect order) of the
+/// connected pads named `name`: plain `name` for the first, `name#k` for
+/// the others. Shared by the settings row choices and the "Assign player 2"
+/// capture, so both spell the same pad the same way.
+pub(crate) fn pad_value(name: &str, k: usize) -> String {
+    if k > 1 {
+        format!("{name}#{k}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Which of the connected pads (`names`, connect order) a
+/// `Gamepad(Some(pattern))` assignment picks: `name#k` = the k-th pad whose
+/// name equals `name` (case-insensitive); no index = the first equal name,
+/// else the first containing it (hand-written `gamepad:xbox` configs). An
+/// empty name picks nothing.
+pub(crate) fn pick_p2_pad(pattern: &str, names: &[&str]) -> Option<usize> {
+    let (base, idx) = split_index(pattern.trim());
+    if base.is_empty() {
+        return None;
+    }
+    let exact = |n: &str| n.trim().eq_ignore_ascii_case(base);
+    match idx {
+        Some(k) => names
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| exact(n))
+            .nth(k.checked_sub(1)?)
+            .map(|(i, _)| i),
+        None => names.iter().position(|n| exact(n)).or_else(|| {
+            let b = base.to_lowercase();
+            names.iter().position(|n| n.to_lowercase().contains(&b))
+        }),
+    }
+}
+
+/// Whether a newly connected pad named `name` fits the assignment
+/// `pattern` (same rule as [`pick_p2_pad`], minus the index: a pad
+/// reconnecting gets a new place in the connect order).
+fn pad_matches(pattern: &str, name: &str) -> bool {
+    let (base, idx) = split_index(pattern.trim());
+    if base.is_empty() {
+        return false;
+    }
+    name.trim().eq_ignore_ascii_case(base)
+        || (idx.is_none() && name.to_lowercase().contains(&base.to_lowercase()))
+}
+
+/// Split-screen pad ownership (`true` = player 2) for the connected `pads`
+/// (gilrs id, name; connect order), and whether the layout is still fresh.
+/// Pure. Pads only get a player when first seen (or when `fresh`: the P2
+/// routing just changed), then keep it while connected — so a disconnect
+/// never moves another pad to the other player, and two same-named pads
+/// stay apart (the name is only the config form).
+/// - Fresh: `Gamepad(None)` → one pad: player 2 (the keyboard is player
+///   1's); several: the first player 1, the rest player 2.
+///   `Gamepad(Some(p))` → the [`pick_p2_pad`] pad is player 2, the rest
+///   player 1; no match keeps it fresh (the pad may connect later).
+/// - A new pad: `Gamepad(None)` → player 2 if player 2 has no pad, else
+///   player 1 if player 1 has none, else player 2. `Gamepad(Some(p))` →
+///   player 2 if player 2 has no pad and it [`pad_matches`], else player 1.
+/// - Other routings (keyboard, BLE, split-screen off): every pad player 1.
+fn assign_pads(
+    prev: &[(usize, bool)],
+    pads: &[(usize, &str)],
+    p2: Option<&P2Input>,
+    fresh: bool,
+) -> (Vec<(usize, bool)>, bool) {
+    let Some(P2Input::Gamepad(pattern)) = p2 else {
+        return (pads.iter().map(|&(id, _)| (id, false)).collect(), fresh);
+    };
+    if fresh {
+        let laid_out: Option<Vec<bool>> = match pattern {
+            None if pads.is_empty() => None,
+            None if pads.len() == 1 => Some(vec![true]),
+            None => Some((0..pads.len()).map(|i| i > 0).collect()),
+            Some(pat) => {
+                let names: Vec<&str> = pads.iter().map(|&(_, n)| n).collect();
+                pick_p2_pad(pat, &names).map(|p| (0..pads.len()).map(|i| i == p).collect())
+            }
+        };
+        return match laid_out {
+            Some(v) => (pads.iter().zip(v).map(|(&(id, _), o)| (id, o)).collect(), false),
+            None => (pads.iter().map(|&(id, _)| (id, false)).collect(), true),
+        };
+    }
+    let mut out: Vec<(usize, bool)> = pads
+        .iter()
+        .filter_map(|&(id, _)| prev.iter().find(|(p, _)| *p == id).copied())
+        .collect();
+    for &(id, name) in pads {
+        if out.iter().any(|(p, _)| *p == id) {
+            continue;
+        }
+        let p2_has = out.iter().any(|&(_, o)| o);
+        let p1_has = out.iter().any(|&(_, o)| !o);
+        let to_p2 = match pattern {
+            None => !p2_has || p1_has,
+            Some(pat) => !p2_has && pad_matches(pat, name),
+        };
+        out.push((id, to_p2));
+    }
+    // Back in connect order (route doesn't care; tests and logs do).
+    out.sort_by_key(|(id, _)| pads.iter().position(|(p, _)| p == id));
+    (out, false)
+}
+
+/// Re-derives `s.owners` for the current pads and player-2 routing.
+fn reassign(s: &mut Sources, p2: Option<&P2Input>) {
+    let pads: Vec<(usize, &str)> = s.gamepads.iter().map(|(id, n, _)| (*id, n.as_str())).collect();
+    let (owners, fresh) = assign_pads(&s.owners, &pads, p2, s.p2_fresh);
+    s.owners = owners;
+    s.p2_fresh = fresh;
+}
+
 /// Which input method drives player 2 in split-screen (`[splitscreen]
 /// p2_input` / `PW64_P2_INPUT`). Player 1 gets everything not assigned to
 /// player 2.
@@ -977,21 +1110,23 @@ fn split_index(name: &str) -> (&str, Option<usize>) {
 pub enum P2Input {
     /// The keyboard.
     Keyboard,
-    /// gilrs pads: every connected one (`None`), or only pads whose name
-    /// contains the substring (case-insensitive) — without a trailing
-    /// `#k` the FIRST matching pad goes to player 2, with `#k` the k-th
-    /// (1-based, connect order) among the pads matching the base name.
-    /// The rest stay player 1.
+    /// gilrs pads. `None` ("All gamepads"): one pad alone is player 2's
+    /// (the keyboard is player 1's); with several, the first connected
+    /// stays player 1 and the rest are player 2's. `Some(name)`: one pad,
+    /// picked by [`pick_p2_pad`] (`name#k` = the k-th exact-name pad;
+    /// without an index the first exact match, else the first whose name
+    /// contains it). The rest stay player 1. Either way a pad keeps its
+    /// player while connected ([`assign_pads`]).
     Gamepad(Option<String>),
     /// The virtual BLE pads (`ble.rs`).
     Ble,
 }
 
 impl P2Input {
-    /// Parses a `p2_input` value: `"keyboard"`, `"gamepad"` (every gilrs
-    /// pad), `"gamepad:<name substring>"` (optionally `name#k`: the k-th
-    /// pad among those matching the name) or `"ble"`. `None` if not
-    /// understood.
+    /// Parses a `p2_input` value: `"keyboard"`, `"gamepad"` (all gamepads),
+    /// `"gamepad:<name>"` (optionally `name#k`: the k-th pad of that exact
+    /// name; `#1` is stored as the plain name) or `"ble"`. `None` if not
+    /// understood (also an empty pad name).
     pub fn parse(s: &str) -> Option<P2Input> {
         let s = s.trim();
         let lower = s.to_ascii_lowercase();
@@ -999,9 +1134,11 @@ impl P2Input {
             "keyboard" => Some(P2Input::Keyboard),
             "gamepad" => Some(P2Input::Gamepad(None)),
             "ble" => Some(P2Input::Ble),
-            _ => lower
-                .strip_prefix("gamepad:")
-                .map(|_| P2Input::Gamepad(Some(s["gamepad:".len()..].trim().to_string()))),
+            _ => {
+                lower.strip_prefix("gamepad:")?;
+                let name = canonical_pad_name(&s["gamepad:".len()..]);
+                (!split_index(&name).0.is_empty()).then_some(P2Input::Gamepad(Some(name)))
+            }
         }
     }
 
@@ -1024,7 +1161,10 @@ static P2: Mutex<Option<P2Input>> = Mutex::new(None);
 /// routing takes effect at once. `None` = split-screen off.
 pub fn set_p2(p: Option<P2Input>) {
     *P2.lock().unwrap() = p;
-    publish(&mut SOURCES.lock().unwrap());
+    let mut s = SOURCES.lock().unwrap();
+    // A new assignment lays the pads out afresh (`assign_pads`).
+    s.p2_fresh = true;
+    publish(&mut s);
 }
 
 /// The player-2 routing in force right now (`None` = split-screen off).
@@ -1137,6 +1277,75 @@ pub fn split_layout() -> SplitLayout {
     crate::opts::precedence(env, cfg, SplitLayout::TopBottom)
 }
 
+/// A split-screen flag as last handed to the game (0 = never, 1 off, 2 on),
+/// so the settings screen stages what is in force, not the boot-time config.
+struct LiveFlag(AtomicU8);
+
+impl LiveFlag {
+    const fn new() -> Self {
+        Self(AtomicU8::new(0))
+    }
+    fn set(&self, on: bool) {
+        self.0.store(1 + u8::from(on), Ordering::Relaxed);
+    }
+    /// The applied value, else `fallback` (the configured one).
+    fn get(&self, fallback: impl FnOnce() -> bool) -> bool {
+        match self.0.load(Ordering::Relaxed) {
+            0 => fallback(),
+            v => v == 2,
+        }
+    }
+}
+
+static COLLIDE_LIVE: LiveFlag = LiveFlag::new();
+static SHARE_LIVE: LiveFlag = LiveFlag::new();
+static LAYOUT_LR_LIVE: LiveFlag = LiveFlag::new();
+
+/// Hands pilot collisions to the game (boot, settings row) and remembers it.
+pub fn apply_split_collide(on: bool) {
+    // Unit tests drive the settings rows in parallel: no process-wide mirror.
+    if !cfg!(test) {
+        COLLIDE_LIVE.set(on);
+    }
+    pw64_game::set_split_collide(on);
+}
+
+/// Same for "Share best score".
+pub fn apply_split_share(on: bool) {
+    if !cfg!(test) {
+        SHARE_LIVE.set(on);
+    }
+    pw64_game::set_split_share(on);
+}
+
+/// Same for the view layout.
+pub fn apply_split_layout(l: SplitLayout) {
+    let lr = l == SplitLayout::LeftRight;
+    if !cfg!(test) {
+        LAYOUT_LR_LIVE.set(lr);
+    }
+    pw64_game::set_split_layout(lr);
+}
+
+/// Pilot collisions as in force (live changes included).
+pub fn live_split_collisions() -> bool {
+    COLLIDE_LIVE.get(split_collisions)
+}
+
+/// "Share best score" as in force.
+pub fn live_split_share() -> bool {
+    SHARE_LIVE.get(split_share)
+}
+
+/// The view layout as in force.
+pub fn live_split_layout() -> SplitLayout {
+    if LAYOUT_LR_LIVE.get(|| split_layout() == SplitLayout::LeftRight) {
+        SplitLayout::LeftRight
+    } else {
+        SplitLayout::TopBottom
+    }
+}
+
 /// The names of the connected gilrs pads, in order (the settings screen's
 /// Player-2 controller choices, one per pad).
 pub fn connected_pad_names() -> Vec<String> {
@@ -1145,12 +1354,12 @@ pub fn connected_pad_names() -> Vec<String> {
         .unwrap()
         .gamepads
         .iter()
-        .map(|(name, _)| name.clone())
+        .map(|(_, name, _)| name.clone())
         .collect()
 }
 
 /// Player 2's input method: `PW64_P2_INPUT` > `[splitscreen] p2_input` >
-/// `"gamepad"` (every gilrs pad). An unparsable value warns and falls back
+/// `"gamepad"` (all gamepads). An unparsable value warns and falls back
 /// to `"gamepad"`. `pub(crate)`: the settings screen reads the configured
 /// value (before any live change) to stage its Player-2 controller row
 /// while split-screen is off.
@@ -1263,49 +1472,52 @@ pub fn split_tick() {
             pw64_platform::headless::set_controllers_present(1);
         }
         eprintln!("[input] split-screen {}", if on { "on" } else { "off" });
-        let saved = config::save_settings(config::SavedSettings {
-            splitscreen_enabled: Some(on),
-            ..Default::default()
-        });
-        if let Err(e) = saved {
-            eprintln!("[input] split-screen not saved: {e}");
+        // `PW64_SPLITSCREEN` decides this run: the toggle is not the
+        // player's saved choice.
+        if save_split_toggle(env_enabled()) {
+            let saved = config::save_settings(config::SavedSettings {
+                splitscreen_enabled: Some(on),
+                ..Default::default()
+            });
+            if let Err(e) = saved {
+                eprintln!("[input] split-screen not saved: {e}");
+            }
         }
     }
     if on {
         let missing = {
             let s = SOURCES.lock().unwrap();
-            let names: Vec<&str> = s.gamepads.iter().map(|(n, _)| n.as_str()).collect();
             let script2 = !SCRIPT2.lock().unwrap().0.is_empty();
-            p2_missing(&names, script2, &p2_current())
+            p2_missing(&s.owners, script2, &p2_current())
         };
         pw64_game::set_split_hint(missing);
     }
 }
 
+/// Whether a live split-screen switch is saved to `pw64.toml`: not while
+/// the `PW64_SPLITSCREEN` override (`env`) is set.
+fn save_split_toggle(env: Option<bool>) -> bool {
+    env.is_none()
+}
+
 /// Whether split-screen lacks a device for one of the players under `p2`
-/// (the main menu's "Connect a second controller" hint): `pads` = the
-/// connected gilrs pad names, `script2` = a `PW64_INPUT_SCRIPT_P2` drives
-/// player 2. The keyboard is always there; BLE pads aren't checked.
-fn p2_missing(pads: &[&str], script2: bool, p2: &P2Input) -> bool {
+/// (the main menu's "Connect a second controller" hint): `owners` = the
+/// connected gilrs pads' players ([`assign_pads`], true = player 2),
+/// `script2` = a `PW64_INPUT_SCRIPT_P2` drives player 2. Player 1 always
+/// has the keyboard unless player 2 owns it; BLE pads aren't checked.
+fn p2_missing(owners: &[(usize, bool)], script2: bool, p2: &P2Input) -> bool {
     match p2 {
         // Player 1 then needs a pad (the keyboard is player 2's).
-        P2Input::Keyboard => pads.is_empty(),
-        P2Input::Gamepad(None) => !script2 && pads.is_empty(),
-        P2Input::Gamepad(Some(n)) => {
-            let (base, idx) = split_index(n);
-            let base = base.to_ascii_lowercase();
-            let found = pads
-                .iter()
-                .filter(|p| p.to_ascii_lowercase().contains(&base))
-                .count();
-            let ok = match idx {
-                None => found > 0,
-                Some(k) => k >= 1 && found >= k,
-            };
-            !script2 && !ok
-        }
+        P2Input::Keyboard => owners.is_empty(),
+        P2Input::Gamepad(_) => !script2 && !owners.iter().any(|&(_, o)| o),
         P2Input::Ble => false,
     }
+}
+
+/// Whether pad `id` disconnecting leaves split-screen player 2 without a
+/// pad (`owners` as before the disconnect): the toast then names player 2.
+fn p2_pad_lost(owners: &[(usize, bool)], id: usize) -> bool {
+    owners.contains(&(id, true)) && !owners.iter().any(|&(p, o)| o && p != id)
 }
 
 /// W7: does the game window have the focus? Set by the window; pads drive
@@ -1329,6 +1541,8 @@ const IDLE: Pad = Pad {
 
 static SOURCES: Mutex<Sources> = Mutex::new(Sources {
     gamepads: Vec::new(),
+    owners: Vec::new(),
+    p2_fresh: true,
     held_keys: Vec::new(),
     script: IDLE,
     script2: IDLE,
@@ -1352,39 +1566,12 @@ fn route(s: &Sources, p2: Option<&P2Input>, focused: bool) -> [Pad; 2] {
     // scripted window run may sit in the background). The keyboard goes to
     // whichever player owns it.
     if focused {
-        // Each gilrs pad: to P2 if p2 is Gamepad(None), or Gamepad(Some(n))
-        // and its name matches — a name with a trailing `#k` picks the k-th
-        // pad (in connect order) among the ones matching the base name
-        // ("Xbox Controller#2" = the second of two identical pads);
-        // without an index only the FIRST matching pad goes to P2.
-        // Everything else stays P1.
-        let p2_pad = match p2 {
-            Some(P2Input::Gamepad(Some(n))) => Some(split_index(n)),
-            _ => None,
-        };
-        let mut p2_pad_taken = false;
-        let mut same_name = 0usize;
-        for (name, pad) in &s.gamepads {
-            let to_p2 = match p2 {
-                Some(P2Input::Gamepad(None)) => true,
-                Some(P2Input::Gamepad(Some(_))) => {
-                    let (base, idx) = p2_pad.unwrap();
-                    let matches =
-                        name.to_ascii_lowercase().contains(&base.to_ascii_lowercase());
-                    match idx {
-                        None => matches && !p2_pad_taken,
-                        Some(k) => {
-                            if matches {
-                                same_name += 1;
-                            }
-                            matches && same_name == k
-                        }
-                    }
-                }
-                _ => false,
-            };
+        // Each gilrs pad: to the player that owns it (`s.owners`, kept per
+        // connection by `assign_pads`), only while p2 is a gamepad routing.
+        let pads_to_p2 = matches!(p2, Some(P2Input::Gamepad(_)));
+        for (id, _, pad) in &s.gamepads {
+            let to_p2 = pads_to_p2 && s.owners.contains(&(*id, true));
             if to_p2 {
-                p2_pad_taken = true;
                 p[1] = p[1].merge(*pad);
             } else {
                 p[0] = p[0].merge(*pad);
@@ -1415,6 +1602,7 @@ fn route(s: &Sources, p2: Option<&P2Input>, focused: bool) -> [Pad; 2] {
 
 fn publish(s: &mut Sources) {
     let p2 = p2_setting();
+    reassign(s, p2.as_ref());
     let [p, p2_pad] = route(s, p2.as_ref(), FOCUSED.load(Ordering::Relaxed));
     // Always kept current: the first-run setup screen (firstrun.rs, U13)
     // polls it too, before the game or the overlay exist.
@@ -1762,7 +1950,15 @@ pub fn spawn() {
                             // U7: even the pad unplugged in the first 2 s
                             // was never announced, so it gets no goodbye.
                             if started.elapsed() > std::time::Duration::from_secs(2) {
-                                crate::window::notify_toast("Controller disconnected".to_string());
+                                let text = if p2_pad_lost(
+                                    &SOURCES.lock().unwrap().owners,
+                                    usize::from(ev.id),
+                                ) {
+                                    "Player 2's controller disconnected"
+                                } else {
+                                    "Controller disconnected"
+                                };
+                                crate::window::notify_toast(text.to_string());
                                 // U26: that was the last pad: arm the pause
                                 // (same 2 s startup grace as the toast:
                                 // init-time phantom events must not pause).
@@ -1795,16 +1991,12 @@ pub fn spawn() {
                                         gp.is_connected() && gp.name() == g.name()
                                     })
                                     .collect();
-                                let value = if same.len() > 1 {
-                                    let k = same
-                                        .iter()
-                                        .position(|(id, _)| *id == ev.id)
-                                        .unwrap_or(0)
-                                        + 1;
-                                    format!("{}#{k}", g.name())
-                                } else {
-                                    g.name().to_string()
-                                };
+                                let k = same
+                                    .iter()
+                                    .position(|(id, _)| *id == ev.id)
+                                    .unwrap_or(0)
+                                    + 1;
+                                let value = pad_value(g.name(), k);
                                 *CAPTURED_SOURCE.lock().unwrap() =
                                     Some(P2Input::Gamepad(Some(value)));
                                 SOURCE_CAPTURE.store(false, Ordering::Relaxed);
@@ -1825,9 +2017,9 @@ pub fn spawn() {
                 // One entry per connected pad: per-player routing picks
                 // single pads out by name (split-screen), else they merge
                 // into controller 1.
-                let gamepads: Vec<(String, Pad)> = pads
+                let gamepads: Vec<(usize, String, Pad)> = pads
                     .iter()
-                    .map(|(_, g)| (g.name().to_string(), gamepad_pad(g)))
+                    .map(|(id, g)| (usize::from(*id), g.name().to_string(), gamepad_pad(g)))
                     .collect();
                 let nav = pads
                     .iter()
@@ -2394,12 +2586,15 @@ mod tests {
         let _lock = TEST_LOCK.lock().unwrap();
         let mut s = Sources {
             gamepads: vec![(
+                0,
                 "Xbox Controller".into(),
                 Pad {
                     button: CONT_START | CONT_A,
                     ..IDLE
                 },
             )],
+            owners: Vec::new(),
+            p2_fresh: true,
             held_keys: Vec::new(),
             script: IDLE,
             script2: IDLE,
@@ -2409,10 +2604,10 @@ mod tests {
         };
         publish(&mut s);
         assert_eq!(s.suppressed[0], CONT_START | CONT_A);
-        s.gamepads[0].1.button = CONT_A; // Start released
+        s.gamepads[0].2.button = CONT_A; // Start released
         publish(&mut s);
         assert_eq!(s.suppressed[0], CONT_A);
-        s.gamepads[0].1.button = CONT_START | CONT_A; // a fresh Start press
+        s.gamepads[0].2.button = CONT_START | CONT_A; // a fresh Start press
         publish(&mut s);
         assert_eq!(s.suppressed[0], CONT_A, "a new press is not suppressed");
     }
@@ -2711,8 +2906,11 @@ mod tests {
         Sources {
             gamepads: gamepads
                 .iter()
-                .map(|(n, p)| (n.to_string(), *p))
+                .enumerate()
+                .map(|(i, (n, p))| (i, n.to_string(), *p))
                 .collect(),
+            owners: Vec::new(),
+            p2_fresh: true,
             held_keys,
             script,
             script2,
@@ -2728,6 +2926,19 @@ mod tests {
             stick_x: 0,
             stick_y: 0,
         }
+    }
+
+    /// `p2` freshly assigned (as `set_p2` does), then routed.
+    fn routed(s: &Sources, p2: Option<&P2Input>) -> [Pad; 2] {
+        let mut s = Sources {
+            gamepads: s.gamepads.clone(),
+            owners: Vec::new(),
+            p2_fresh: true,
+            held_keys: s.held_keys.clone(),
+            ..*s
+        };
+        reassign(&mut s, p2);
+        route(&s, p2, true)
     }
 
     /// Split-screen off: everything merges into player 1, player 2 idle.
@@ -2780,20 +2991,42 @@ mod tests {
             Vec::new(),
         );
         assert_eq!(
-            route(&s, Some(&P2Input::Gamepad(Some("joy".into()))), true),
+            routed(&s, Some(&P2Input::Gamepad(Some("joy".into())))),
             [pad(CONT_B), pad(CONT_R)],
             "case-insensitive substring, second pad to player 2"
         );
         // A name that matches nothing: everything stays player 1.
         assert_eq!(
-            route(&s, Some(&P2Input::Gamepad(Some("ps5".into()))), true),
+            routed(&s, Some(&P2Input::Gamepad(Some("ps5".into())))),
             [pad(CONT_B | CONT_R), IDLE]
         );
-        // Every gilrs pad to player 2.
+        // All gamepads, two pads: the first stays player 1.
         assert_eq!(
-            route(&s, Some(&P2Input::Gamepad(None)), true),
-            [IDLE, pad(CONT_B | CONT_R)]
+            routed(&s, Some(&P2Input::Gamepad(None))),
+            [pad(CONT_B), pad(CONT_R)]
         );
+        // All gamepads, one pad: player 2's (the keyboard is player 1's).
+        let one = sources(&[("Xbox Controller", pad(CONT_B))], IDLE, IDLE, IDLE, Vec::new());
+        assert_eq!(routed(&one, Some(&P2Input::Gamepad(None))), [IDLE, pad(CONT_B)]);
+    }
+
+    /// Exact names beat substrings, and an index only counts exact names.
+    #[test]
+    fn route_gamepad_exact_name_p2() {
+        let s = sources(
+            &[
+                ("Xbox Controller (Elite)", pad(CONT_B)),
+                ("Xbox Controller", pad(CONT_R)),
+            ],
+            IDLE,
+            IDLE,
+            IDLE,
+            Vec::new(),
+        );
+        let named = |n: &str| P2Input::Gamepad(Some(n.into()));
+        assert_eq!(routed(&s, Some(&named("xbox controller"))), [pad(CONT_B), pad(CONT_R)]);
+        assert_eq!(routed(&s, Some(&named("Xbox Controller#2"))), [pad(CONT_B | CONT_R), IDLE]);
+        assert_eq!(routed(&s, Some(&named("elite"))), [pad(CONT_R), pad(CONT_B)]);
     }
 
     /// Two same-name pads: a `#k` name picks the k-th of them (connect
@@ -2811,59 +3044,157 @@ mod tests {
             IDLE,
             Vec::new(),
         );
+        let named = |n: &str| P2Input::Gamepad(Some(n.into()));
         // #2: the second same-name pad goes to P2, the first stays P1.
         assert_eq!(
-            route(
-                &s,
-                Some(&P2Input::Gamepad(Some("Xbox Controller#2".into()))),
-                true
-            ),
+            routed(&s, Some(&named("Xbox Controller#2"))),
             [pad(CONT_B | CONT_L), pad(CONT_R)]
         );
         // #1 is the first same-name pad.
         assert_eq!(
-            route(
-                &s,
-                Some(&P2Input::Gamepad(Some("Xbox Controller#1".into()))),
-                true
-            ),
+            routed(&s, Some(&named("Xbox Controller#1"))),
             [pad(CONT_R | CONT_L), pad(CONT_B)]
         );
         // #3 with only two matching pads: no gamepad goes to P2.
         assert_eq!(
-            route(
-                &s,
-                Some(&P2Input::Gamepad(Some("Xbox Controller#3".into()))),
-                true
-            ),
+            routed(&s, Some(&named("Xbox Controller#3"))),
             [pad(CONT_B | CONT_R | CONT_L), IDLE]
         );
         // No index: the first match (old configs keep working).
         assert_eq!(
-            route(
-                &s,
-                Some(&P2Input::Gamepad(Some("Xbox Controller".into()))),
-                true
-            ),
+            routed(&s, Some(&named("Xbox Controller"))),
             [pad(CONT_R | CONT_L), pad(CONT_B)]
         );
     }
 
-    /// `p2_missing`: the main menu's "Connect a second controller" hint.
+    /// `assign_pads`: a pad keeps its player while connected. Two
+    /// same-name pads, one leaving, never moves the other one over; the
+    /// one coming back (a new gilrs id) takes the free player-2 place.
+    #[test]
+    fn assign_pads_sticky_per_connection() {
+        let x = "Xbox Controller";
+        let named = |n: &str| P2Input::Gamepad(Some(n.into()));
+        // P2 = the first of two identical pads (id 0), P1 = id 1.
+        let p2 = named(x);
+        let (o, fresh) = assign_pads(&[], &[(0, x), (1, x)], Some(&p2), true);
+        assert_eq!((o.clone(), fresh), (vec![(0, true), (1, false)], false));
+        // P2's pad leaves: P2 idle, P1 keeps id 1 (the bug: it moved to P2).
+        let (o, _) = assign_pads(&o, &[(1, x)], Some(&p2), false);
+        assert_eq!(o, vec![(1, false)]);
+        assert!(p2_missing(&o, false, &p2), "the hint asks for P2's pad again");
+        // It reconnects as id 2: P2 again.
+        let (o, _) = assign_pads(&o, &[(1, x), (2, x)], Some(&p2), false);
+        assert_eq!(o, vec![(1, false), (2, true)]);
+        // Same for #2: P1's pad (id 0) leaving keeps id 1 on P2.
+        let p2 = named("Xbox Controller#2");
+        let (o, _) = assign_pads(&[], &[(0, x), (1, x)], Some(&p2), true);
+        assert_eq!(o, vec![(0, false), (1, true)]);
+        let (o, _) = assign_pads(&o, &[(1, x)], Some(&p2), false);
+        assert_eq!(o, vec![(1, true)]);
+        // A non-matching new pad goes to P1.
+        let (o, _) = assign_pads(&o, &[(1, x), (3, "DualSense")], Some(&p2), false);
+        assert_eq!(o, vec![(1, true), (3, false)]);
+        // Not connected yet: stays fresh until a matching pad shows up.
+        let (o, fresh) = assign_pads(&[], &[(0, "DualSense")], Some(&named(x)), true);
+        assert_eq!((o.clone(), fresh), (vec![(0, false)], true));
+        let (o, fresh) = assign_pads(&o, &[(0, "DualSense"), (4, x)], Some(&named(x)), fresh);
+        assert_eq!((o, fresh), (vec![(0, false), (4, true)], false));
+    }
+
+    /// `assign_pads` with "All gamepads": one pad is P2's; two: first P1,
+    /// the rest P2; a leaving pad moves nobody; new pads fill the player
+    /// without a pad.
+    #[test]
+    fn assign_pads_all_gamepads() {
+        let all = P2Input::Gamepad(None);
+        let (o, _) = assign_pads(&[], &[(0, "A")], Some(&all), true);
+        assert_eq!(o, vec![(0, true)]);
+        let (o, _) = assign_pads(&[], &[(0, "A"), (1, "B"), (2, "C")], Some(&all), true);
+        assert_eq!(o, vec![(0, false), (1, true), (2, true)]);
+        // P1's pad leaves: B and C stay P2 (P1 = keyboard).
+        let (o, _) = assign_pads(&o, &[(1, "B"), (2, "C")], Some(&all), false);
+        assert_eq!(o, vec![(1, true), (2, true)]);
+        // A new pad: P1 has none, so it is P1's.
+        let (o, _) = assign_pads(&o, &[(1, "B"), (2, "C"), (5, "A")], Some(&all), false);
+        assert_eq!(o, vec![(1, true), (2, true), (5, false)]);
+        // One pad, then a second joins: the first keeps P2, the new one P1.
+        let (o, _) = assign_pads(&[], &[(0, "A")], Some(&all), true);
+        let (o, _) = assign_pads(&o, &[(0, "A"), (1, "B")], Some(&all), false);
+        assert_eq!(o, vec![(0, true), (1, false)]);
+        // P2's pad leaves: P2 gets a fresh pad next.
+        let (o, _) = assign_pads(&o, &[(1, "B")], Some(&all), false);
+        assert!(p2_missing(&o, false, &all));
+        let (o, _) = assign_pads(&o, &[(1, "B"), (6, "C")], Some(&all), false);
+        assert_eq!(o, vec![(1, false), (6, true)]);
+        // Keyboard / BLE / off: every pad P1.
+        for p2 in [None, Some(P2Input::Keyboard), Some(P2Input::Ble)] {
+            let (o, _) = assign_pads(&[], &[(0, "A"), (1, "B")], p2.as_ref(), true);
+            assert_eq!(o, vec![(0, false), (1, false)]);
+        }
+    }
+
+    /// `p2_missing`: the main menu's "Connect a second controller" hint,
+    /// from the pads' owners (true = player 2).
     #[test]
     fn p2_missing_cases() {
         let all = P2Input::Gamepad(None);
         assert!(p2_missing(&[], false, &all));
         assert!(!p2_missing(&[], true, &all), "a P2 script drives player 2");
-        assert!(!p2_missing(&["Xbox Controller"], false, &all));
+        assert!(!p2_missing(&[(0, true)], false, &all));
+        assert!(p2_missing(&[(0, false)], false, &all), "P2 has no pad");
         assert!(p2_missing(&[], false, &P2Input::Keyboard), "player 1 has no pad");
-        assert!(!p2_missing(&["Pad"], false, &P2Input::Keyboard));
-        let named = |n: &str| P2Input::Gamepad(Some(n.into()));
-        assert!(!p2_missing(&["Xbox Controller"], false, &named("xbox")));
-        assert!(p2_missing(&["DualSense"], false, &named("xbox")));
-        assert!(p2_missing(&["Xbox Controller"], false, &named("Xbox Controller#2")));
-        assert!(!p2_missing(&["Xbox Controller", "Xbox Controller"], false, &named("Xbox Controller#2")));
+        assert!(!p2_missing(&[(0, false)], false, &P2Input::Keyboard));
+        let named = P2Input::Gamepad(Some("xbox".into()));
+        assert!(!p2_missing(&[(0, false), (1, true)], false, &named));
+        assert!(p2_missing(&[(0, false)], false, &named));
         assert!(!p2_missing(&[], false, &P2Input::Ble));
+    }
+
+    /// The disconnect toast names player 2 only when its last pad left.
+    #[test]
+    fn p2_pad_lost_cases() {
+        assert!(p2_pad_lost(&[(0, false), (1, true)], 1));
+        assert!(!p2_pad_lost(&[(0, false), (1, true)], 0), "P1's pad");
+        assert!(!p2_pad_lost(&[(1, true), (2, true)], 1), "P2 keeps another");
+        assert!(!p2_pad_lost(&[], 3));
+    }
+
+    /// `PW64_SPLITSCREEN` set: a live switch is not saved.
+    #[test]
+    fn split_toggle_saved_only_without_env() {
+        assert!(save_split_toggle(None));
+        assert!(!save_split_toggle(Some(true)));
+        assert!(!save_split_toggle(Some(false)));
+    }
+
+    /// The settings screen stages split flags from what was applied.
+    #[test]
+    fn live_flag_follows_applied_value() {
+        let f = LiveFlag::new();
+        assert!(f.get(|| true), "never applied: the configured value");
+        f.set(false);
+        assert!(!f.get(|| true), "applied off beats the config");
+        f.set(true);
+        assert!(f.get(|| false));
+    }
+
+    /// `pick_p2_pad` / `pad_matches`: exact names first, `#k` exact only,
+    /// empty names nothing.
+    #[test]
+    fn pick_p2_pad_cases() {
+        let pads = ["Xbox Controller (Elite)", "Xbox Controller", "Xbox Controller"];
+        assert_eq!(pick_p2_pad("xbox controller", &pads), Some(1));
+        assert_eq!(pick_p2_pad("Xbox Controller#1", &pads), Some(1));
+        assert_eq!(pick_p2_pad("Xbox Controller#2", &pads), Some(2));
+        assert_eq!(pick_p2_pad("Xbox Controller#3", &pads), None);
+        assert_eq!(pick_p2_pad("Xbox Controller#0", &pads), None);
+        assert_eq!(pick_p2_pad("elite", &pads), Some(0));
+        assert_eq!(pick_p2_pad("", &pads), None);
+        assert_eq!(pick_p2_pad("#2", &pads), None);
+        assert!(pad_matches("Xbox Controller#2", "xbox controller"));
+        assert!(!pad_matches("Xbox Controller#2", "Xbox Controller (Elite)"));
+        assert!(pad_matches("xbox", "Xbox Controller (Elite)"));
+        assert!(!pad_matches("", "Pad"));
     }
 
     /// `split_index`: the optional trailing `#<index>` off a pad name.
@@ -2889,6 +3220,11 @@ mod tests {
         let p = P2Input::parse("gamepad:Xbox Controller#2").unwrap();
         assert_eq!(p, P2Input::Gamepad(Some("Xbox Controller#2".into())));
         assert_eq!(p.to_config(), "gamepad:Xbox Controller#2");
+        // `#1` is the first pad: stored as the plain name (one spelling).
+        let p = P2Input::parse("gamepad:Xbox Controller#1").unwrap();
+        assert_eq!(p.to_config(), "gamepad:Xbox Controller");
+        assert_eq!(pad_value("Xbox Controller", 1), "Xbox Controller");
+        assert_eq!(pad_value("Xbox Controller", 2), "Xbox Controller#2");
     }
 
     /// Player 2 owns the BLE pads.
@@ -2936,6 +3272,8 @@ mod tests {
             Some(P2Input::Gamepad(Some("Joy-Con".into())))
         );
         assert_eq!(P2Input::parse("mouse"), None);
-        assert_eq!(P2Input::parse("gamepad:"), Some(P2Input::Gamepad(Some("".into()))));
+        // An empty pad name would match every pad: rejected (→ warn + "gamepad").
+        assert_eq!(P2Input::parse("gamepad:"), None);
+        assert_eq!(P2Input::parse("gamepad: #2"), None);
     }
 }

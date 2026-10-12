@@ -231,9 +231,13 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 ## Input (per-player controller assignment)
 - `headless.rs` `PADS[4]` + `set_controller(n, ..)` + `set_controllers_present(n)` (pad 2
   present only with split-screen on). `input.rs` keeps a `Pad` per source and `route()`
-  splits them by `P2Input` (`[splitscreen] p2_input` / `PW64_P2_INPUT`; default every
-  gilrs pad → P2, keyboard → P1). `PW64_INPUT_SCRIPT_P2` drives controller 2. input.md.
+  splits them by `P2Input` (`[splitscreen] p2_input` / `PW64_P2_INPUT`; default "All
+  gamepads": 1 pad → P2 + keyboard P1, 2+ → first P1, rest P2; pads keep their player per
+  gilrs id while connected, `input::assign_pads`). `PW64_INPUT_SCRIPT_P2` drives controller 2. input.md.
 - Settings > Split-screen: "Split-screen (2 players)" + "Player 2 controller" (both live).
+  Collisions/share/layout go through `input::apply_split_*` (live mirror); the page stages
+  from `input::live_split_*`, not the boot config. `split_tick` doesn't save `enabled` while
+  `PW64_SPLITSCREEN` is set.
   settings.md.
 - Open: "press a button for player 2" capture; a single Joy-Con held sideways as its own pad.
 

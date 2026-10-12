@@ -443,8 +443,9 @@ impl Overlay {
         // The Player-2 controller row: the configured routing (the live one
         // while split-screen runs) and the connected pads.
         let saved_p2 = input::p2_current();
-        let p2 = p2_choices(&input::connected_pad_names(), &saved_p2);
-        let p2_sel = p2_select(&p2, &saved_p2);
+        let pads = input::connected_pad_names();
+        let p2 = p2_choices(&pads, &saved_p2);
+        let p2_sel = p2_select(&p2, &pads, &saved_p2);
         Self {
             ctx: egui::Context::default(),
             renderer: None,
@@ -457,9 +458,9 @@ impl Overlay {
             widescreen_follow: false,
             saved_restart: None,
             split: input::split_wanted(),
-            collisions: input::split_collisions(),
-            share_scores: input::split_share(),
-            split_layout: input::split_layout(),
+            collisions: input::live_split_collisions(),
+            share_scores: input::live_split_share(),
+            split_layout: input::live_split_layout(),
             p2_choices: p2,
             p2_sel,
             fps,
@@ -539,11 +540,11 @@ impl Overlay {
         self.pause_background = gpu.pause_background;
         // BLE pads (live): the switch as it stands.
         self.ble = crate::ble::is_on();
-        // Pilot collisions (live from the next test start): the flag as it
-        // stands (env, file or a live change).
-        self.collisions = input::split_collisions();
-        self.share_scores = input::split_share();
-        self.split_layout = input::split_layout();
+        // Pilot collisions, score sharing, layout (live): the values in
+        // force (env, file or a live change from an earlier open).
+        self.collisions = input::live_split_collisions();
+        self.share_scores = input::live_split_share();
+        self.split_layout = input::live_split_layout();
         self.fb = gpu.fb_size_for_scale(self.scale);
         // Display mode (live): stage the running one; Exclusive is left out
         // of the choices when this window can't do it (Wayland).
@@ -654,8 +655,9 @@ impl Overlay {
         // live one while split-screen runs (a live change has been saved by
         // then), this session's choice or the configured one otherwise.
         let saved_p2 = input::p2_current();
-        self.p2_choices = p2_choices(&input::connected_pad_names(), &saved_p2);
-        self.p2_sel = p2_select(&self.p2_choices, &saved_p2);
+        let pads = input::connected_pad_names();
+        self.p2_choices = p2_choices(&pads, &saved_p2);
+        self.p2_sel = p2_select(&self.p2_choices, &pads, &saved_p2);
     }
 
     /// The D2 auto-save, shared by `close` and the "Restart now" row (U16):
@@ -2029,13 +2031,13 @@ impl Overlay {
                     // Live: the game reads the flag at each test start, so
                     // the change applies from the next test (staged_settings
                     // saves it either way).
-                    pw64_game::set_split_collide(self.collisions);
+                    input::apply_split_collide(self.collisions);
                 }
                 Opt::ShareScores if !self.split => {}
                 Opt::ShareScores => {
                     self.share_scores = !self.share_scores;
                     // Live: read when a test's results close.
-                    pw64_game::set_split_share(self.share_scores);
+                    input::apply_split_share(self.share_scores);
                 }
                 // Same greying as the collisions row.
                 Opt::SplitLayout if !self.split => {}
@@ -2045,9 +2047,7 @@ impl Overlay {
                         input::SplitLayout::LeftRight => input::SplitLayout::TopBottom,
                     };
                     // Live: the game latches the layout at each test start.
-                    pw64_game::set_split_layout(
-                        self.split_layout == input::SplitLayout::LeftRight,
-                    );
+                    input::apply_split_layout(self.split_layout);
                 }
                 Opt::OledDrift => self.oled_drift = !self.oled_drift,
                 Opt::ShowFps => self.show_fps = !self.show_fps,
@@ -2419,9 +2419,9 @@ struct P2Choice {
 /// The Player-2 controller choices (`P2Input` cycling): All gamepads, one
 /// per connected pad (by name), the keyboard and the Switch 2 pads over
 /// Bluetooth. Pads sharing a name (two "Xbox Controller"s) list as
-/// distinct rows: the k-th of them is spelled `name#k` (labelled
-/// `name (k)`), so routing can tell them apart; unique names are
-/// unchanged. A configured pad that isn't connected keeps its row
+/// distinct rows labelled `name (k)`: the first is spelled `name`, the
+/// k-th `name#k` (`input::pad_value`, as the capture spells them); unique
+/// names are unchanged. A configured pad that isn't connected keeps its row
 /// ("\<name> (not connected)"), so cycling doesn't lose it. Pure: the pad
 /// names come from `input::connected_pad_names`, the configured value from
 /// `input::resolve_p2` / `input::p2_input`.
@@ -2433,25 +2433,21 @@ fn p2_choices(pads: &[String], saved: &input::P2Input) -> Vec<P2Choice> {
     for (i, name) in pads.iter().enumerate() {
         let same = pads.iter().filter(|n| *n == name).count();
         let k = pads[..i].iter().filter(|n| *n == name).count() + 1;
-        let (value, label) = if same > 1 && k > 1 {
-            (format!("{name}#{k}"), format!("{name} ({k})"))
+        // Same spelling as the "Assign player 2" capture (`pad_value`).
+        let label = if same > 1 {
+            format!("{name} ({k})")
         } else {
-            (name.clone(), name.clone())
+            name.clone()
         };
         out.push(P2Choice {
-            input: input::P2Input::Gamepad(Some(value)),
+            input: input::P2Input::Gamepad(Some(input::pad_value(name, k))),
             label,
         });
     }
     if let input::P2Input::Gamepad(Some(n)) = saved {
-        // `P2Input` matches pads by (case-insensitive) name substring.
-        let connected = out.iter().any(|c| match &c.input {
-            input::P2Input::Gamepad(Some(full)) => {
-                full.to_lowercase().contains(&n.to_lowercase())
-            }
-            _ => false,
-        });
-        if !connected {
+        // The routing's own rule decides whether the saved pad is here.
+        let names: Vec<&str> = pads.iter().map(String::as_str).collect();
+        if input::pick_p2_pad(n, &names).is_none() {
             out.push(P2Choice {
                 input: input::P2Input::Gamepad(Some(n.clone())),
                 label: format!("{n} (not connected)"),
@@ -2469,19 +2465,18 @@ fn p2_choices(pads: &[String], saved: &input::P2Input) -> Vec<P2Choice> {
     out
 }
 
-/// The index of the configured player-2 input among [`p2_choices`] (a saved
-/// pad substring matches the connected pad whose full name contains it).
-fn p2_select(choices: &[P2Choice], saved: &input::P2Input) -> usize {
-    choices
-        .iter()
-        .position(|c| match (&c.input, saved) {
-            (
-                input::P2Input::Gamepad(Some(full)),
-                input::P2Input::Gamepad(Some(n)),
-            ) => full.to_lowercase().contains(&n.to_lowercase()),
-            (a, b) => a == b,
-        })
-        .unwrap_or(0)
+/// The index of the configured player-2 input among [`p2_choices`] built
+/// from the same `pads`: a saved pad selects the pad the routing picks
+/// (`input::pick_p2_pad`), else its "(not connected)" row.
+fn p2_select(choices: &[P2Choice], pads: &[String], saved: &input::P2Input) -> usize {
+    if let input::P2Input::Gamepad(Some(n)) = saved {
+        let names: Vec<&str> = pads.iter().map(String::as_str).collect();
+        // Row 0 is "All gamepads", then one row per pad.
+        if let Some(i) = input::pick_p2_pad(n, &names) {
+            return i + 1;
+        }
+    }
+    choices.iter().position(|c| c.input == *saved).unwrap_or(0)
 }
 
 /// The D2 auto-save update: only the fields that differ from the snapshot
@@ -3459,7 +3454,7 @@ mod tests {
         // → All gamepads.
         let n = choices.len() as i32;
         let step = |sel: usize, d: i32| (sel as i32 + d).rem_euclid(n) as usize;
-        let mut sel = p2_select(&choices, &all);
+        let mut sel = p2_select(&choices, &pads, &all);
         assert_eq!(sel, 0);
         for want in ["Pad A", "Pad B", "Keyboard", "Switch 2 (Bluetooth)"] {
             sel = step(sel, 1);
@@ -3469,13 +3464,28 @@ mod tests {
         // A saved substring picks the pad whose full name contains it.
         let saved = input::P2Input::Gamepad(Some("pad b".into()));
         let choices = p2_choices(&pads, &saved);
-        assert_eq!(p2_select(&choices, &saved), 2);
+        assert_eq!(p2_select(&choices, &pads, &saved), 2);
         // A saved pad that isn't connected keeps its entry (after the
         // connected pads), labelled.
         let saved = input::P2Input::Gamepad(Some("Retro".into()));
         let choices = p2_choices(&pads, &saved);
         assert_eq!(choices[3].label, "Retro (not connected)");
-        assert_eq!(p2_select(&choices, &saved), 3);
+        assert_eq!(p2_select(&choices, &pads, &saved), 3);
+    }
+
+    /// A pad name contained in another ("Xbox Controller" in "Xbox
+    /// Controller (Elite)"): the exact name wins over the substring, so the
+    /// row selected is the pad routing gives player 2.
+    #[test]
+    fn p2_select_prefers_exact_name() {
+        let pads = vec![
+            "Xbox Controller (Elite)".to_string(),
+            "Xbox Controller".to_string(),
+        ];
+        let saved = input::P2Input::Gamepad(Some("Xbox Controller".into()));
+        let choices = p2_choices(&pads, &saved);
+        assert_eq!(choices.len(), 5, "connected: no extra row");
+        assert_eq!(p2_select(&choices, &pads, &saved), 2);
     }
 
     /// SS-UI: two connected pads sharing a name list as distinct choices —
@@ -3494,7 +3504,7 @@ mod tests {
             labels,
             [
                 "All gamepads",
-                "Xbox Controller",
+                "Xbox Controller (1)",
                 "Xbox Controller (2)",
                 "Keyboard",
                 "Switch 2 (Bluetooth)"
@@ -3504,12 +3514,23 @@ mod tests {
             choices[2].input.to_config(),
             "gamepad:Xbox Controller#2"
         );
+        // The first is spelled as the capture spells it: the plain name.
+        assert_eq!(choices[1].input.to_config(), "gamepad:Xbox Controller");
+        assert_eq!(
+            choices[1].input,
+            input::P2Input::Gamepad(Some(input::pad_value("Xbox Controller", 1)))
+        );
         // The saved `#2` value selects the second row and counts as
         // connected (no extra "(not connected)" row is added).
         let saved = input::P2Input::Gamepad(Some("Xbox Controller#2".into()));
         let choices = p2_choices(&pads, &saved);
         assert_eq!(choices.len(), 5, "no extra not-connected row");
-        assert_eq!(p2_select(&choices, &saved), 2);
+        assert_eq!(p2_select(&choices, &pads, &saved), 2);
+        // A saved `#1` (older captures) is the first pad, connected.
+        let saved = input::P2Input::parse("gamepad:Xbox Controller#1").unwrap();
+        let choices = p2_choices(&pads, &saved);
+        assert_eq!(choices.len(), 5, "#1 is not 'not connected'");
+        assert_eq!(p2_select(&choices, &pads, &saved), 1);
     }
 
     /// SS-UI: the Split row toggles (live, no restart) and saves;
