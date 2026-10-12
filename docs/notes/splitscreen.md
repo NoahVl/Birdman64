@@ -154,6 +154,13 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - Finished player's view with the crash cam against a wall (a full-view brick wall at pause) = the
   ROM's crash camera, not split; pause after FINISHED redraws that view correctly.
 - At the start the other glider is just outside the FOV (camera ~18 m back, 10 m apart).
+- **Other player on the radar** (hud.c.patch `pw64_radar_peers`, called in `hudDrawRadar` before
+  our own icon sprite): the radar's own player icon (UVTX 0x11D, 16×8, arrowhead in its top-left
+  9×5; sprite 0 at x+31/y−33 = arrowhead middle on the radar centre) as a textured poly tinted
+  cyan, turned by `yaw − pitch` (radar is heading-up; vehicle forward = matrix row 1). Pose from the
+  peer's HUD `unk28` via `pw64_player_peek(i, &sHudState)` (pw64_players.c: a slot's copy of a
+  registered region), so it's this frame's update. Beyond 800 m pinned to the 30 px rim. Within
+  ~100 m it hides under our icon (10 m = 0.4 px). None for cannonball (shared pillar); birdman has no radar.
 - Leaving split left camera 0 on the top-half viewport (test menu map drawn in the top half
   only): `pw64_leave_players` restores it (`pw64_split_viewport(cam, -1)`).
 - **Gyro reticle** (code_7CF30.c `func_802F6DC8`): reticleY = 107·tan6°·zoom/clipY1 HUD px,

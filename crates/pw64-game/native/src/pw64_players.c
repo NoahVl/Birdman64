@@ -75,6 +75,25 @@ void pw64_player_switch(int i) {
     pw64_player_cur = i;
 }
 
+/* Player i's copy of the registered region at addr (the live bytes when i
+ * is current); NULL if addr isn't a registered region's start. */
+void* pw64_player_peek(int i, void* addr) {
+    int k;
+
+    if (i == pw64_player_cur) {
+        return addr;
+    }
+    if (i < 0 || i >= pw64_players) {
+        return 0;
+    }
+    for (k = 0; k < sRegionCount; k++) {
+        if (sRegions[k].addr == (unsigned char*)addr) {
+            return &sSlots[i][sRegions[k].off];
+        }
+    }
+    return 0;
+}
+
 void pw64_players_sync(void) {
     int i, k;
 

@@ -24,6 +24,7 @@
 +        uvFontPrintStr((SCREEN_WIDTH / 2) - (uvFontWidth(sFinished) / 2), 125, sFinished);
 +    }
 +}
++static void pw64_radar_peers(f32 xOff, f32 yOff, f32 pitch); // PW64 split-screen
  
  // hang glider speeds below this value will be highlighted larger red/amber font
  #define HIGHLIGHT_SPEED_BELOW 36
@@ -158,6 +159,13 @@
              if (radar->waypoints[idx].unk18 > 0xFF) {
                  radar->waypoints[idx].unk14 = 1;
                  radar->waypoints[idx].unk18 = 0xFF;
+@@ -1233,6 +1279,7 @@ void hudDrawRadar(s32 x, s32 y, f32 xOff, f32 yOff, f32 heading, f32 pitch, HUDR
+         }
+     }
++    pw64_radar_peers(xOff, yOff, pitch); // PW64 split-screen: under our own icon
+     uvSprtProps(0, SPRT_PROP_POS(x + 31, y - 33), SPRT_PROP_END);
+     uvSprtDraw(0);
+     uvGfxMtxViewPop();
 @@ -1243,6 +1289,7 @@ void hudDemoContButton(s32 spriteId, s32 x, s32 y) {
  }
  
@@ -244,4 +252,64 @@
 +    PW64_REG(D_8034F910);
 +    PW64_REG(D_8034F914);
 +    PW64_REG(sPw64ShutterAcc);
++}
++
++// PW64 split-screen: the other pilots on this player's radar (view matrix =
++// radar centre, heading up, 0.0375 px/m like hudDrawRadar's waypoints). The
++// other player's pose comes from their HUD state's unk28 (their vehicle
++// matrix, set in this frame's update) in their player slot.
++static void pw64_radar_peers(f32 xOff, f32 yOff, f32 pitch) {
++    Mtx4F m;
++    HUDState* o;
++    f32 dx, dy, dist, bearing, phi, px, py, pz, yaw, rx, ry;
++    s32 i;
++
++    // Cannonball: both cannons stand on the same pillar.
++    if (pw64_level_players < 2 || (sHudState.renderFlags & HUD_RENDER_CANNONBALL)) {
++        return;
++    }
++    for (i = 0; i < pw64_level_players; i++) {
++        if (i == pw64_player_cur) {
++            continue;
++        }
++        o = pw64_player_peek(i, &sHudState);
++        if (o == NULL || o->unk28.m[0][0] == 0.0f) {
++            continue;
++        }
++        func_80313570(&o->unk28, &px, &py, &pz, &yaw, &rx, &ry);
++        dx = px - xOff;
++        dy = py - yOff;
++        if (dx == 0.0f && dy == 0.0f) {
++            dist = 0.0f;
++            bearing = 0.0f;
++        } else {
++            func_80313430(dx, dy, 0.0f, &dist, &bearing, &phi);
++            bearing -= pitch + 1.5707963f;
++        }
++        // Past the 800 m waypoint range: pinned to the rim.
++        dist *= 0.0375f;
++        if (dist > 30.0f) {
++            dist = 30.0f;
++        }
++        uvMat4SetIdentity(&m);
++        uvMat4LocalTranslate(&m, uvSinF(bearing) * -dist, uvCosF(bearing) * dist, 0.0f);
++        uvMat4RotateAxis(&m, yaw - pitch, 'z');
++        uvGfxMtxViewMul(&m, 1);
++        uvGfxStatePush();
++        uvGfxSetFlags(GFX_STATE_XLU);
++        uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER);
++        // Our own radar icon (sprite 0's 16x8 texture: arrowhead in the top
++        // left 9x5, its middle on the pivot like sprite 0's x+31/y-33 offset
++        // from the radar centre), tinted cyan: no waypoint/goal/thermal uses
++        // that colour.
++        uvGfxBindTexture(0x11D);
++        uvVtxBeginPoly();
++        uvVtx(-4, -6, 0, 0, 256, 0x40, 0xFF, 0xFF, 0xFF);
++        uvVtx(12, -6, 0, 512, 256, 0x40, 0xFF, 0xFF, 0xFF);
++        uvVtx(12, 2, 0, 512, 0, 0x40, 0xFF, 0xFF, 0xFF);
++        uvVtx(-4, 2, 0, 0, 0, 0x40, 0xFF, 0xFF, 0xFF);
++        uvVtxEndPoly();
++        uvGfxStatePop();
++        uvGfxMtxViewPop();
++    }
 +}
