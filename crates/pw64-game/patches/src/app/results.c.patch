@@ -79,7 +79,10 @@
 @@ -409,3 +441,3 @@
          case 0:
 -            if (func_8033E3A8(2) != 0) {
-+            if (pw64_results_check_photos() != 0) { // PW64 split-screen: the shown player's
++            // PW64 split-screen: the shown player's photos. Not saved from
++            // another player's tally: its results are swapped into
++            // D_80364210[0] then (the album is saved with player 1's run).
++            if ((pw64_results_check_photos() != 0) && (pw64_results_player == 0)) {
                  saveFileWrite(unkC->unk8A);
 @@ -557,5 +589,8 @@ void resultDrawTally(s32 arg0) {
              uvFontPrintStr16(X_TOTAL, Y_TOTAL, sPtsDeductedStr, 4, 0xFFE);

@@ -994,10 +994,14 @@
 +    }
 +}
 +
++static void pw64_share_best(Unk80362690* arg0);
++
 +// PW64 split-screen (results.c.patch, "Next" on player 1's tally): each
-+// other player's tally (menu: Next only), then back to player 1's class
-+// totals and the Retry/Next/Quit choice, which applies to everyone.
-+// Player 1 stays live (same test); only player 1's results are saved.
++// other player's tally (Next ends it), then back to player 1's class
++// totals and the Retry/Quit choice, which applies to everyone.
++// Player 1 stays live (same test); only player 1's results are saved, with
++// the best run shared in before the class totals (they list player 1's
++// per-test bests and award its medals).
 +void pw64_results_other_players(void) {
 +    s32 i;
 +
@@ -1015,6 +1019,7 @@
 +        pw64_results_player = 0;
 +        pw64_results_swap(i);
 +    }
++    pw64_share_best(D_80362690);
 +}
 +
 +// The points func_8032B560 gave a run (its sum, read back from the test's
@@ -1030,9 +1035,11 @@
 +// PW64 split-screen "Share best score" (pw64_split_share): only player 1's
 +// results are saved, so when another player's run scored more, player 1's
 +// entry for this test is rescored with that run, after the tallies (each
-+// still shows its own run): that run's header (score inputs) copied in,
-+// its player live (rings, targets, balls are per player) with its own
-+// time-up state. Personal best and medals follow the game's own rules.
++// still shows its own run) and before the class totals: that run's header
++// (score inputs) copied in, its player live (rings, targets, balls are per
++// player) with its own time-up state. Personal best and medals follow the
++// game's own rules. Called again before the save (pw64_results_split) for
++// exits that skip the totals: then a no-op (player 1's run now equals it).
 +static void pw64_share_best(Unk80362690* arg0) {
 +    Unk80362690_Unk0* p = &arg0->unkC[0];
 +    u8 cls = p->cls;
@@ -1119,7 +1126,7 @@
 +        uvGfxEnd();
 +    }
 +    resultDeinit();
-+    pw64_share_best(arg0); // before func_802ECE94's save
++    pw64_share_best(arg0); // before func_802ECE94's save (if the totals were skipped)
 +    func_802ECE94(arg0);
 +    if (var_v1 == GAME_STATE_TEST_SETUP) {
 +        sndPlaySfx(SFX_UI_TEST_START);

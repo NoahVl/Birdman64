@@ -88,6 +88,12 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   after the tallies, if another player's run total (read back from its entry) beats P1's, `pw64_share_best`
   copies that run's header (bytes before `unk40`) into `D_80364210[0]` and reruns `func_8032B560` with that
   player live and its finish-time `unkA1` (`sPw64TimeUp`; the global may be set by a later time-up).
+  Must run before `totResultHandler` (the class-totals "Test 1/2/3 .. pts" page lists `D_80364210[0]`'s bests
+  and awards medals; it runs inside `resultMenuChoose`'s Next): called at the end of
+  `pw64_results_other_players`, again before the save as a no-op fallback. Check photo on P2's tally
+  doesn't save (its results are swapped into `[0]` then).
+  Headless check: no idle/simple script scores on beginner hg/rb/gc 1 (both 0 pts); a temporary
+  `unk38 = 40` for P2 at finish gave the score path. Results menus read the stick only (no D-pad).
 - `uvEventRemoveCb` (decomp bug, harmless with 1 player): cleared `unk0[count]`, which for a full list is
   `.count` itself → -1, then the next add corrupts the previous event's count (crash). Clears `[count-1]`.
 - **Free flight** (test_menu.c.patch, game.c.patch `pw64_free_*`): split-only item in the
