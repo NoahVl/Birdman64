@@ -139,6 +139,14 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - `hgSoundEvent13` removed the last-registered sound callback (P2's): now removes its own.
   Same fix for the rocket belt (`rbSoundEvent13`) and the gyro (`gyrocopter_sound.c`
   func_8030B168: static D_80369E50 rebuilt per gyro with the caller's `gcData`).
+- **Snow** (b:rb:2 is the snowfall test; snow.c CPU-writes 1 px flakes into the finished fb →
+  `pw64_fb_pixels` → a separate task, `FbOp::Pixels`/`Renderer::fb_overlay`): a 4:3-only task used to
+  black the widescreen margins (whole picture 4:3, single player too) — overlays keep them now, and
+  flakes are `Stretch`ed over the view (`pixels::place_in_view`; vertically only onto a `filled` fb,
+  else they piled up in the never-redrawn bars). Nothing redraws the split seam either: snow.c.patch
+  skips flakes on it (white line). Snow is one P1-camera screen-space layer over both views (noise; fine).
+- Finished player's view with the crash cam against a wall (a full-view brick wall at pause) = the
+  ROM's crash camera, not split; pause after FINISHED redraws that view correctly.
 - At the start the other glider is just outside the FOV (camera ~18 m back, 10 m apart).
 - Leaving split left camera 0 on the top-half viewport (test menu map drawn in the top half
   only): `pw64_leave_players` restores it (`pw64_split_viewport(cam, -1)`).

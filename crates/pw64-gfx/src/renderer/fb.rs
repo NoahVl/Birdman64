@@ -42,6 +42,9 @@ pub enum FbOp {
     Draw { fb: u32, frame: Arc<Frame> },
     /// `uvCopyFrameBuf`: `src`'s pixels into `dst`.
     Copy { dst: u32, src: u32 },
+    /// CPU pixel writes (snow) as a task onto `fb`: an overlay on the
+    /// finished picture, so it keeps the margins and the `filled` flag.
+    Pixels { fb: u32, frame: Arc<Frame> },
 }
 
 struct Target {
@@ -63,6 +66,8 @@ pub(super) struct FbStore {
     /// Fullscreen helper pipelines by (reload?, sample count): reload =
     /// `fs_load` (resolved target → MSAA attachment), else `fs_black`.
     pipelines: HashMap<(bool, u32), wgpu::RenderPipeline>,
+    /// Set while [`Renderer::fb_overlay`] draws: keep the whole target.
+    overlay: bool,
 }
 
 impl Renderer {
@@ -112,6 +117,7 @@ impl Renderer {
         match op {
             FbOp::Draw { fb, frame } => self.fb_draw(*fb, frame),
             FbOp::Copy { dst, src } => self.fb_copy(*dst, *src),
+            FbOp::Pixels { fb, frame } => self.fb_overlay(*fb, frame),
         }
     }
 
@@ -171,6 +177,37 @@ impl Renderer {
             self.draw_frame(frame, &view, size, true);
             self.fbs.targets.get_mut(&fb).unwrap().filled = filled;
         }
+    }
+
+    /// CPU pixel writes into `fb` (snow.c's `snowDraw` on the finished
+    /// frame) drawn over its target. Unlike [`Self::fb_draw`] the widescreen
+    /// margins are kept even though the pixels only land inside 4:3 (else
+    /// every snowy frame lost its wide/fill picture outside 4:3), and
+    /// `filled` stays: the picture underneath is unchanged. Draws' vertical
+    /// stretch (`stretch_y`) only applies onto a `filled` picture: a
+    /// letterboxed one (fill off, split-screen views) keeps its bars, which
+    /// nothing redraws, so pixels stretched into them would pile up.
+    pub fn fb_overlay(&mut self, fb: u32, frame: &Frame) {
+        let target = self.fb_target(fb);
+        let (view, filled) = (target.view.clone(), target.filled);
+        if frame.draws.is_empty() {
+            return;
+        }
+        let unfill;
+        let frame = if !filled && frame.draws.iter().any(|d| d.stretch_y != [0.0; 2]) {
+            let mut f = frame.clone();
+            for d in &mut f.draws {
+                d.stretch_y = [0.0; 2];
+            }
+            unfill = f;
+            &unfill
+        } else {
+            frame
+        };
+        let size = self.fbs.size;
+        self.fbs.overlay = true;
+        self.draw_frame(frame, &view, size, true);
+        self.fbs.overlay = false;
     }
 
     /// `uvCopyFrameBuf`: `dst` becomes a copy of `src` (black if `src` was
@@ -356,7 +393,7 @@ impl Renderer {
             frame.draws.iter().zip(scissors).any(|(d, &[x, _, w, h])| {
                 d.vertex_count > 0 && w > 0 && h > 0 && (x < l || x + w > r)
             });
-        let keep = if in_margins || (l == 0 && r == size.0) {
+        let keep = if self.fbs.overlay || in_margins || (l == 0 && r == size.0) {
             [0, 0, size.0, size.1]
         } else {
             [l, 0, r - l, size.1]
@@ -744,6 +781,29 @@ mod tests {
             assert_eq!(px(&img, w, 20, 36), BLUE, "msaa {msaa}: 4:3 area kept");
             assert_eq!(px(&img, w, 64, 36), GREEN, "msaa {msaa}: new rect");
         }
+    }
+
+    /// CPU pixel writes (snow) are an overlay: a 4:3-only task drawn with
+    /// `fb_overlay` keeps the margins (and `filled`) instead of blacking them.
+    #[test]
+    fn overlay_keeps_margins() {
+        let Some(mut r) = renderer(1, Widescreen::Aspect(16.0 / 9.0)) else {
+            eprintln!("no GPU adapter; skipped");
+            return;
+        };
+        let (w, h) = (128, 72);
+        r.set_fb_size((w, h));
+        let full = [0.0, 0.0, 320.0, 240.0];
+        r.fb_draw(1, &rect(full, [0.0, 0.0, 1.0], Wide::Stretch([0.0, 320.0])));
+        let small = rect([150.0, 100.0, 170.0, 140.0], [0.0, 1.0, 0.0], Wide::Fixed);
+        r.fb_apply(&FbOp::Pixels {
+            fb: 1,
+            frame: Arc::new(small),
+        });
+        let img = r.fb_read_rgba(1).unwrap();
+        assert_eq!(px(&img, w, 2, 36), BLUE, "margin kept");
+        assert_eq!(px(&img, w, 125, 36), BLUE, "margin kept");
+        assert_eq!(px(&img, w, 64, 36), GREEN, "overlay drawn");
     }
 
     /// Present letterboxes the target into the window; resizing the

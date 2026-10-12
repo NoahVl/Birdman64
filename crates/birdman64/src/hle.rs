@@ -444,8 +444,7 @@ impl Hle {
     }
 
     /// A finished `frame` drawn into framebuffer `fb` (N64 address): onto
-    /// the GPU target when rendering, and queued for the sink. Shared by
-    /// [`Self::on_gfx_task`] and [`Self::fb_pixels`].
+    /// the GPU target when rendering, and queued for the sink.
     fn submit(&mut self, fb: u32, frame: Arc<Frame>) {
         if let Some(renderer) = self.gpu.as_mut() {
             DUMP_RENDER.time(|| renderer.fb_draw(fb, &frame));
@@ -455,6 +454,18 @@ impl Hle {
                 fb,
                 frame: frame.clone(),
             });
+        }
+        self.touch(fb);
+    }
+
+    /// [`Self::submit`] for CPU pixel writes ([`Self::fb_pixels`]): an
+    /// overlay that keeps the target's widescreen margins.
+    fn submit_overlay(&mut self, fb: u32, frame: Arc<Frame>) {
+        if let Some(renderer) = self.gpu.as_mut() {
+            DUMP_RENDER.time(|| renderer.fb_overlay(fb, &frame));
+        }
+        if self.sink.is_some() {
+            self.ops.push(FbOp::Pixels { fb, frame });
         }
         self.touch(fb);
     }
@@ -480,8 +491,9 @@ impl Hle {
     pub fn fb_pixels(&mut self, fb_raw: u32, idx: &[u32], color: u16) {
         let mut mem = VecMemory::default();
         let dl = pw64_gfx::pixels::fill_pixels_dl(&mut mem, fb_raw, idx, color);
-        let frame = self.snow_interp.run(&mem, dl);
-        self.submit(fb_key(fb_raw as usize), Arc::new(frame));
+        let mut frame = self.snow_interp.run(&mem, dl);
+        pw64_gfx::pixels::place_in_view(&mut frame);
+        self.submit_overlay(fb_key(fb_raw as usize), Arc::new(frame));
     }
 
     /// Marks `fb` as changed since it was last latched.

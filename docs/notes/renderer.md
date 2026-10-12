@@ -434,7 +434,9 @@ covering/cropping the bar rows):
   projection-relative, independent of bars/Hor+. Keep it that way: a wider photo would show things scoring
   never considered.
 - Per-object projections (dobj `unk34 & 2`) stay 4:3 (as Hor+). Snow (snow.c: fb indexes, x ±150, z −102..112
-  around row 120) stays inside the old view (possible follow-up: snow.c.patch z bounds −119..120 with fill).
+  around row 120 = the 10..310 × 8..222 view) is drawn as an overlay task (`fb_overlay`: keeps the margins
+  and `filled`) whose flakes are `Stretch`ed from that view onto the output (`pixels::place_in_view`; rows only
+  onto a `filled` fb). Snow is screen-space noise (200 px focal, not the projection), so the stretch is invisible.
 - Game logic: searched `viewY0/1`, `gGfxViewY*`, `SUBSCREEN_*`, `clipY*`, `camera->aspect` (written, never read):
   only clears/fades/bars, culling, snow, the gyro reticle (projection-based), camera near-probe
   (`camera_802D4514`, collision), photo scoring (projection-based). Nothing reads what the bars hide. Low risk.
