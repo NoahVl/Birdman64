@@ -553,17 +553,22 @@ Code: `crates/birdman64/src/settings.rs` (overlay + nav + config write), hooks i
 
 ## Switch 2 (BLE) row on the Controls page
 
-- `Opt::Ble` row on the Controls page (after the split-screen section, still
+- `Opt::Ble` row on the Controls page (after the gamepad reset, still
   above Back): "Switch 2 controllers (Bluetooth): On/Off (experimental)". Live like Volume: `change` calls `ble::set_enabled`; staged as `SavedSettings::ble` → `[input.ble] enabled` (default false removed, empty `[input.ble]` dropped).
 - Env precedent: locked (disabled row, no toggle, never saved) when `ble::locked_by()` is `PW64_BLE` (env wins) or `PW64_NO_INPUT` (BLE unavailable); the status lines say why. Status lines under the row: `ble_status_lines`, redrawn every overlay frame.
 - Disabled rows now also scroll into view when nav selects them (`opt_row`), else the last-row BLE lock was invisible.
 - Check: `PW64_SETTINGS_SHOT=200 PW64_WIN_SHOT=1 PW64_SETTINGS_KEYS=Down,Enter,Up,Up[,Enter] PW64_DATA_DIR=<scratch>` (Up from the first Controls row wraps to Back). Without `PW64_NO_INPUT`, Enter really starts a BLE scan.
 
-## Split-screen rows on the Controls page (SS-UI)
+## Split-screen page (SS-UI)
+
+- Own page (`Page::Split`; Main row `Row::SplitScreen` between Controls and Display &
+  graphics). It used to sit at the bottom of Controls under ~30 bind rows: hard to reach
+  with a pad, and layout/rules aren't controls. Order: Split, P2 controller, Assign
+  player 2, Split layout, Pilots collide, Share best score, Back.
 
 - `Opt::Split` (live: `input::request_split`, applied at the game's next menu state; stages `input::split_wanted()`; → `[splitscreen] enabled`) and
   `Opt::P2Input` (live while split-screen runs via `input::set_p2`; greyed while staged
-  Split is Off; → `[splitscreen] p2_input`), between the gamepad reset and the BLE row.
+  Split is Off; → `[splitscreen] p2_input`).
 - `Opt::Collisions` "Pilots collide" (live: `pw64_game::set_split_collide`, read at each
   test start; greyed while staged Split is Off; → `[splitscreen] collisions`).
 - `Opt::SplitLayout` "Split layout" Top / bottom | Side by side (same live/greyed model via
@@ -574,7 +579,7 @@ Code: `crates/birdman64/src/settings.rs` (overlay + nav + config write), hooks i
 - Fade-in scroll gotcha (fixed): a nav move on the overlay's first frame queued its scroll
   into the still-fading (tiny) panel and the one-shot `follow_sel` was lost; it is now
   consumed only after `FADE_FOLLOW` (500 ms).
-- Screenshot: `PW64_SETTINGS_SHOT=300 PW64_SETTINGS_KEYS=Down,Enter,Up
+- Screenshot: `PW64_SETTINGS_SHOT=300 PW64_SETTINGS_KEYS=Down,Down,Enter
   PW64_DATA_DIR=<scratch>` → `tmp/win_settings.png` (window run: not with
   `PW64_MAX_RETRACES`, which implies headless; kill the process after the shot).
 - "Assign player 2" row (`Row::P2Assign`, under the P2 controller row; greyed while staged Split is Off): confirm arms `input::start_source_capture` (gilrs press -> `Gamepad(Some(name))`, `name#k` when several connected pads share the name, in the same `ButtonPressed` arm as the Bind capture; BLE press = button edge vs the published `s.ble` in the poll loop -> `Ble`; key via `on_key` -> `Keyboard`); `apply_p2` restages `p2_choices`/`p2_sel` + live `set_p2`, same 5 s timeout as Bind captures.

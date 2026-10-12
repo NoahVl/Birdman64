@@ -114,7 +114,7 @@ enum Row {
     Bind(Kind, usize),
     /// Reset one input kind to its defaults (Controls page).
     Reset(Kind),
-    /// Controls: capture the next pad / BLE press (or any key) as player 2's
+    /// Split-screen page: capture the next pad / BLE press (or any key) as player 2's
     /// input ("Assign player 2…", directly under the Player-2 controller
     /// row). Greyed while the staged Split value is off.
     P2Assign,
@@ -126,6 +126,8 @@ enum Row {
     ResetGraphics,
     /// Open the Controls page (Main page).
     Controls,
+    /// Open the Split-screen page (Main page).
+    SplitScreen,
     /// Leave a sub-page (back to Main).
     Back,
     /// Main: open the save/data folder in the file manager (U15).
@@ -145,13 +147,15 @@ enum Kind {
 }
 
 /// The overlay pages (U2): Main ("Paused": Resume / Controls / Display &
-/// graphics / Volume), Graphics (display + picture quality) and Controls
-/// (rebinding). B / Escape on a sub-page goes back to Main.
+/// graphics / Volume), Graphics (display + picture quality), Controls
+/// (rebinding) and Split (two players: player 2's input, layout, rules).
+/// B / Escape on a sub-page goes back to Main.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
     Main,
     Graphics,
     Controls,
+    Split,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,20 +182,20 @@ enum Opt {
     /// Switch 2 pads over Bluetooth LE (`ble.rs`, Controls page): live,
     /// switches the scanner on/off without a restart.
     Ble,
-    /// Split-screen, two players on one screen (Controls page): live, the
+    /// Split-screen, two players on one screen (Split-screen page): live, the
     /// game switches in its next menu state that holds no test (same switch
     /// as the main menu's Players item).
     Split,
-    /// Which input method drives player 2 in split-screen (Controls page):
+    /// Which input method drives player 2 in split-screen (Split-screen page):
     /// live while split-screen runs (`input::set_p2`).
     P2Input,
-    /// Split-screen pilot collisions (Controls page): live from the next
+    /// Split-screen pilot collisions (Split-screen page): live from the next
     /// test start (`pw64_game::set_split_collide`, read at each test start).
     Collisions,
-    /// Split-screen "Share best score" (Controls page): live, read when the
+    /// Split-screen "Share best score" (Split-screen page): live, read when the
     /// results close (`pw64_game::set_split_share`).
     ShareScores,
-    /// Split-screen view layout, top/bottom or left/right (Controls page):
+    /// Split-screen view layout, top/bottom or left/right (Split-screen page):
     /// live from the next test start (`pw64_game::set_split_layout`).
     SplitLayout,
 }
@@ -226,6 +230,9 @@ const REVERT: Duration = Duration::from_secs(10);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the Quit row stays armed ("Press again to quit", U3).
 const QUIT_ARM: Duration = Duration::from_secs(3);
+/// How long the Assign-player-2 row confirms a just-applied assignment
+/// ("Player 2 now uses: …") before naming the current controller again.
+const P2_ASSIGN_CONFIRM: Duration = Duration::from_secs(4);
 /// A nav move scrolls the selected row into view for this long after the
 /// overlay opens: the panel fades in over egui's animation time, and a
 /// scroll queued on the first (still tiny, invisible) frame — nav keys fed
@@ -391,6 +398,10 @@ pub struct Overlay {
     /// A player-2 assignment capture in progress ("Assign player 2", None:
     /// idle).
     p2_capture: Option<P2Capture>,
+    /// The last successful player-2 assignment (`apply_p2`): when it was
+    /// applied and its row label, so the Assign row can confirm it for a few
+    /// seconds (`None`: nothing applied since the last capture armed).
+    p2_assigned: Option<(Instant, String)>,
     /// Red line for a rejected key ("reserved") or a timed-out pad capture.
     capture_error: Option<String>,
     /// Window scale factor (physical px per egui point) times the UI zoom
@@ -484,6 +495,7 @@ impl Overlay {
             monitor_hz: None,
             capture: None,
             p2_capture: None,
+            p2_assigned: None,
             capture_error: None,
             ppp: 1.0,
             events: Vec::new(),
@@ -843,6 +855,10 @@ impl Overlay {
                 self.p2_choices.len() - 1
             }
         };
+        // Confirmation for the Assign row (a few seconds of "Player 2 now
+        // uses: …" after the capture).
+        self.p2_assigned =
+            Some((Instant::now(), self.p2_choices[self.p2_sel].label.clone()));
         // Live: while split-screen runs, the routing changes at once (else
         // it is kept for the next switch-on).
         input::stage_p2(p2);
@@ -1106,6 +1122,7 @@ impl Overlay {
             Page::Main => "Paused",
             Page::Controls => "Controls",
             Page::Graphics => "Display & graphics",
+            Page::Split => "Split-screen",
         };
         // The wide Controls page (U9): with room for both, the binding list
         // scrolls on the left and the controller drawing sits fixed on the
@@ -1182,6 +1199,7 @@ impl Overlay {
             Page::Main => vec![
                 Row::Resume,
                 Row::Controls,
+                Row::SplitScreen,
                 Row::Graphics,
                 Row::Opt(Opt::Volume),
                 // U26: pause when the window goes to the background.
@@ -1234,20 +1252,24 @@ impl Overlay {
                         .map(|i| Row::Bind(Kind::Gamepad, i)),
                 );
                 rows.push(Row::Reset(Kind::Gamepad));
-                // Split-screen (2 players): on/off and player 2's
-                // controller are live.
-                rows.push(Row::Opt(Opt::Split));
-                rows.push(Row::Opt(Opt::P2Input));
-                rows.push(Row::P2Assign);
-                rows.push(Row::Opt(Opt::Collisions));
-                rows.push(Row::Opt(Opt::ShareScores));
-                rows.push(Row::Opt(Opt::SplitLayout));
                 // Switch 2 pads over Bluetooth (experimental), under the
                 // controller section.
                 rows.push(Row::Opt(Opt::Ble));
                 rows.push(Row::Back);
                 rows
             }
+            // Split-screen (2 players), all live: on/off, player 2's
+            // controller ("Assign player 2" directly under it), the layout
+            // and the two rules.
+            Page::Split => vec![
+                Row::Opt(Opt::Split),
+                Row::Opt(Opt::P2Input),
+                Row::P2Assign,
+                Row::Opt(Opt::SplitLayout),
+                Row::Opt(Opt::Collisions),
+                Row::Opt(Opt::ShareScores),
+                Row::Back,
+            ],
         }
     }
 
@@ -1281,6 +1303,7 @@ impl Overlay {
             Page::Main => {
                 self.text_row(ui, at(Row::Resume), "Resume game");
                 self.text_row(ui, at(Row::Controls), "Controls \u{203a}");
+                self.text_row(ui, at(Row::SplitScreen), "Split-screen \u{203a}");
                 self.text_row(ui, at(Row::Graphics), "Display & graphics \u{203a}");
                 self.opt_row(ui, at(Row::Opt(Opt::Volume)), Opt::Volume);
                 self.opt_row(ui, at(Row::Opt(Opt::PauseBackground)), Opt::PauseBackground);
@@ -1414,20 +1437,25 @@ impl Overlay {
                 );
                 self.text_row(ui, kb.len() + 1 + gp.len(), "Reset gamepad to defaults");
                 ui.add_space(4.0);
-                // Split-screen (2 players): on/off and player 2's
-                // controller are live.
-                ui.strong("Split-screen");
-                self.opt_row(ui, at(Row::Opt(Opt::Split)), Opt::Split);
-                self.opt_row(ui, at(Row::Opt(Opt::P2Input)), Opt::P2Input);
-                self.p2_assign_row(ui, at(Row::P2Assign));
-                self.opt_row(ui, at(Row::Opt(Opt::Collisions)), Opt::Collisions);
-                self.opt_row(ui, at(Row::Opt(Opt::ShareScores)), Opt::ShareScores);
-                self.opt_row(ui, at(Row::Opt(Opt::SplitLayout)), Opt::SplitLayout);
-                ui.add_space(4.0);
                 self.opt_row(ui, at(Row::Opt(Opt::Ble)), Opt::Ble);
                 // What BLE is doing right now (redrawn every overlay frame).
                 for line in ble_status_lines(crate::ble::locked_by(), &crate::ble::status()) {
                     ui.weak(egui::RichText::new(line).size(14.0));
+                }
+                ui.add_space(4.0);
+                self.text_row(ui, at(Row::Back), "\u{2039} Back");
+            }
+            Page::Split => {
+                if let Some(e) = &self.capture_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, e);
+                    ui.add_space(2.0);
+                }
+                for row in self.rows() {
+                    match row {
+                        Row::Opt(o) => self.opt_row(ui, at(row), o),
+                        Row::P2Assign => self.p2_assign_row(ui, at(row)),
+                        _ => {}
+                    }
                 }
                 ui.add_space(4.0);
                 self.text_row(ui, at(Row::Back), "\u{2039} Back");
@@ -1514,8 +1542,23 @@ impl Overlay {
         } else if !self.split {
             self.disabled_row(ui, i, "Assign player 2\u{2026}");
         } else {
-            self.text_row(ui, i, "Assign player 2\u{2026}");
+            self.text_row(ui, i, &self.p2_assign_text());
         }
+    }
+
+    /// The Assign row's idle text while split-screen is on: a just-applied
+    /// assignment confirms itself for a few seconds ("Player 2 now uses:
+    /// …"), otherwise the row names player 2's current controller.
+    fn p2_assign_text(&self) -> String {
+        if let Some((at, label)) = &self.p2_assigned
+            && at.elapsed() < P2_ASSIGN_CONFIRM
+        {
+            return format!("Player 2 now uses: {label}");
+        }
+        format!(
+            "Assign player 2\u{2026} ({})",
+            self.p2_choices[self.p2_sel].label
+        )
     }
 
     /// A plain selectable row (Resume / the sub-page rows / Back): same look
@@ -1832,6 +1875,7 @@ impl Overlay {
             },
             Row::Resume => self.show = false,
             Row::Controls => self.enter_page(Page::Controls, Row::Controls),
+            Row::SplitScreen => self.enter_page(Page::Split, Row::SplitScreen),
             Row::Graphics => self.enter_page(Page::Graphics, Row::Graphics),
             // U15: the save/data folder in the OS file manager.
             Row::OpenSaveFolder => crate::paths::open_in_file_manager(crate::paths::data_dir()),
@@ -1876,6 +1920,8 @@ impl Overlay {
             Row::P2Assign => {
                 input::start_source_capture();
                 self.capture_error = None;
+                // A new capture replaces the confirmation message at once.
+                self.p2_assigned = None;
                 self.p2_capture = Some(P2Capture {
                     started: Instant::now(),
                 });
@@ -2034,7 +2080,7 @@ impl Overlay {
             | Row::OpenSaveFolder
             | Row::RestartNow => {}
             // Neither do Resume / the page-open rows / Reset to defaults.
-            Row::Resume | Row::Graphics | Row::ResetGraphics => {}
+            Row::Resume | Row::Graphics | Row::SplitScreen | Row::ResetGraphics => {}
         }
     }
 
@@ -2689,6 +2735,7 @@ fn help(row: Row) -> &'static str {
         Row::Graphics => "Fullscreen, widescreen, frame rate and picture quality.",
         Row::ResetGraphics => "Puts every option on this page back to its default.",
         Row::Controls => "See and change keyboard and controller buttons.",
+        Row::SplitScreen => "Two players on one screen: player 2's controller, layout and rules.",
         Row::Back => "Back to the previous page.",
         Row::Quit => "Closes Birdman64. Progress since the game last saved is lost.",
         Row::OpenSaveFolder => {
@@ -3272,22 +3319,23 @@ mod tests {
     #[test]
     fn rows_pages_and_controls_row() {
         let mut o = Overlay::new();
-        // Main: Resume, the two sub-pages, Volume, the background-pause
+        // Main: Resume, the three sub-pages, Volume, the background-pause
         // row, Open save folder, Quit (U2, U3, U15, U26).
         let rows = o.rows();
-        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.len(), 8);
         assert_eq!(rows[0], Row::Resume);
         assert_eq!(rows[1], Row::Controls);
-        assert_eq!(rows[2], Row::Graphics);
-        assert_eq!(rows[3], Row::Opt(Opt::Volume));
-        assert_eq!(rows[4], Row::Opt(Opt::PauseBackground));
-        assert_eq!(rows[5], Row::OpenSaveFolder);
-        assert_eq!(rows[6], Row::Quit);
+        assert_eq!(rows[2], Row::SplitScreen);
+        assert_eq!(rows[3], Row::Graphics);
+        assert_eq!(rows[4], Row::Opt(Opt::Volume));
+        assert_eq!(rows[5], Row::Opt(Opt::PauseBackground));
+        assert_eq!(rows[6], Row::OpenSaveFolder);
+        assert_eq!(rows[7], Row::Quit);
         // Confirm on Display & graphics opens the Graphics page: the
         // eleven graphics options (incl. Show FPS, U25), the two OLED care
         // rows, Reset to defaults, and Back (no restart-pending change yet,
         // so no banner row, U16).
-        o.sel = 2;
+        o.sel = 3;
         o.confirm();
         assert_eq!(o.page, Page::Graphics);
         let rows = o.rows();
@@ -3312,13 +3360,13 @@ mod tests {
         assert_eq!(o.rows()[o.sel], Row::Graphics);
         // Confirm on Controls opens the Controls page with the two binding
         // grids in the U9 order (game controls first, unused slots last:
-        // 18 keyboard + reset, 11 gamepad + reset), the split-screen rows
-        // (SS-UI), the Switch 2 (BLE) row and Back.
+        // 18 keyboard + reset, 11 gamepad + reset), the Switch 2 (BLE) row
+        // and Back.
         o.sel = 1;
         o.confirm();
         assert_eq!(o.page, Page::Controls);
         let rows = o.rows();
-        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 5 + 1 + 1 + 1);
+        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 1 + 1);
         assert_eq!(rows[0], Row::Bind(Kind::Keyboard, 0));
         // The unused keyboard slots (L, the D-pad) moved last, after the
         // stick rows.
@@ -3330,20 +3378,34 @@ mod tests {
         assert_eq!(rows[25], Row::Bind(Kind::Gamepad, 3));
         assert_eq!(rows[29], Row::Bind(Kind::Gamepad, 10));
         assert_eq!(rows[30], Row::Reset(Kind::Gamepad));
-        // The split-screen section sits above the Bluetooth row (SS-UI);
-        // "Assign player 2" sits directly under the Player-2 controller row.
-        assert_eq!(rows[31], Row::Opt(Opt::Split));
-        assert_eq!(rows[32], Row::Opt(Opt::P2Input));
-        assert_eq!(rows[33], Row::P2Assign);
-        assert_eq!(rows[34], Row::Opt(Opt::Collisions));
-        assert_eq!(rows[35], Row::Opt(Opt::ShareScores));
-        assert_eq!(rows[36], Row::Opt(Opt::SplitLayout));
-        assert_eq!(rows[37], Row::Opt(Opt::Ble));
-        assert_eq!(rows[38], Row::Back);
-        o.sel = 38;
+        assert_eq!(rows[31], Row::Opt(Opt::Ble));
+        assert_eq!(rows[32], Row::Back);
+        o.sel = 32;
         o.confirm();
         assert_eq!(o.page, Page::Main);
         assert_eq!(o.rows()[o.sel], Row::Controls);
+        // Confirm on Split-screen opens its own page: on/off, player 2's
+        // controller with "Assign player 2" directly under it, the layout,
+        // the two rules, and Back.
+        o.sel = 2;
+        o.confirm();
+        assert_eq!(o.page, Page::Split);
+        assert_eq!(
+            o.rows(),
+            [
+                Row::Opt(Opt::Split),
+                Row::Opt(Opt::P2Input),
+                Row::P2Assign,
+                Row::Opt(Opt::SplitLayout),
+                Row::Opt(Opt::Collisions),
+                Row::Opt(Opt::ShareScores),
+                Row::Back,
+            ]
+        );
+        o.sel = 6;
+        o.confirm();
+        assert_eq!(o.page, Page::Main);
+        assert_eq!(o.rows()[o.sel], Row::SplitScreen);
     }
 
     /// The Switch 2 controllers row: reachable by navigation (it sits
@@ -3360,24 +3422,9 @@ mod tests {
         o.sel = back;
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));
-        // Through the split-screen section to the gamepad reset (SS-UI).
-        o.move_sel(-1);
-        assert_eq!(o.rows()[o.sel], Row::Opt(Opt::SplitLayout));
-        o.move_sel(-1);
-        assert_eq!(o.rows()[o.sel], Row::Opt(Opt::ShareScores));
-        o.move_sel(-1);
-        assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Collisions));
-        o.move_sel(-1);
-        assert_eq!(o.rows()[o.sel], Row::P2Assign);
-        o.move_sel(-1);
-        assert_eq!(o.rows()[o.sel], Row::Opt(Opt::P2Input));
-        o.move_sel(-1);
-        assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Split));
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Reset(Kind::Gamepad));
-        for _ in 0..7 {
-            o.move_sel(1);
-        }
+        o.move_sel(1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));
         let (name, value, hint) = o.row_text(Opt::Ble);
         assert_eq!(
@@ -3472,7 +3519,7 @@ mod tests {
     #[test]
     fn split_rows_stage_cycle_and_save() {
         let mut o = Overlay::new();
-        o.page = Page::Controls;
+        o.page = Page::Split;
         o.split = false;
         let snap = o.staged_settings();
         let pos = |o: &Overlay, r: Row| o.rows().iter().position(|&x| x == r).unwrap();
@@ -3559,7 +3606,7 @@ mod tests {
     #[test]
     fn p2_assign_state_machine() {
         let mut o = Overlay::new();
-        o.page = Page::Controls;
+        o.page = Page::Split;
         let pos = |o: &Overlay, r: Row| o.rows().iter().position(|&x| x == r).unwrap();
         assert_eq!(
             pos(&o, Row::P2Assign),
@@ -3589,6 +3636,17 @@ mod tests {
             changed_since(o.staged_settings(), &snap).p2_input.as_deref(),
             Some("keyboard")
         );
+        // The Assign row confirms the new assignment ("Player 2 now uses:
+        // …") for a few seconds, then names the current controller.
+        let (_, label) = o
+            .p2_assigned
+            .as_ref()
+            .expect("keyboard assignment recorded")
+            .clone();
+        assert_eq!(label, "Keyboard");
+        assert_eq!(o.p2_assign_text(), "Player 2 now uses: Keyboard");
+        o.p2_assigned = Some((Instant::now() - Duration::from_secs(5), label));
+        assert_eq!(o.p2_assign_text(), "Assign player 2\u{2026} (Keyboard)");
         // A captured pad whose name no pad matches (it dropped between the
         // press and the apply) keeps its own row, like a saved one would.
         let snap2 = o.staged_settings();
@@ -3796,7 +3854,7 @@ mod tests {
     fn every_row_has_help() {
         let mut o = Overlay::new();
         o.msaa = 4;
-        for page in [Page::Main, Page::Graphics, Page::Controls] {
+        for page in [Page::Main, Page::Graphics, Page::Controls, Page::Split] {
             o.page = page;
             for row in o.rows() {
                 assert!(!help(row).is_empty(), "{row:?} on {page:?} has no help");

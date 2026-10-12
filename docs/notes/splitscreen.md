@@ -84,7 +84,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   (`pw64_results_split`): every view keeps drawing; results.c reads `D_80364210[unk9C=0]`, so
   "Next" on P1's tally swaps each other player's struct in for a Next-only tally, then P1's
   class totals + Retry/Quit (applies to all). Only P1 is saved. Tallies/replays full screen (see Remaining work).
-- **Share best score** (`pw64_split_share`, `[splitscreen] share_scores` / `PW64_SPLIT_SHARE`, Controls row):
+- **Share best score** (`pw64_split_share`, `[splitscreen] share_scores` / `PW64_SPLIT_SHARE`, Split-screen settings page):
   after the tallies, if another player's run total (read back from its entry) beats P1's, `pw64_share_best`
   copies that run's header (bytes before `unk40`) into `D_80364210[0]` and reruns `func_8032B560` with that
   player live and its finish-time `unkA1` (`sPw64TimeUp`; the global may be set by a later time-up).
@@ -224,7 +224,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   present only with split-screen on). `input.rs` keeps a `Pad` per source and `route()`
   splits them by `P2Input` (`[splitscreen] p2_input` / `PW64_P2_INPUT`; default every
   gilrs pad → P2, keyboard → P1). `PW64_INPUT_SCRIPT_P2` drives controller 2. input.md.
-- Settings > Controls: "Split-screen (2 players)" + "Player 2 controller" (both live).
+- Settings > Split-screen: "Split-screen (2 players)" + "Player 2 controller" (both live).
   settings.md.
 - Open: "press a button for player 2" capture; a single Joy-Con held sideways as its own pad.
 
@@ -234,7 +234,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 - **Free flight entry:** a native "Free flight" item in the game's own test menu (split-screen
   only), not a settings toggle. Menu text = our own strings encoded to the game font's glyph
   indices (menu.c items are 16-bit glyph strings); the same helper serves later P2 menus.
-- **Interactions toggle:** a Settings > Controls row next to the split-screen rows (`pw64_split_collide`). On = pilots collide (sphere test → each vehicle's own
+- **Interactions toggle:** a Settings > Split-screen row (`pw64_split_collide`). On = pilots collide (sphere test → each vehicle's own
   hard-impact path, Architecture "Collisions"); off = pass through. Objectives per player either way. Default off.
 - **Layout:** top/bottom (default) and left/right in settings. Deferred: one window per
   player / multi-monitor (`fb_present` already takes a target rect).

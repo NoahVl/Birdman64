@@ -1018,7 +1018,7 @@ pub(crate) fn apply(
             oput("brightness", float(v));
         }
     }
-    // Split-screen (`[splitscreen]`, the settings Controls page): its own
+    // Split-screen (`[splitscreen]`, the settings Split-screen page): its own
     // table.
     if u.splitscreen_enabled.is_some()
         || u.p2_input.is_some()
