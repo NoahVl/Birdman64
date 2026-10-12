@@ -306,6 +306,14 @@ mod tests {
         use pw64_platform::os;
         crate::memmap::map_rdram_window();
         super::load(std::path::Path::new(&path)).unwrap();
+        crate::set_visibility(true, true);
+        // SAFETY: load verified both writable exported globals; boot has
+        // not started, so no game code can concurrently read them.
+        unsafe {
+            assert_eq!(*super::game().infinite_lod, 1);
+            assert_eq!(*super::game().infinite_view_distance, 1);
+        }
+        crate::set_visibility(false, false);
         eprintln!("{}", crate::memmap::check_low_4gb());
         os::boot(super::bootproc, core::ptr::null_mut());
         let err = std::panic::catch_unwind(|| {

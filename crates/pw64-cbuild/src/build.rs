@@ -213,6 +213,8 @@ pub fn link_args(os: Os) -> Vec<String> {
             "-export:bootproc",
             "-export:pw64_widescreen_aspect,DATA",
             "-export:pw64_fill_screen,DATA",
+            "-export:pw64_infinite_lod,DATA",
+            "-export:pw64_infinite_view_distance,DATA",
             "-export:D_802B892C,DATA",
         ]
         .iter()
@@ -685,7 +687,8 @@ pub fn remove_other_keys(out_root: &Path, keep: &Path) {
 /// keeps the -fPIE objects' symbols bound locally).
 const LINUX_VERSION_SCRIPT: &str = "\
 { global: pw64_dll_bind; pw64_dll_abi; pw64_dll_range;
-  bootproc; pw64_widescreen_aspect; pw64_fill_screen; D_802B892C;
+  bootproc; pw64_widescreen_aspect; pw64_fill_screen;
+  pw64_infinite_lod; pw64_infinite_view_distance; D_802B892C;
   local: *; };";
 
 /// Host target of the build ([`Os`] docs: build scripts run on the host).
@@ -956,6 +959,15 @@ fn json_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_exports_visibility_options_on_both_platforms() {
+        let windows = link_args(Os::Windows);
+        for symbol in ["pw64_infinite_lod", "pw64_infinite_view_distance"] {
+            assert!(windows.contains(&format!("-export:{symbol},DATA")));
+            assert!(LINUX_VERSION_SCRIPT.contains(&format!("{symbol};")));
+        }
+    }
 
     #[test]
     fn build_key_is_path_safe_and_touched_by_every_part() {
