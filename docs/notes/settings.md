@@ -1,5 +1,20 @@
 # In-game settings screen
 
+## Optional model detail and whole-island visibility
+
+The Graphics page exposes `Infinite LOD` and `Infinite view distance` as
+independent On/Off restart options, default Off. Close auto-saves the changed
+`[graphics] infinite_lod` / `infinite_view_distance` booleans. The restart banner,
+orange pending values, `Restart now`, reopen-before-restart staging and reset
+to defaults use the same lifecycle as MSAA and widescreen. Restarting from the
+menu clears the two visibility environment overrides so the saved choices apply.
+Explicit environment overrides still win on a fresh launch.
+
+LOD keeps model LOD 0 without disabling texture mipmapping. View distance covers
+terrain bounds with a finite projection and omits the original fog curtain.
+Both can cost frame time; they remain experimental. The menu footer names the
+active controller's physical south/east buttons, including Nintendo B/A.
+
 ## Where files live
 
 All host-side files land in one directory, `paths::data_dir()`

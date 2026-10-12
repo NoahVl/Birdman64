@@ -27,6 +27,16 @@ typedef __SIZE_TYPE__ size_t;
 
 #define PW64_NATIVE 1
 
+/* Native visibility budgets; keep matrix indices inside signed 16 bits. */
+#define PW64_GFX_DL_CAPACITY 65536
+#define PW64_TERRAIN_CAPACITY 1040
+#define PW64_SORT_CAPACITY 4096
+#define PW64_DOBJ_SORT_CAPACITY 128
+extern int pw64_infinite_lod;
+extern int pw64_infinite_view_distance;
+float pw64_visibility_far(const void* chan, float original_far);
+void* pw64_gfx_packet(void* packet);
+
 /* Pointer-width helpers for the pointer patch set (native-build.md §2).
  * The exe, RDRAM window (0x80000000..) and every other address the C sees
  * lie below 4 GB (asserted by pw64_game::memmap), so a 32-bit int holds any

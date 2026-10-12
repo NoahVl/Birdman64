@@ -40,6 +40,8 @@ pub struct Game {
     pub widescreen_aspect: *mut f32,
     /// `pw64_fill_screen` (pw64_widescreen.c): fill screen flag.
     pub fill_screen: *mut i32,
+    pub infinite_lod: *mut i32,
+    pub infinite_view_distance: *mut i32,
     /// `D_802B892C` (memory.c): the sample global memmap checks.
     pub sample_global: *const u32,
     /// `[start, end)` of the module image.
@@ -152,6 +154,8 @@ fn bind_module(h: *mut c_void, path: &Path) -> Result<(), String> {
             ),
             widescreen_aspect: sym(c"pw64_widescreen_aspect")?.cast(),
             fill_screen: sym(c"pw64_fill_screen")?.cast(),
+            infinite_lod: sym(c"pw64_infinite_lod")?.cast(),
+            infinite_view_distance: sym(c"pw64_infinite_view_distance")?.cast(),
             sample_global: sym(c"D_802B892C")?.cast(),
             range,
         };

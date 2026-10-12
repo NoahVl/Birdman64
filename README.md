@@ -197,6 +197,8 @@ vsync = false              # display-paced pacing (less judder, more latency)
 display_mode = "windowed"  # "windowed", "borderless" or "exclusive"
 fullscreen_resolution = "1920x1080@60" # exclusive video mode WxH[@Hz]
 show_fps = false           # frame rate in the window title
+infinite_lod = false       # highest model detail at any distance (restart)
+infinite_view_distance = false # whole-island view without distance fog (restart)
 no_audio = true            # no audio output device
 volume = 0.8               # 0.0..1.0
 
@@ -410,6 +412,15 @@ keeps the port and the C in sync bit-for-bit. See
 compile-time C macros at the bottom are part of the native layer, not
 environment variables):
 
+The experimental **Infinite LOD** and **Infinite view distance** options are in
+the port's **Display & graphics** menu (F10), with independent On/Off values saved
+to `pw64.toml`. Both default to off and take effect on restart; the menu offers
+**Restart now** after a change. Whole-island distance uses a finite far plane covering
+the terrain bounds and omits the original short-distance fog curtain. Test it on
+your hardware before relying on it for regular play. On Linux, the native selector
+and packet-boundary regressions run with
+`python3 crates/pw64-game/tests/visibility.py` (`PW64_ZIG` must point to Zig 0.16.0).
+
 <details>
 <summary>Full PW64_* variable list</summary>
 
@@ -419,6 +430,8 @@ environment variables):
 | `PW64_MAX_RETRACES=<n>` | headless run, stop after n frames (implies headless) |
 | `PW64_NO_THROTTLE=1` | skip idle time between frames |
 | `PW64_NO_INPUT=1` | no gamepad thread |
+| `PW64_INFINITE_LOD=1` | experimental: keep geometric model LOD 0 at every distance; texture mipmapping stays enabled |
+| `PW64_INFINITE_VIEW_DISTANCE=1` | experimental: extend terrain views to cover the island and keep models beyond their final LOD cutoff |
 | `PW64_TRACE_OS=1` | log OS-core thread events |
 | `PW64_INPUT_SCRIPT=<file>` | scripted controller input |
 | `PW64_DUMP_FRAMES=<n\|r1,r2..>` | dump frames to `tmp/frame_<retrace>.png` |

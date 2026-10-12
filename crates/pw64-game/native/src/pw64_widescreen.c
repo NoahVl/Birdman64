@@ -23,6 +23,10 @@ float pw64_widescreen_aspect = 0.0f;
  * (pw64_game::set_fill_screen). */
 int pw64_fill_screen = 0;
 
+/* Set before boot by pw64_game::set_visibility, for static/dynamic builds. */
+int pw64_infinite_lod = 0;
+int pw64_infinite_view_distance = 0;
+
 /* 1 once a filled world view was drawn this frame; reset at the top of
  * uvGfxBegin (graphics.c.patch), read by the border bars. */
 int pw64_fill_frame = 0;

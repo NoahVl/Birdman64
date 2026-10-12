@@ -396,6 +396,12 @@ pub fn run_game(
     audio::install(); // audio tasks → pw64-audio HLE, AI → cpal (audio.rs)
     pw64_game::set_widescreen_aspect(opts::widescreen().unwrap_or(0.0));
     pw64_game::set_fill_screen(opts::fill_screen());
+    let infinite_lod = opts::infinite_lod();
+    let infinite_view_distance = opts::infinite_view_distance();
+    pw64_game::set_visibility(infinite_lod, infinite_view_distance);
+    eprintln!(
+        "[visibility] infinite LOD={infinite_lod}, whole-island distance={infinite_view_distance}"
+    );
     os::boot(pw64_game::bootproc, std::ptr::null_mut());
     let cfg = os::RunConfig {
         max_retraces: std::env::var("PW64_MAX_RETRACES")

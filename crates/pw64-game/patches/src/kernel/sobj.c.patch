@@ -1,0 +1,20 @@
+--- a/src/kernel/sobj.c
++++ b/src/kernel/sobj.c
+@@ -83,10 +83,16 @@
+     s32 i;
+     f32* lodRadius;
+ 
++    if (uvmd->lodCount == 0) {
++        return 0xFF;
++    }
++    if (pw64_infinite_lod) {
++        return 0;
++    }
+     lodRadius = uvmd->lodRadius;
+     lodCount = uvmd->lodCount;
+     if (lodRadius[lodCount - 1] <= dist) {
+-        return 0xFF;
++        return pw64_infinite_view_distance ? lodCount - 1 : 0xFF;
+     }
+ 
+     for (i = lodCount; i > 0; i--) {

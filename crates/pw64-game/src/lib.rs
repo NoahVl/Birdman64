@@ -36,6 +36,25 @@ unsafe extern "C" {
     static mut pw64_widescreen_aspect: f32;
     /// native/src/pw64_widescreen.c: fill screen, 0 = off.
     static mut pw64_fill_screen: i32;
+    static mut pw64_infinite_lod: i32;
+    static mut pw64_infinite_view_distance: i32;
+}
+
+/// Optional model LOD and whole-island view distance. Call on the game
+/// thread before boot; changing the globals during rendering is unsupported.
+pub fn set_visibility(infinite_lod: bool, infinite_view_distance: bool) {
+    // SAFETY: the game thread is the only reader and has not booted yet.
+    #[cfg(feature = "static")]
+    unsafe {
+        pw64_infinite_lod = infinite_lod as i32;
+        pw64_infinite_view_distance = infinite_view_distance as i32;
+    }
+    // SAFETY: same globals exported by the loaded game module, before boot.
+    #[cfg(feature = "dylib")]
+    unsafe {
+        *dylib::game().infinite_lod = infinite_lod as i32;
+        *dylib::game().infinite_view_distance = infinite_view_distance as i32;
+    }
 }
 
 /// Hor+ widescreen for the C side: widens the CPU culling frustum of the

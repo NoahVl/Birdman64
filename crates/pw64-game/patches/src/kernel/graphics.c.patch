@@ -1,6 +1,15 @@
 --- a/src/kernel/graphics.c
 +++ b/src/kernel/graphics.c
-@@ -102,9 +102,9 @@ void uvGfxInit(void) {
+@@ -28,7 +28,7 @@
+ u32 gGfxBoundTexture;
+ u8* gGfxFbPtrs[2];
+ u8* D_80299278;
+-Gfx gGfxDisplayListBase[2][4200];
++Gfx gGfxDisplayListBase[2][PW64_GFX_DL_CAPACITY];
+ uvGfxViewport_t gGfxViewports[4];
+ s16 gGfxViewX0;
+ s16 gGfxViewX1;
+@@ -102,9 +102,9 @@
      gGfxNumTxtLoads[0] = gGfxNumTxtLoads[1] = 0;
      gGfxNumMtxLoads[0] = gGfxNumMtxLoads[1] = 0;
      gGfxNumMtxLoadMults[0] = gGfxNumMtxLoadMults[1] = 0;
@@ -13,25 +22,40 @@
      gGfxFbIndex = 0;
      gGfxDisplayListHead = gGfxDisplayListBase[gGfxFbIndex];
      gGfxFbCurrPtr = gGfxFbPtrs[gGfxFbIndex];
-@@ -125,6 +125,7 @@ void uvGfxInit(void) {
-     gGfxTaskOutputBufferEnd = gGfxTaskOutputBufferStart + TASK_OUTPUT_BUFFER_SIZE;
+@@ -126,6 +126,7 @@
  }
-
+ 
  void uvGfxBegin(void) {
 +    pw64_fill_frame = 0;
      if (gGfxBeginFlag == TRUE) {
          _uvDebugPrintf("uvGfxBegin: 2 calls in a row.  Must call uvGfxEnd first\n");
          return;
-@@ -577,7 +577,7 @@ void uvGfxEnd(void) {
+@@ -532,8 +533,7 @@
+     Mtx4F temp;
+ 
+     if (gGfxNumLooks >= UV_GFX_NUM_LOOKS) {
+-        _uvDebugPrintf("too many looks\n");
+-        return;
++        pw64_fatal("native look-at capacity exceeded", gGfxNumLooks);
+     }
+ 
+     uvMat4InvertTranslationRotation(&temp, &gGfxLookTransform);
+@@ -577,10 +577,10 @@
      gGfxBeginFlag = FALSE;
      gDPFullSync(gGfxDisplayListHead++);
      gSPEndDisplayList(gGfxDisplayListHead++);
 -    gGfxElementCount = (gGfxDisplayListHead - (gGfxDisplayListBase[gGfxFbIndex]));
+-
+-    if (gGfxElementCount >= 4200) {
+-        _uvDebugPrintf("display list overflow %d / %d\n", gGfxElementCount, 4200);
 +    gGfxElementCount = (s32)(gGfxDisplayListHead - (gGfxDisplayListBase[gGfxFbIndex]));
- 
-     if (gGfxElementCount >= 4200) {
-         _uvDebugPrintf("display list overflow %d / %d\n", gGfxElementCount, 4200);
-@@ -592,7 +592,7 @@ void uvGfxEnd(void) {
++
++    if (gGfxElementCount > PW64_GFX_DL_CAPACITY) {
++        pw64_fatal("native display list overflow", gGfxElementCount);
+         return;
+     }
+     gGfxTaskPtr->framebuffer = gGfxFbPtrs[gGfxFbIndex];
+@@ -592,7 +592,7 @@
      task->t.type = M_GFXTASK;
      task->t.flags = 0;
      task->t.ucode_boot = (u64*)rspbootTextStart;
@@ -40,7 +64,7 @@
      task->t.ucode = (u64*)gspF3DEX_fifoTextStart;
      task->t.ucode_data = (u64*)gspF3DEX_fifoDataStart;
      task->t.ucode_size = SP_UCODE_SIZE;
-@@ -618,7 +618,7 @@ void uvGfxEnd(void) {
+@@ -618,7 +618,7 @@
      gGfxSyncNeeded = TRUE;
      fb = gGfxFbPtrs[gGfxFbIndex ^ 1];
      if (gGfxCallback != NULL) {
@@ -49,11 +73,34 @@
          osWritebackDCache(fb, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(u16));
      }
      gGfxFrameTime[gGfxFbIndex] = (f32)uvClkGetSec(UV_CLKID_GFX);
-@@ -1131,4 +1131,7 @@ void uvCopyFrameBuf(s32 fb_id) {
+@@ -875,9 +875,7 @@
+ void uvGfxMstackPushF(Mtx4F* src) {
+     gGfxMstackIdx++;
+     if (gGfxMstackIdx >= UV_GFX_NUM_MATRICES) {
+-        _uvDebugPrintf("gfx : too many double buffered matrices [%d]\n", gGfxMstackIdx);
+-        gGfxMstackIdx--;
+-        return;
++        pw64_fatal("native matrix capacity exceeded", gGfxMstackIdx);
+     }
+     uvMat4CopyF2L(&gGfxMstack[gGfxFbIndex][gGfxMstackIdx], src);
+ }
+@@ -885,9 +883,7 @@
+ void uvGfxMstackPushL(Mtx src) {
+     gGfxMstackIdx++;
+     if (gGfxMstackIdx >= UV_GFX_NUM_MATRICES) {
+-        _uvDebugPrintf("gfx : too many double buffered matrices [%d]\n", gGfxMstackIdx);
+-        gGfxMstackIdx--;
+-        return;
++        pw64_fatal("native matrix capacity exceeded", gGfxMstackIdx);
+     }
+     uvMat4CopyL(&gGfxMstack[gGfxFbIndex][gGfxMstackIdx], src);
+ }
+@@ -1131,4 +1127,7 @@
      src = gGfxFbPtrs[fb_id];
      dst = gGfxFbPtrs[fb_id ^ 1];
      _uvMediaCopy(dst, src, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(u16));
+-}
 +    // Native: the HLE renderer keeps each framebuffer as a GPU target, not
 +    // in RDRAM; copy those too (pw64-platform headless.rs, renderer.md).
 +    pw64_fb_copy(PW64_U32(dst), PW64_U32(src));
- }
++}

@@ -266,6 +266,23 @@ pub fn fill_screen() -> bool {
     )
 }
 
+/// Experimental visibility switches, read before the game boots.
+pub fn infinite_lod() -> bool {
+    precedence(
+        env_opt("PW64_INFINITE_LOD", "use 0 or 1", parse_vsync),
+        Some(crate::config::get().graphics.infinite_lod),
+        false,
+    )
+}
+
+pub fn infinite_view_distance() -> bool {
+    precedence(
+        env_opt("PW64_INFINITE_VIEW_DISTANCE", "use 0 or 1", parse_vsync),
+        Some(crate::config::get().graphics.infinite_view_distance),
+        false,
+    )
+}
+
 /// The default for `fill_screen` given the widescreen setting.
 pub(crate) fn fill_default(widescreen: Option<f32>) -> bool {
     widescreen.is_some()
