@@ -94,18 +94,31 @@ void* pw64_player_peek(int i, void* addr) {
     return 0;
 }
 
-void pw64_players_sync(void) {
+int pw64_region_count(void) {
+    return sRegionCount;
+}
+
+/* Live bytes of regions [first, end) -> every other slot (one module's
+ * regions, e.g. task.c.patch's objectives after a mid-test taskLoad). */
+void pw64_players_sync_regions(int first, int end) {
     int i, k;
 
+    if (end > sRegionCount) {
+        end = sRegionCount;
+    }
     for (i = 0; i < pw64_players; i++) {
         if (i == pw64_player_cur) {
             continue;
         }
-        for (k = 0; k < sRegionCount; k++) {
+        for (k = first; k < end; k++) {
             Pw64Region* r = &sRegions[k];
             pw64_copy(&sSlots[i][r->off], r->addr, r->size);
         }
     }
+}
+
+void pw64_players_sync(void) {
+    pw64_players_sync_regions(0, sRegionCount);
 }
 
 void pw64_players_init(void) {

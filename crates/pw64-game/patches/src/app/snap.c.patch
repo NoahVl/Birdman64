@@ -24,6 +24,20 @@
 @@ -330,1 +350,1 @@
 -            func_8034B354(0, sp84, &sp78);
 +            func_8034B354(PW64_SNAP_CHAN, sp84, &sp78);
+@@ -420,4 +440,13 @@
+     temp_s1->unk18 = camera->clipX0 * 0.45;
+     temp_s1->unk1C = camera->clipX1 * 0.45;
+     temp_s1->unk20 = camera->clipY1 * 0.45;
+     temp_s1->unk24 = camera->clipY0 * 0.45;
++    if (pw64_level_players > 1) {
++        // PW64 split-screen: the camera's frustum is shaped to its half of
++        // the screen; the album re-renders photos full screen, so store the
++        // single-player 4:3 frustum (cameraInit's, as snapInit's presets).
++        temp_s1->unk18 = -0.4906542f * 0.45;
++        temp_s1->unk1C = 0.4906542f * 0.45;
++        temp_s1->unk20 = 0.35f * 0.45;
++        temp_s1->unk24 = -0.35f * 0.45;
++    }
 @@ -438,1 +458,1 @@
 -                    func_8034B354(0, spFC, &spA8);
 +                    func_8034B354(PW64_SNAP_CHAN, spFC, &spA8);

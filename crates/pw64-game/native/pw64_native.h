@@ -150,6 +150,8 @@ extern int pw64_level_players;
 void pw64_player_register(void* addr, unsigned int size); /* current bytes -> every slot */
 void pw64_player_switch(int i);                           /* no-op if i == cur */
 void pw64_players_sync(void);                             /* live bytes -> every other slot */
+int pw64_region_count(void);                              /* regions registered so far */
+void pw64_players_sync_regions(int first, int end); /* pw64_players_sync for regions [first, end) */
 void* pw64_player_peek(int i, void* addr); /* player i's copy of a registered region (or NULL) */
 #define PW64_REG(sym) pw64_player_register(&(sym), (unsigned int)sizeof(sym))
 /* One per patched file that owns per-player statics; pw64_players_init

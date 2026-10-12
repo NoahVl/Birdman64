@@ -59,8 +59,12 @@
 +void pw64_reg_bonus(void);
 +void pw64_reg_hopper_goals(void);
 +static u8 sPw64OwnObjs; // this player's objectives have their own dobjs
++static s32 sPw64TaskRegFirst; // pw64_reg_task's regions: [first, end)
++static s32 sPw64TaskRegEnd;
 +
 +void pw64_reg_task(void) {
++    s32 first = pw64_region_count();
++
 +    PW64_REG(sPw64OwnObjs);
 +    PW64_REG(D_8035079C);
 +    PW64_REG(D_803507A0);
@@ -73,6 +77,18 @@
 +    pw64_reg_ball_target();
 +    pw64_reg_bonus();
 +    pw64_reg_hopper_goals();
++    if (sPw64TaskRegEnd == 0) { // first registration (later calls add none)
++        sPw64TaskRegFirst = first;
++        sPw64TaskRegEnd = pw64_region_count();
++    }
++}
++
++// PW64 split-screen: after a mid-test taskLoad with player 1 live (the next
++// cannonball target): every other player's objective state becomes a copy of
++// player 1's fresh one, as pw64_players_sync does at test setup, so it clones
++// its own dobjs again on its next pw64_task_player_update (sPw64OwnObjs 0).
++void pw64_task_sync_players(void) {
++    pw64_players_sync_regions(sPw64TaskRegFirst, sPw64TaskRegEnd);
 +}
 +
 +// PW64 split-screen: player i (live) got player 1's objective state (and

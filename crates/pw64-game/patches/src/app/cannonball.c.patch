@@ -110,6 +110,7 @@
 +// (cannonLandedFrame's wait). game.c.patch pw64_cannon_frame_split runs the
 +// frame; the functions below run with the given player live.
 +extern s32 D_8034F858; // code_9A960.c: frame counter (log only)
++void pw64_task_sync_players(void); // task.c.patch
 +static u8 sPw64CbLanded;  // this round's shot has landed and is scored
 +static f32 sPw64CbWait;   // game time its points stay up until
 +static s32 sPw64CbPoints; // its points (TEXT_C_POINTS is one shared string)
@@ -273,6 +274,7 @@
 +        hudInit();
 +        hud_8031A2CC();
 +        taskLoad();
++        pw64_task_sync_players(); // player 1 live: the others' task state as at a test start
 +        windObjLoad();
 +        uvChanTerra(p->unk70->unk22C, arg0->terraId);
 +        uvEnvFunc(arg0->envId, 0, env_802E0CF0);

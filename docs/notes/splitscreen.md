@@ -92,6 +92,8 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   and awards medals; it runs inside `resultMenuChoose`'s Next): called at the end of
   `pw64_results_other_players`, again before the save as a no-op fallback. Check photo on P2's tally
   doesn't save (its results are swapped into `[0]` then).
+  Not for cannonball: its tallies run per target (`pw64_cannon_next_round` → resultHandler) and the
+  results header holds only the last shot, so a rescore mixed P2's shot into P1's saved bests/medals.
   Headless check: no idle/simple script scores on beginner hg/rb/gc 1 (both 0 pts); a temporary
   `unk38 = 40` for P2 at finish gave the score path. Results menus read the stick only (no D-pad).
 - `uvEventRemoveCb` (decomp bug, harmless with 1 player): cleared `unk0[count]`, which for a full list is
@@ -114,6 +116,9 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   the pauser live, so their pad (PW64_CONT) drives it; the choice runs with P1 live. Split
   menu = Continue/Quit (replay_screen.c.patch): "Check map" reloads level + task (P1's
   objectives only, others' copies freed), so it's dropped, as is P1's "Check photos".
+  The decomp's gyro engine/fuel hold (sp40) is P1's; `pw64_pause_gyros` does players 2.. under switch(i).
+  Quit after P1 finished (P2 still flying) saves P1's finished run without a tally: intended (P1 earned
+  it; same as quitting from the results).
 - **P2 start spot** (`pw64_offset_start`): ground starts (start ≤ 3 m above ground) take the
   first of right/left/back/forward at 10 m then 5 m that `db_getgnd` finds unblocked, not
   water/sea and flat (5 probes, 2 m apart, within 0.5 m of the start's ground); air starts
@@ -139,7 +144,8 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   Test setup's start (P1 live) resets all (`PW64_FDR_ALL`).
 - **Photos** (snap.c.patch `pw64_reg_snap`): shutter latches + this test's photos/count are per player
   (setup's `pw64_players_sync` copies P1's fresh `snapInit`); pad reads `PW64_CONT(0)`. Scored at each
-  finish with the player live. Results: each tally's Check photo runs `func_8033E3A8(2)` with that player
+  finish with the player live. `snapPhoto` stores the 4:3 full-screen frustum (not the split-shaped camera
+  clip) in unk18..unk24, since the album re-renders full screen. Results: each tally's Check photo runs `func_8033E3A8(2)` with that player
   live (the kernel's pad 0 = the live player's, so P2 browses with their pad); kept photos go to the
   shared album (`D_80373060`, P1's save file). The viewer renders on channel 0 (fine: full screen then).
 - `hgSoundEvent13` removed the last-registered sound callback (P2's): now removes its own.
@@ -192,6 +198,9 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   RESULTS state). Scoring statics, aim sweep, fly-out camera, wobble (code_60020) registered;
   TEXT_C_POINTS is one shared string: re-formatted per view before each draw. Each cannon dobj
   is owned (same pillar), pilots shared. cbsound removes its own cb. P2 bests are session-only.
+  New target: taskLoad runs with P1 live, then `pw64_task_sync_players` (task.c.patch; region range
+  recorded by `pw64_reg_task`, `pw64_players_sync_regions`) gives the others P1's fresh task state
+  (sPw64OwnObjs 0 → they clone again), as at a test start. Checked: 4 targets × 3 shots, both scored.
 - **Audio** (both mixed; kernel audio_event.c/audio_emitter.c.patch): a handler registered with 0x16 in its list (= vehicle sound) is owned by the live player and runs with its context live; posts in `pw64_evt_scope` i (per-player loops, nested in an owned handler) reach only i's handlers, unscoped ones reach all. World handlers (env, snd) get unscoped posts only.
   Finish/free-flight end: scoped 0x12 + `pw64_evt_mute` bit (blocks 1/0x13/0x16, not 0xD teardown); respawn re-arms crash latches, unmutes, 0x13; mute cleared at the tally.
   Engines are non-positional (always local). Positional emitters use the nearest player's listener (`pw64_listener_set`, P2's pose/camera).

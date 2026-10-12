@@ -785,6 +785,41 @@
 +    return choice;
 +}
 +
++// PW64 split-screen: gameUpdateStateTestUpdate's pause holds player 1's
++// gyrocopter engine (fuel use, unkE8/unkF0) itself; this does the same for
++// players 2.. (hold: save + zero, else restore), each with its state live.
++// After a Quit pw64_level_players is 1 again: the restore does nothing.
++static u8 sPw64PauseFuel[PW64_MAX_PLAYERS];
++static f32 sPw64PauseE8[PW64_MAX_PLAYERS];
++static f32 sPw64PauseF0[PW64_MAX_PLAYERS];
++
++static void pw64_pause_gyros(Unk80362690* arg0, s32 hold) {
++    Unk80362690_Unk0* p = &arg0->unkC[0];
++    GyrocopterData* gc;
++    s32 i;
++
++    for (i = 1; i < pw64_level_players; i++) {
++        pw64_player_switch(i);
++        if (p->veh == VEHICLE_GYROCOPTER) {
++            gc = (GyrocopterData*)p->vehicleData;
++            if (hold) {
++                sPw64PauseFuel[i] = gc->usingFuel;
++                sPw64PauseE8[i] = gc->unkE8;
++                sPw64PauseF0[i] = gc->unkF0;
++                gc->usingFuel = FALSE;
++                gc->unkE8 = 0.0f;
++                gc->unkF0 = 0.0f;
++            } else {
++                gc->usingFuel = sPw64PauseFuel[i];
++                gc->unkE8 = sPw64PauseE8[i];
++                gc->unkF0 = sPw64PauseF0[i];
++            }
++            func_802F50CC(gc);
++        }
++    }
++    pw64_player_switch(0);
++}
++
 +// PW64 split-screen cannonball (cannonball.c.patch): every player shoots
 +// each round at once; the round moves on when all shots are down.
 +void pw64_cannon_own(CannonballData* cbData);
@@ -1054,7 +1089,10 @@
 +    u8* s;
 +    u32 k;
 +
-+    if (!pw64_split_share || arg0->unkA4 || pw64_free_flight) {
++    // Not for cannonball: its tallies run per target (pw64_cannon_next_round)
++    // and its results struct holds only the last shot, so a rescore would
++    // mix player 2's shot into player 1's saved bests/medals.
++    if (!pw64_split_share || arg0->unkA4 || pw64_free_flight || (veh == VEHICLE_CANNONBALL)) {
 +        return;
 +    }
 +    for (i = 1; i < pw64_level_players; i++) {
@@ -1356,11 +1394,13 @@
                  sp4C = sp40->usingFuel;
 @@ -965,3 +1591,3 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
              sndSetMusicState(MUS_STATE_PAUSE_MENU);
++            pw64_pause_gyros(arg0, TRUE); // PW64 split-screen: players 2..
 
 -            switch (func_8032CF28(arg0)) {
 +            switch (pw64_pause_menu(arg0, pw64Pauser)) { // PW64: func_8032CF28, pauser live
 @@ -1005,6 +1589,12 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
              }
++            pw64_pause_gyros(arg0, FALSE); // PW64 split-screen: players 2..
          }
      }
 +    if (pw64Free) { // PW64 free flight: no land-now, no time limit
