@@ -115,6 +115,10 @@ const MAX_QUEUED_OPS: usize = 32;
 pub(crate) struct Gpu {
     pub(crate) window: Arc<Window>,
     surface: wgpu::Surface<'static>,
+    /// Kept for the surface capability check before each reconfigure.
+    adapter: wgpu::Adapter,
+    /// The last reconfigure was skipped (`configure_surface`): log once.
+    surface_unsupported: bool,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     pub(crate) config: wgpu::SurfaceConfiguration,
@@ -351,9 +355,39 @@ impl Gpu {
             // (ms): the only device users are this thread (the game thread's
             // dump renderer is gated off when no dump env vars are set).
             let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-            self.surface.configure(&self.device, &self.config);
+            self.configure_surface();
         }
         rate
+    }
+
+    /// `Surface::configure`, skipped while the adapter can't present to the
+    /// surface. wgpu panics (uncaptured validation error "Surface does not
+    /// support the adapter's queue family") when the capability query fails,
+    /// which happens transiently on hybrid-GPU laptops (iGPU drives the
+    /// panel, dGPU renders) even though the first configure succeeded. A
+    /// skipped configure is retried by `surface_ready` before each redraw
+    /// (Wayland never reports the old configuration as outdated).
+    fn configure_surface(&mut self) {
+        if self.surface.get_capabilities(&self.adapter).formats.is_empty() {
+            if !self.surface_unsupported {
+                eprintln!(
+                    "[window] surface not presentable by {} right now; retrying",
+                    self.adapter.get_info().name
+                );
+            }
+            self.surface_unsupported = true;
+            return;
+        }
+        self.surface_unsupported = false;
+        self.surface.configure(&self.device, &self.config);
+    }
+
+    /// Before a redraw: retries a skipped configure; false = skip this frame.
+    fn surface_ready(&mut self) -> bool {
+        if self.surface_unsupported {
+            self.configure_surface();
+        }
+        !self.surface_unsupported
     }
 }
 
@@ -797,6 +831,8 @@ impl App {
         self.gpu = Some(Gpu {
             window,
             surface,
+            adapter,
+            surface_unsupported: false,
             device,
             queue,
             config,
@@ -967,11 +1003,15 @@ impl App {
         let (Some(g), Some(s)) = (&mut self.gpu, &mut self.rom_screen) else {
             return;
         };
+        if !g.surface_ready() {
+            g.window.request_redraw();
+            return;
+        }
         let tex = match g.surface.get_current_texture() {
             Ok(t) => t,
             Err(wgpu::SurfaceError::Timeout) => return,
             Err(_) => {
-                g.surface.configure(&g.device, &g.config);
+                g.configure_surface();
                 return;
             }
         };
@@ -1003,11 +1043,15 @@ impl App {
         let (Some(g), Some(s)) = (&mut self.gpu, &mut self.setup) else {
             return true;
         };
+        if !g.surface_ready() {
+            g.window.request_redraw();
+            return true;
+        }
         let tex = match g.surface.get_current_texture() {
             Ok(t) => t,
             Err(wgpu::SurfaceError::Timeout) => return true,
             Err(_) => {
-                g.surface.configure(&g.device, &g.config);
+                g.configure_surface();
                 return true;
             }
         };
@@ -1125,11 +1169,17 @@ impl App {
             settings_shot |= self.settings_shot_frame > 0 && !settings::is_open();
         }
         let Some(g) = &mut self.gpu else { return };
+        if !g.surface_ready() {
+            if settings::is_open() {
+                g.window.request_redraw();
+            }
+            return;
+        }
         let tex = match g.surface.get_current_texture() {
             Ok(t) => t,
             Err(e) => {
                 if !matches!(e, wgpu::SurfaceError::Timeout) {
-                    g.surface.configure(&g.device, &g.config);
+                    g.configure_surface();
                 }
                 // W2: while the overlay is open the game is paused (no
                 // Frame events), so only this keeps the overlay alive.
@@ -1428,7 +1478,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(g) = &mut self.gpu {
                     g.config.width = s.width.max(1);
                     g.config.height = s.height.max(1);
-                    g.surface.configure(&g.device, &g.config);
+                    g.configure_surface();
                     g.window.request_redraw();
                 }
             }

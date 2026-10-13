@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux: the game no longer crashes when the window is resized on some
+  hybrid-graphics laptops (for example right after choosing Start game).
+
 ## [1.1.0] - 2026-10-13
 
 ### Added
