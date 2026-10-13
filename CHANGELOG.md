@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Linux (Wayland) with an NVIDIA GPU: the picture no longer freezes on the
   title screen, and the game no longer crashes when the window is resized
   (for example right after choosing Start game).
+- Linux: the first-start ROM tip now names the AppImage (or the birdman64
+  program) instead of Birdman64.exe.
 
 ## [1.1.0] - 2026-10-13
 
