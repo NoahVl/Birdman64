@@ -486,6 +486,29 @@ pub fn present_mode(
     wgpu::PresentMode::AutoVsync
 }
 
+/// The surface's present modes minus the ones known to break here: on a
+/// Wayland window rendered by an NVIDIA GPU (`vendor` 0x10de, seen on a
+/// hybrid laptop under KWin), switching the present mode after the first
+/// configure froze the picture (game and audio kept running), and resizing
+/// while in Mailbox failed `Surface::configure`. Fifo only there:
+/// `present_mode` then always lands on Fifo, which the startup AutoVsync
+/// already is (`same_present_mode`), so the mode never changes; resizes in
+/// Fifo work.
+pub fn usable_present_modes(
+    modes: Vec<wgpu::PresentMode>,
+    wayland: bool,
+    vendor: u32,
+) -> Vec<wgpu::PresentMode> {
+    if wayland && vendor == 0x10de {
+        eprintln!("[opts] Wayland + NVIDIA: Fifo present mode only");
+        return modes
+            .into_iter()
+            .filter(|&m| m == wgpu::PresentMode::Fifo)
+            .collect();
+    }
+    modes
+}
+
 /// How the window shows fullscreen (`PW64_DISPLAY_MODE`, the settings
 /// screen's Display mode row). `PartialOrd`/`Ord` give the settings row its
 /// cycle order.
@@ -620,7 +643,7 @@ mod tests {
     use super::{
         Fps, fill_default, monitor_widescreen_default, parse_aspect, parse_filter, parse_fps,
         parse_tex_filter, parse_vsync, parse_widescreen, precedence, present_mode, present_rate,
-        same_present_mode,
+        same_present_mode, usable_present_modes,
     };
     use pw64_platform::os::vi::PresentRate;
 
@@ -724,6 +747,20 @@ mod tests {
         assert!(same_present_mode(Pm::Mailbox, Pm::Mailbox));
         assert!(!same_present_mode(Pm::AutoVsync, Pm::Mailbox));
         assert!(!same_present_mode(Pm::Fifo, Pm::Immediate));
+        // Wayland + NVIDIA: Fifo only, even when tearing is allowed, so the
+        // present mode never needs a reconfigure there.
+        let nv_wl = usable_present_modes(all_modes.clone(), true, 0x10de);
+        assert_eq!(present_mode(false, true, false, &nv_wl), Pm::Fifo);
+        assert_eq!(present_mode(false, true, true, &nv_wl), Pm::Fifo);
+        assert!(same_present_mode(
+            present_mode(false, false, false, &nv_wl),
+            present_mode(false, true, true, &nv_wl)
+        ));
+        // Other vendors on Wayland, or NVIDIA elsewhere, keep Mailbox.
+        for (wl, vendor) in [(true, 0x1002), (false, 0x10de)] {
+            let modes = usable_present_modes(all_modes.clone(), wl, vendor);
+            assert_eq!(present_mode(false, true, false, &modes), Pm::Mailbox);
+        }
     }
 
     /// Tearing is allowed only when the player asked for more than the
