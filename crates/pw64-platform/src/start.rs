@@ -46,7 +46,11 @@ const TEST_COUNTS: [[i32; 7]; 4] = [
 
 /// Number of tests `class` has for `veh` (0 = combination doesn't exist).
 fn test_count(class: i32, veh: i32) -> i32 {
-    TEST_COUNTS.get(class as usize).and_then(|r| r.get(veh as usize)).copied().unwrap_or(0)
+    TEST_COUNTS
+        .get(class as usize)
+        .and_then(|r| r.get(veh as usize))
+        .copied()
+        .unwrap_or(0)
 }
 
 /// Parses the `PW64_START` value. Class `beginner|a|b|pilot`; vehicle
@@ -89,14 +93,12 @@ pub fn parse(s: &str) -> Result<Start, String> {
             if count == 0 {
                 return Err(format!(
                     "class {} has no {} tests",
-                    CLASS_NAMES[class as usize],
-                    VEHICLE_NAMES[vehicle as usize]
+                    CLASS_NAMES[class as usize], VEHICLE_NAMES[vehicle as usize]
                 ));
             }
             return Err(format!(
                 "class {} {} has tests 1-{count}",
-                CLASS_NAMES[class as usize],
-                VEHICLE_NAMES[vehicle as usize]
+                CLASS_NAMES[class as usize], VEHICLE_NAMES[vehicle as usize]
             ));
         }
     };
@@ -128,7 +130,9 @@ pub fn parse_pilot(s: &str) -> Result<i32, String> {
         "kiwi" => Ok(3),
         "ibis" => Ok(4),
         "robin" | "hooter" => Ok(5),
-        p => Err(format!("unknown pilot `{p}` (lark, goose, hawk, kiwi, ibis, robin)")),
+        p => Err(format!(
+            "unknown pilot `{p}` (lark, goose, hawk, kiwi, ibis, robin)"
+        )),
     }
 }
 

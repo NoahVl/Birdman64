@@ -1070,7 +1070,10 @@ fn assign_pads(
             }
         };
         return match laid_out {
-            Some(v) => (pads.iter().zip(v).map(|(&(id, _), o)| (id, o)).collect(), false),
+            Some(v) => (
+                pads.iter().zip(v).map(|(&(id, _), o)| (id, o)).collect(),
+                false,
+            ),
             None => (pads.iter().map(|&(id, _)| (id, false)).collect(), true),
         };
     }
@@ -1097,7 +1100,11 @@ fn assign_pads(
 
 /// Re-derives `s.owners` for the current pads and player-2 routing.
 fn reassign(s: &mut Sources, p2: Option<&P2Input>) {
-    let pads: Vec<(usize, &str)> = s.gamepads.iter().map(|(id, n, _)| (*id, n.as_str())).collect();
+    let pads: Vec<(usize, &str)> = s
+        .gamepads
+        .iter()
+        .map(|(id, n, _)| (*id, n.as_str()))
+        .collect();
     let (owners, fresh) = assign_pads(&s.owners, &pads, p2, s.p2_fresh);
     s.owners = owners;
     s.p2_fresh = fresh;
@@ -1373,8 +1380,10 @@ pub(crate) fn resolve_p2() -> P2Input {
     match raw {
         None => P2Input::Gamepad(None),
         Some(s) => P2Input::parse(&s).unwrap_or_else(|| {
-            eprintln!("[input] PW64_P2_INPUT={s:?} not understood (use keyboard, gamepad, \
-                gamepad:<name> or ble); using gamepad");
+            eprintln!(
+                "[input] PW64_P2_INPUT={s:?} not understood (use keyboard, gamepad, \
+                gamepad:<name> or ble); using gamepad"
+            );
             P2Input::Gamepad(None)
         }),
     }
@@ -1809,11 +1818,16 @@ pub fn load_script_from_env() {
         }
     }
     if let Some(path) = std::env::var_os("PW64_INPUT_SCRIPT").map(std::path::PathBuf::from) {
-        *SCRIPT.lock().unwrap() = (load_script("PW64_INPUT_SCRIPT", &path).unwrap_or_default(), 0);
+        *SCRIPT.lock().unwrap() = (
+            load_script("PW64_INPUT_SCRIPT", &path).unwrap_or_default(),
+            0,
+        );
     }
     if let Some(path) = std::env::var_os("PW64_INPUT_SCRIPT_P2").map(std::path::PathBuf::from) {
-        *SCRIPT2.lock().unwrap() =
-            (load_script("PW64_INPUT_SCRIPT_P2", &path).unwrap_or_default(), 0);
+        *SCRIPT2.lock().unwrap() = (
+            load_script("PW64_INPUT_SCRIPT_P2", &path).unwrap_or_default(),
+            0,
+        );
     }
 }
 
@@ -1833,11 +1847,7 @@ pub fn script_tick(retrace: u64) {
 
 /// Applies one script's steps now due, logging the changes; returns the pad
 /// when a step became due (so the caller re-publishes).
-fn apply_steps(
-    script: &Mutex<(Vec<ScriptStep>, usize)>,
-    label: &str,
-    retrace: u64,
-) -> Option<Pad> {
+fn apply_steps(script: &Mutex<(Vec<ScriptStep>, usize)>, label: &str, retrace: u64) -> Option<Pad> {
     let mut sc = script.lock().unwrap();
     let (steps, next) = &mut *sc;
     let mut changed = None;
@@ -1987,15 +1997,10 @@ pub fn spawn() {
                                 let g = gilrs.gamepad(ev.id);
                                 let same: Vec<_> = gilrs
                                     .gamepads()
-                                    .filter(|(_, gp)| {
-                                        gp.is_connected() && gp.name() == g.name()
-                                    })
+                                    .filter(|(_, gp)| gp.is_connected() && gp.name() == g.name())
                                     .collect();
-                                let k = same
-                                    .iter()
-                                    .position(|(id, _)| *id == ev.id)
-                                    .unwrap_or(0)
-                                    + 1;
+                                let k =
+                                    same.iter().position(|(id, _)| *id == ev.id).unwrap_or(0) + 1;
                                 let value = pad_value(g.name(), k);
                                 *CAPTURED_SOURCE.lock().unwrap() =
                                     Some(P2Input::Gamepad(Some(value)));
@@ -3006,8 +3011,17 @@ mod tests {
             [pad(CONT_B), pad(CONT_R)]
         );
         // All gamepads, one pad: player 2's (the keyboard is player 1's).
-        let one = sources(&[("Xbox Controller", pad(CONT_B))], IDLE, IDLE, IDLE, Vec::new());
-        assert_eq!(routed(&one, Some(&P2Input::Gamepad(None))), [IDLE, pad(CONT_B)]);
+        let one = sources(
+            &[("Xbox Controller", pad(CONT_B))],
+            IDLE,
+            IDLE,
+            IDLE,
+            Vec::new(),
+        );
+        assert_eq!(
+            routed(&one, Some(&P2Input::Gamepad(None))),
+            [IDLE, pad(CONT_B)]
+        );
     }
 
     /// Exact names beat substrings, and an index only counts exact names.
@@ -3024,9 +3038,18 @@ mod tests {
             Vec::new(),
         );
         let named = |n: &str| P2Input::Gamepad(Some(n.into()));
-        assert_eq!(routed(&s, Some(&named("xbox controller"))), [pad(CONT_B), pad(CONT_R)]);
-        assert_eq!(routed(&s, Some(&named("Xbox Controller#2"))), [pad(CONT_B | CONT_R), IDLE]);
-        assert_eq!(routed(&s, Some(&named("elite"))), [pad(CONT_R), pad(CONT_B)]);
+        assert_eq!(
+            routed(&s, Some(&named("xbox controller"))),
+            [pad(CONT_B), pad(CONT_R)]
+        );
+        assert_eq!(
+            routed(&s, Some(&named("Xbox Controller#2"))),
+            [pad(CONT_B | CONT_R), IDLE]
+        );
+        assert_eq!(
+            routed(&s, Some(&named("elite"))),
+            [pad(CONT_R), pad(CONT_B)]
+        );
     }
 
     /// Two same-name pads: a `#k` name picks the k-th of them (connect
@@ -3081,7 +3104,10 @@ mod tests {
         // P2's pad leaves: P2 idle, P1 keeps id 1 (the bug: it moved to P2).
         let (o, _) = assign_pads(&o, &[(1, x)], Some(&p2), false);
         assert_eq!(o, vec![(1, false)]);
-        assert!(p2_missing(&o, false, &p2), "the hint asks for P2's pad again");
+        assert!(
+            p2_missing(&o, false, &p2),
+            "the hint asks for P2's pad again"
+        );
         // It reconnects as id 2: P2 again.
         let (o, _) = assign_pads(&o, &[(1, x), (2, x)], Some(&p2), false);
         assert_eq!(o, vec![(1, false), (2, true)]);
@@ -3142,7 +3168,10 @@ mod tests {
         assert!(!p2_missing(&[], true, &all), "a P2 script drives player 2");
         assert!(!p2_missing(&[(0, true)], false, &all));
         assert!(p2_missing(&[(0, false)], false, &all), "P2 has no pad");
-        assert!(p2_missing(&[], false, &P2Input::Keyboard), "player 1 has no pad");
+        assert!(
+            p2_missing(&[], false, &P2Input::Keyboard),
+            "player 1 has no pad"
+        );
         assert!(!p2_missing(&[(0, false)], false, &P2Input::Keyboard));
         let named = P2Input::Gamepad(Some("xbox".into()));
         assert!(!p2_missing(&[(0, false), (1, true)], false, &named));
@@ -3182,7 +3211,11 @@ mod tests {
     /// empty names nothing.
     #[test]
     fn pick_p2_pad_cases() {
-        let pads = ["Xbox Controller (Elite)", "Xbox Controller", "Xbox Controller"];
+        let pads = [
+            "Xbox Controller (Elite)",
+            "Xbox Controller",
+            "Xbox Controller",
+        ];
         assert_eq!(pick_p2_pad("xbox controller", &pads), Some(1));
         assert_eq!(pick_p2_pad("Xbox Controller#1", &pads), Some(1));
         assert_eq!(pick_p2_pad("Xbox Controller#2", &pads), Some(2));
@@ -3231,7 +3264,13 @@ mod tests {
     #[test]
     fn route_ble_p2() {
         let _lock = TEST_LOCK.lock().unwrap();
-        let s = sources(&[("Xbox Controller", pad(CONT_B))], pad(CONT_L), IDLE, IDLE, Vec::new());
+        let s = sources(
+            &[("Xbox Controller", pad(CONT_B))],
+            pad(CONT_L),
+            IDLE,
+            IDLE,
+            Vec::new(),
+        );
         assert_eq!(
             route(&s, Some(&P2Input::Ble), true),
             [pad(CONT_B), pad(CONT_L)]

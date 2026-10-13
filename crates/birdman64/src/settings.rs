@@ -859,8 +859,7 @@ impl Overlay {
         };
         // Confirmation for the Assign row (a few seconds of "Player 2 now
         // uses: …" after the capture).
-        self.p2_assigned =
-            Some((Instant::now(), self.p2_choices[self.p2_sel].label.clone()));
+        self.p2_assigned = Some((Instant::now(), self.p2_choices[self.p2_sel].label.clone()));
         // Live: while split-screen runs, the routing changes at once (else
         // it is kept for the next switch-on).
         input::stage_p2(p2);
@@ -2508,10 +2507,7 @@ fn changed_since(s: config::SavedSettings, snap: &config::SavedSettings) -> conf
         ble: keep(s.ble, &snap.ble),
         splitscreen_enabled: keep(s.splitscreen_enabled, &snap.splitscreen_enabled),
         p2_input: keep(s.p2_input, &snap.p2_input),
-        splitscreen_collisions: keep(
-            s.splitscreen_collisions,
-            &snap.splitscreen_collisions,
-        ),
+        splitscreen_collisions: keep(s.splitscreen_collisions, &snap.splitscreen_collisions),
         splitscreen_share: keep(s.splitscreen_share, &snap.splitscreen_share),
         split_layout: keep(s.split_layout, &snap.split_layout),
         keyboard: keep(s.keyboard, &snap.keyboard),
@@ -3448,7 +3444,13 @@ mod tests {
         let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(
             labels,
-            ["All gamepads", "Pad A", "Pad B", "Keyboard", "Switch 2 (Bluetooth)"]
+            [
+                "All gamepads",
+                "Pad A",
+                "Pad B",
+                "Keyboard",
+                "Switch 2 (Bluetooth)"
+            ]
         );
         // Cycling wraps: All gamepads → Pad A → Pad B → Keyboard → Switch 2
         // → All gamepads.
@@ -3493,10 +3495,7 @@ mod tests {
     /// names are unchanged.
     #[test]
     fn p2_choices_duplicate_pads() {
-        let pads = vec![
-            "Xbox Controller".to_string(),
-            "Xbox Controller".to_string(),
-        ];
+        let pads = vec!["Xbox Controller".to_string(), "Xbox Controller".to_string()];
         let all = input::P2Input::Gamepad(None);
         let choices = p2_choices(&pads, &all);
         let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
@@ -3510,10 +3509,7 @@ mod tests {
                 "Switch 2 (Bluetooth)"
             ]
         );
-        assert_eq!(
-            choices[2].input.to_config(),
-            "gamepad:Xbox Controller#2"
-        );
+        assert_eq!(choices[2].input.to_config(), "gamepad:Xbox Controller#2");
         // The first is spelled as the capture spells it: the plain name.
         assert_eq!(choices[1].input.to_config(), "gamepad:Xbox Controller");
         assert_eq!(
@@ -3545,7 +3541,10 @@ mod tests {
         let snap = o.staged_settings();
         let pos = |o: &Overlay, r: Row| o.rows().iter().position(|&x| x == r).unwrap();
         // The staged Split value is what saves; nothing yet.
-        assert_eq!(changed_since(o.staged_settings(), &snap).splitscreen_enabled, None);
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).splitscreen_enabled,
+            None
+        );
         // Toggle the Split row on (confirm cycles it).
         o.sel = pos(&o, Row::Opt(Opt::Split));
         o.confirm();
@@ -3654,7 +3653,9 @@ mod tests {
         assert!(o.p2_capture.is_none());
         assert_eq!(o.p2_choices[o.p2_sel].input, input::P2Input::Keyboard);
         assert_eq!(
-            changed_since(o.staged_settings(), &snap).p2_input.as_deref(),
+            changed_since(o.staged_settings(), &snap)
+                .p2_input
+                .as_deref(),
             Some("keyboard")
         );
         // The Assign row confirms the new assignment ("Player 2 now uses:
@@ -3674,7 +3675,9 @@ mod tests {
         o.apply_p2(input::P2Input::Gamepad(Some("Pad B".into())));
         assert_eq!(o.p2_choices[o.p2_sel].label, "Pad B (not connected)");
         assert_eq!(
-            changed_since(o.staged_settings(), &snap2).p2_input.as_deref(),
+            changed_since(o.staged_settings(), &snap2)
+                .p2_input
+                .as_deref(),
             Some("gamepad:Pad B")
         );
         // A pad capture times out after 5 s, with the red line.

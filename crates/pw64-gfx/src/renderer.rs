@@ -900,7 +900,10 @@ impl Renderer {
         let (st, sb) = (c(ay + sc[1] * u, t, b), c(ay + sc[3] * u, t, b));
         let (sl, sr) = (sl.min(size.0), sr.min(size.0));
         let (st, sb) = (st.min(size.1), sb.min(size.1));
-        (screen, [sl, st, sr.saturating_sub(sl), sb.saturating_sub(st)])
+        (
+            screen,
+            [sl, st, sr.saturating_sub(sl), sb.saturating_sub(st)],
+        )
     }
 
     /// `placement` of a split-screen HUD draw (`DrawCall::split` = its view,
@@ -988,7 +991,10 @@ impl Renderer {
         };
         let (sl, sr) = (sl.min(size.0), sr.min(size.0));
         let (st, sb) = (st.min(size.1), sb.min(size.1));
-        (screen, [sl, st, sr.saturating_sub(sl), sb.saturating_sub(st)])
+        (
+            screen,
+            [sl, st, sr.saturating_sub(sl), sb.saturating_sub(st)],
+        )
     }
 
     /// Renders `frame` into `target` (of this renderer's format and `size`),
@@ -1887,16 +1893,29 @@ mod tests {
         let close = |a: f32, b: f32| (a - b).abs() < 0.01;
         let k = 1.0; // (230 - 16) / 214
 
-        let (s, sc) = place(Widescreen::Off, &draw(Wide::Fixed, Anchor::Left, VAnchor::Top));
+        let (s, sc) = place(
+            Widescreen::Off,
+            &draw(Wide::Fixed, Anchor::Left, VAnchor::Top),
+        );
         assert_eq!(sc, [20, 16, 600, 214], "scissor clipped to the view");
         assert!(close(px(s, 10.0), 20.0) && close(px(s, 27.0), 20.0 + 17.0 * k));
         assert!(close(py(s, 8.0), 16.0) && close(py(s, 18.0), 26.0));
-        let (s, _) = place(Widescreen::Off, &draw(Wide::Fixed, Anchor::Right, VAnchor::Bottom));
+        let (s, _) = place(
+            Widescreen::Off,
+            &draw(Wide::Fixed, Anchor::Right, VAnchor::Bottom),
+        );
         assert!(close(px(s, 310.0), 620.0) && close(py(s, 222.0), 230.0));
-        let (s, _) = place(Widescreen::Off, &draw(Wide::Fixed, Anchor::Centre, VAnchor::Middle));
+        let (s, _) = place(
+            Widescreen::Off,
+            &draw(Wide::Fixed, Anchor::Centre, VAnchor::Middle),
+        );
         assert!(close(px(s, 160.0), 320.0) && close(py(s, 115.0), 123.0));
         // Crash fade (subscreen quad) fills the view.
-        let mut fade = draw(Wide::Stretch([10.0, 310.0]), Anchor::Centre, VAnchor::Middle);
+        let mut fade = draw(
+            Wide::Stretch([10.0, 310.0]),
+            Anchor::Centre,
+            VAnchor::Middle,
+        );
         fade.stretch_y = [8.0, 222.0];
         let (s, sc) = place(Widescreen::Off, &fade);
         assert!(close(px(s, 10.0), 20.0) && close(px(s, 310.0), 620.0));
@@ -1960,7 +1979,11 @@ mod tests {
         let ox: f32 = (854.0 - 480.0 * 16.0 / 9.0) / 2.0;
         let seam: f32 = (854.0 - 640.0) / 2.0 + 159.0 * 2.0;
         assert_eq!(sc[0], ox.round() as u32, "outer edge = output edge");
-        assert_eq!(sc[0] + sc[2], seam.round() as u32, "seam stays at its 4:3 place");
+        assert_eq!(
+            sc[0] + sc[2],
+            seam.round() as u32,
+            "seam stays at its 4:3 place"
+        );
         let pxw = |s: [f32; 4], x: f32| ((x * s[0] + s[1]) + 1.0) / 2.0 * 854.0;
         assert!(close(pxw(s, 10.0), ox));
     }
@@ -1987,8 +2010,13 @@ mod tests {
         assert!(close(px(s, 10.0, 640.0), 20.0) && close(px(s, 159.0, 640.0), 318.0));
         assert!(close(py(s, 8.0), 16.0) && close(py(s, 222.0), 444.0));
         assert_eq!(sc, [20, 16, 298, 428]);
-        let (s, sc) =
-            Renderer::placement(Widescreen::Aspect(16.0 / 9.0), false, &d, (854, 480), [0.0; 2]);
+        let (s, sc) = Renderer::placement(
+            Widescreen::Aspect(16.0 / 9.0),
+            false,
+            &d,
+            (854, 480),
+            [0.0; 2],
+        );
         let ox: f32 = (854.0 - 480.0 * 16.0 / 9.0) / 2.0;
         let seam: f32 = 107.0 + 159.0 * 2.0;
         assert!(close(px(s, 10.0, 854.0), ox) && close(px(s, 159.0, 854.0), seam));
@@ -1999,8 +2027,13 @@ mod tests {
             scissor: [0.0, 0.0, 320.0, 240.0],
             ..d.clone()
         };
-        let (_, sc2) =
-            Renderer::placement(Widescreen::Aspect(16.0 / 9.0), false, &full, (854, 480), [0.0; 2]);
+        let (_, sc2) = Renderer::placement(
+            Widescreen::Aspect(16.0 / 9.0),
+            false,
+            &full,
+            (854, 480),
+            [0.0; 2],
+        );
         assert_eq!(sc2, sc);
     }
 

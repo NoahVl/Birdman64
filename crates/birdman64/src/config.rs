@@ -579,7 +579,12 @@ fn from_table(table: &toml::Table) -> Config {
                     |s| crate::input::parse_split_layout(s).is_some(),
                 );
             }
-            None => ignore(&mut ignored, "splitscreen", v, "must be a [splitscreen] table"),
+            None => ignore(
+                &mut ignored,
+                "splitscreen",
+                v,
+                "must be a [splitscreen] table",
+            ),
         }
     }
 
@@ -1261,7 +1266,10 @@ mod tests {
         assert_eq!(c.splitscreen.layout, None);
         assert_eq!(parse_split_layout("lr"), Some(SplitLayout::LeftRight));
         assert_eq!(parse_split_layout(" TB "), Some(SplitLayout::TopBottom));
-        assert_eq!(parse_split_layout("Left-Right"), Some(SplitLayout::LeftRight));
+        assert_eq!(
+            parse_split_layout("Left-Right"),
+            Some(SplitLayout::LeftRight)
+        );
         assert_eq!(parse_split_layout("x"), None);
         for l in [SplitLayout::TopBottom, SplitLayout::LeftRight] {
             assert_eq!(parse_split_layout(l.to_config()), Some(l));

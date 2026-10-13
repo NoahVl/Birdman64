@@ -380,7 +380,10 @@ static PRESENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1
 /// Sets how many controllers are present (`1..=4`, clamped). Call once
 /// before the game boots (`osContInit` runs once).
 pub fn set_controllers_present(n: u8) {
-    PRESENT.store(n.clamp(1, MAXCONTROLLERS as u8), std::sync::atomic::Ordering::Relaxed);
+    PRESENT.store(
+        n.clamp(1, MAXCONTROLLERS as u8),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 /// Host input (the `pw64` exe's `input` module) publishes controller `n`
