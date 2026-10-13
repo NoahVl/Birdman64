@@ -1,0 +1,113 @@
+--- a/src/app/test_menu.c
++++ b/src/app/test_menu.c
+@@ -65,6 +65,18 @@ u8 testMenuHandler(Unk80367710*);
+ void testMenuDraw(Camera* camera, u8 classIdx, u8 vehIdx);
+ void testMenu_8034A428(void);
+ 
++// PW64 split-screen free flight (splitscreen.md "Free flight"): an extra
++// "Free flight" item in the bottom-right slot (Sample photo's; it replaces
++// that button on the Shutter Bug tests) for the vehicles split-screen
++// supports. Picking it starts the highlighted test's level without
++// objectives (pw64_free_flight, game.c.patch).
++s32 pw64_split_vehicle(s32 veh); // game.c.patch
++static s16 sPw64FreeText[16];
++
++static s32 pw64_free_offered(void) {
++    s32 veh = D_80362690->unkC[D_80362690->unk9C].veh;
++
++    return (pw64_players > 1) && pw64_split_vehicle(veh) && (veh != VEHICLE_SKY_DIVING);
++}
++
+ s32 testMenuMainRender(Unk80362690_Unk0* arg0, Unk80367710* arg1) {
+     Camera* camera;
+     u8 classIdx;
+@@ -74,6 +86,7 @@ s32 testMenuMainRender(Unk80362690_Unk0* arg0, Unk80367710* arg1) {
+ 
+     camera = arg0->unk70;
+     vehIdx = arg0->veh;
++    pw64_free_flight = 0; // PW64: set again only by the Free flight item
+     testMenuInit(arg1, D_8037DC84);
+     if (D_8037DC84 != 0) {
+         D_8037DC84 = 0;
+@@ -184,6 +197,36 @@ void testMenuInitText(s32 testIdx) {
+ #define SPRITE_PROP_POS_X2 206
+ #define SPRITE_PROP_POS_X3 64
+ #endif
++
++// PW64 free flight: drawn like the sprite buttons (64x18 at x 206, y 28..46,
++// N64 y up): the sprites' grey face with a light top/left and a two-step
++// dark bottom/right bevel (colours measured off the ROM buttons), bold
++// text (pw64_text.c) with the sprites' grey drop shadow, scaled to fit.
++// Text is queued here and flushed by testMenuDraw's uvFontGenDlist.
++static void pw64_free_draw_button(void) {
++    s32 x0 = SPRITE_PROP_POS_X2;
++    s32 x1 = SPRITE_PROP_POS_X2 + SPRITE_PROP_DIM_X;
++    s32 w;
++    s32 h;
++    s32 tx;
++    s32 ty;
++    f32 scale;
++
++    uvGfxStatePush();
++    uvGfxSetFlags(GFX_STATE_XLU | GFX_STATE_TEXTURE_NONE);
++    uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER | GFX_STATE_CULL_BACK);
++    screenDrawBox(x0, 28, x1, 46, 0x52, 0x52, 0x52, 0xFF);         // outer shadow line
++    screenDrawBox(x0, 29, x1 - 1, 46, 0x73, 0x73, 0x73, 0xFF);     // bottom/right bevel
++    screenDrawBox(x0, 30, x1 - 2, 46, 0xCE, 0xCE, 0xCE, 0xFF);     // top/left highlight
++    screenDrawBox(x0 + 1, 30, x1 - 2, 45, 0x94, 0x94, 0x94, 0xFF); // face
++    uvGfxStatePop();
++    if (sPw64FreeText[0] == 0) {
++        pw64_text_encode_style("Free flight", sPw64FreeText, ARRAY_COUNT(sPw64FreeText), TRUE);
++    }
++    uvFontSet(6);
++    uvFontScale(1.0, 1.0);
++    w = uvFontStr16Width(sPw64FreeText);
++    scale = (w > SPRITE_PROP_DIM_X - 6) ? (f32)(SPRITE_PROP_DIM_X - 6) / w : 1.0f;
++    uvFontScale(scale, 0.7);
++    w = uvFontStr16Width(sPw64FreeText);
++    h = uvFontHeight();
++    // Centred by eye against the sprites: the width includes trailing
++    // spacing, and the font's height its descender room.
++    tx = x0 + (SPRITE_PROP_DIM_X - 1 - w) / 2 + 3;
++    ty = 29 + (14 - h) / 2;
++    uvFontColor(0x6B, 0x6B, 0x6B, 0xFF); // shadow, down-right as on the sprites
++    uvFontPrintStr16(tx + 1, ty - 1, sPw64FreeText, 0xFF, 0xFFE);
++    uvFontColor(0x00, 0x00, 0x00, 0xFF);
++    uvFontPrintStr16(tx, ty, sPw64FreeText, 0xFF, 0xFFE);
++}
++
+ void testMenuInit(Unk80367710* arg0, s32 arg1) {
+     Unk80362690_Unk0* temp_v1;
+ 
+@@ -405,7 +448,7 @@ u8 testMenuHandler(Unk80367710* arg0) {
+         }
+ 
+         if ((sTestMenuState != 2) && (sMenuCurX == 2) && (sMenuCurY == 0)) {
+-            if (!testMenuShutterBug()) {
++            if (!testMenuShutterBug() && !pw64_free_offered()) { // PW64: Free flight
+                 sMenuCurX = menuPrevX;
+                 sMenuCurY = menuPrevY;
+             }
+@@ -524,6 +567,11 @@ u8 testMenuHandler(Unk80367710* arg0) {
+                     sTestMenuState = 2;
+                     break;
+                 case 2:
++                    if (pw64_free_offered()) { // PW64: Free flight, like Start
++                        sndPlaySfx(SFX_UI_TEST_START);
++                        pw64_free_flight = 1;
++                        return sCurTestIdx;
++                    }
+                     sndPlaySfx(SFX_UI_CONFIRM);
+                     func_8033FB14();
+                     testMenu_8034A428();
+@@ -632,7 +680,9 @@ void testMenuDraw(Camera* camera, u8 classIdx, u8 vehIdx) {
+             uvSprtDraw(8);
+         } else {
+             for (var_s0 = 0; var_s0 < 8; var_s0++) {
+-                if ((var_s0 == 4) && (testMenuShutterBug() != 0)) {
++                if ((var_s0 == 4) && pw64_free_offered()) {
++                    pw64_free_draw_button(); // PW64: Free flight in this slot
++                } else if ((var_s0 == 4) && (testMenuShutterBug() != 0)) {
+                     uvSprtDraw(4);
+                 } else if ((var_s0 == 7) && (sp48->veh != VEHICLE_BIRDMAN)) {
+                     uvSprtDraw(7);

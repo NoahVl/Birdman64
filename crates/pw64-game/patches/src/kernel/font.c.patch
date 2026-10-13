@@ -73,7 +73,7 @@
      sFontMsgCount++;
  }
  
-@@ -434,8 +443,17 @@ void uvFontGenDlist(void) {
+@@ -434,8 +443,24 @@ void uvFontGenDlist(void) {
      sFontSprite.rsp_dl_next = &sFontSprite.rsp_dl[(gGfxFbIndex * FONT_DL_COUNT) + D_80248E90];
  
      for (i = 0; i < sFontMsgCount; i++) {
@@ -91,4 +91,11 @@
 +    }
      spFinish(&gGfxDisplayListHead);
      gGfxDisplayListHead--;
++    // PW64 split-screen: two HUDs flush text per frame, and the next flush
++    // started only sFontMsgCount Gfx later (inside this one's sprite
++    // lists), overwriting player 1's text: continue after what was used.
++    if (pw64_level_players > 1) {
++        D_80248E90 = (s32)(sFontSprite.rsp_dl_next - &sFontSprite.rsp_dl[gGfxFbIndex * FONT_DL_COUNT]) -
++                     sFontMsgCount;
++    }
      D_80248E90 += sFontMsgCount;

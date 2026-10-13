@@ -23,10 +23,6 @@ float pw64_widescreen_aspect = 0.0f;
  * (pw64_game::set_fill_screen). */
 int pw64_fill_screen = 0;
 
-/* Set before boot by pw64_game::set_visibility, for static/dynamic builds. */
-int pw64_infinite_lod = 0;
-int pw64_infinite_view_distance = 0;
-
 /* 1 once a filled world view was drawn this frame; reset at the top of
  * uvGfxBegin (graphics.c.patch), read by the border bars. */
 int pw64_fill_frame = 0;
@@ -105,11 +101,66 @@ float pw64_fill_yscale(const void* chan) {
     return k > 1.0f ? k : 1.0f;
 }
 
+/* Output aspect a left/right split view extends into: the widescreen
+ * aspect, 4:3 with fill screen alone (the views reach the 4:3 edges), 0
+ * when neither (the views stay inside the subscreen). Must match the
+ * renderer's split world placement and pw64_split_viewport's frustum. */
+float pw64_split_out_aspect(void) {
+    if (pw64_widescreen_aspect > 0.0f) {
+        return pw64_widescreen_aspect;
+    }
+    return pw64_fill_screen ? 4.0f / 3.0f : 0.0f;
+}
+
+/* Must match pw64-gfx `interp::SPLIT_TAG` ("PWS" + 'X'/'Y'/'0'). */
+#define PW64_SPLIT_TAG 0x50575300u
+
+/* The split-view tag pair for channel `c`'s viewport (top-down rows). */
+static void pw64_split_rect_tag(const UnkStruct_80204D94* c) {
+    gGfxDisplayListHead->words.w0 = ((u32)G_NOOP << 24) | ((u32)c->viewX0 << 12) | (u32)c->viewX1;
+    gGfxDisplayListHead->words.w1 = PW64_SPLIT_TAG | 'X';
+    gGfxDisplayListHead++;
+    gGfxDisplayListHead->words.w0 = ((u32)G_NOOP << 24) | ((u32)(SCREEN_HEIGHT - c->viewY1) << 12) |
+                                    (u32)(SCREEN_HEIGHT - c->viewY0);
+    gGfxDisplayListHead->words.w1 = PW64_SPLIT_TAG | 'Y';
+    gGfxDisplayListHead++;
+}
+
+static void pw64_split_off_tag(void) {
+    gGfxDisplayListHead->words.w0 = (u32)G_NOOP << 24;
+    gGfxDisplayListHead->words.w1 = PW64_SPLIT_TAG | '0';
+    gGfxDisplayListHead++;
+}
+
+/* A left/right split world view (not full width) on a wider output: the
+ * renderer stretches its draws from the outer subscreen edge to the
+ * output's edge (pw64-gfx split world placement; the frustum is that wide,
+ * pw64_split_viewport). The full-screen results view is a plain world
+ * view. Culling follows the camera's own (already wide) frustum. */
+static int pw64_split_world_view(const UnkStruct_80204D94* c) {
+    return pw64_level_players > 1 && pw64_split_lr && pw64_split_out_aspect() > 0.0f &&
+           (c->unk0 & 2 || c->unk2 != 0xFFFF) &&
+           !(c->viewX0 <= 16 && c->viewX1 >= SCREEN_WIDTH - 16);
+}
+
 /* Brackets a channel's draw (on = 1 at the start, 0 at the end) with
  * G_NOOP markers when it is a widened world view or a fill view. RDP NOOPs
  * are harmless on hardware. A fill view marks the frame: the border bars
- * stay off until the next uvGfxBegin. */
+ * stay off until the next uvGfxBegin. A left/right split world view gets
+ * its view rect too (the split tag outside a HUD bracket). */
 void pw64_widescreen_tag(const void* chan, int on) {
+    if (pw64_split_world_view(chan)) {
+        if (!on) {
+            pw64_split_off_tag();
+        }
+        gGfxDisplayListHead->words.w0 = (u32)G_NOOP << 24;
+        gGfxDisplayListHead->words.w1 = on ? PW64_WIDE_TAG_ON : PW64_WIDE_TAG_OFF;
+        gGfxDisplayListHead++;
+        if (on) {
+            pw64_split_rect_tag(chan);
+        }
+        return;
+    }
     if (pw64_widescreen_xscale(chan) <= 1.0f && !pw64_fill_view(chan)) {
         return;
     }
@@ -143,7 +194,7 @@ int pw64_hud_vanchor = 'M';
 #define PW64_VANCHOR_TAG 0x50575600u
 
 void pw64_hud_emit_anchor(int anchor) {
-    if (pw64_widescreen_aspect <= 0.0f) {
+    if (pw64_widescreen_aspect <= 0.0f && pw64_level_players <= 1) {
         return;
     }
     gGfxDisplayListHead->words.w0 = (u32)G_NOOP << 24;
@@ -152,9 +203,10 @@ void pw64_hud_emit_anchor(int anchor) {
 }
 
 /* The vertical anchor matters on a fill view (with or without
- * widescreen: 4:3 + fill shifts HUD rows too). */
+ * widescreen: 4:3 + fill shifts HUD rows too) and in split-screen views
+ * (both anchors: pw64_hud_split_tag). */
 void pw64_hud_emit_vanchor(int anchor) {
-    if (pw64_widescreen_aspect <= 0.0f && !pw64_fill_screen) {
+    if (pw64_widescreen_aspect <= 0.0f && !pw64_fill_screen && pw64_level_players <= 1) {
         return;
     }
     gGfxDisplayListHead->words.w0 = (u32)G_NOOP << 24;
@@ -205,4 +257,27 @@ void pw64_hud_tag(int on) {
     gGfxDisplayListHead->words.w0 = (u32)G_NOOP << 24;
     gGfxDisplayListHead->words.w1 = on ? PW64_HUD_TAG_ON : PW64_HUD_TAG_OFF;
     gGfxDisplayListHead++;
+}
+
+/*
+ * Split-screen HUD (splitscreen.md "HUD per view"). Each player's HUD is
+ * drawn in their channel's callback, still for the full 320x240 screen;
+ * hudMainRender brackets it with this tag carrying the view (the current
+ * player's channel viewport, top-down rows) and the renderer lays the
+ * HUD's subscreen frame out inside it (pw64-gfx `split_placement`: one
+ * uniform scale, each element kept at its L/C/R + T/M/B anchor, which
+ * pw64_hud_emit_anchor/vanchor also emit in split-screen). One tag covers
+ * every draw path (sprites, uvVtx gauges, queued text); the HUD scissor
+ * stays full screen in the display list. Only with 2+ players in the test.
+ */
+
+void pw64_hud_split_tag(int on) {
+    if (pw64_level_players <= 1) {
+        return;
+    }
+    if (!on) {
+        pw64_split_off_tag();
+        return;
+    }
+    pw64_split_rect_tag(&D_80261730[pw64_player_cur]);
 }

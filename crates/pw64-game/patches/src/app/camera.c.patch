@@ -8,7 +8,16 @@
  
  // TODO: Unk802D472C_SP60 needs to be merged with some combination of Unk802D3658_Unk1224/8
  typedef struct {
-@@ -245,10 +246,11 @@ STATIC_FUNC void camera_802D3790(Camera* camera) {
+@@ -27,6 +28,8 @@ s32 pad_D_8034E9E8 = 0;
+ 
+ // .bss
+ Unk803599D0 D_803599D0;
++// PW64 split-screen: hoisted from camera_802D4274 (pw64_reg_camera).
++static f32 D_80359A24;
+ 
+ // forward declarations
+ STATIC_FUNC s32 camera_802D408C(Camera* camera);
+@@ -245,10 +248,11 @@ STATIC_FUNC void camera_802D3790(Camera* camera) {
              var_fv0 = -camera->unk1378;
          }
          temp_fv1_2 = camera->unk1380;
@@ -24,7 +33,15 @@
          }
          camera->unk1380 = var_fv0;
          spA4.z = (-uvSinF(var_fv0 * 0.0174533f) * camera->unk1374) + spBC.z; // almost DEG_TO_RAD(1)
-@@ -955,8 +957,9 @@ STATIC_FUNC void camera_802D559C(Camera* camera) {
+@@ -452,7 +456,6 @@ STATIC_FUNC void camera_802D41D8(Camera* camera) {
+ }
+ 
+ STATIC_FUNC void camera_802D4274(Camera* camera) {
+-    static f32 D_80359A24;
+     Mtx4F sp70; // 70:AF
+     f32 sp6C;
+     f32 sp68;
+@@ -955,8 +958,9 @@ STATIC_FUNC void camera_802D559C(Camera* camera) {
      uvMat4UnkOp6(&camera->unk108, &camera->unk80, &sp48);
      temp_v0 = camera_802D472C(camera, &sp48);
      if (temp_v0 != 0) {
@@ -36,3 +53,106 @@
          uvMat4UnkOp6(&camera->unk108, &camera->unk80, &sp48);
      }
  }
+@@ -1001,3 +1005,63 @@ STATIC_FUNC void camera_802D58EC(Camera* camera, Mtx4F* arg1) {
+     camera->unk220 = func_80313AF4(var_fa0, camera->unk220, 1.0f);
+     uvMat4RotateAxis(arg1, camera->unk220 * 0.01745329f, 'x'); // almost DEG_TO_RAD(1)
+ }
++
++// PW64 split-screen: viewport rect for player `i` of 2, top/bottom or
++// left/right (pw64_split_lr, latched at test start); a 1 px seam between.
++// N64 viewport y runs bottom-up (SUBSCREEN_Y0 is the bottom row).
++void pw64_split_viewport(void* camera, int i) {
++    Camera* cam = camera;
++    s16 mid = (SUBSCREEN_Y0 + SUBSCREEN_Y1) / 2;
++    s16 midx = (SUBSCREEN_X0 + SUBSCREEN_X1) / 2;
++    f32 w, h, aspect, out;
++    if (i < 0) { // back to one view (cameraInit's viewport and frustum)
++        cameraSetViewport(cam, SUBSCREEN_X0, SUBSCREEN_X1, SUBSCREEN_Y0, SUBSCREEN_Y1);
++        cam->clipX0 = -0.4906542f;
++        cam->clipX1 = 0.4906542f;
++        cam->clipY0 = -0.35f;
++        cam->clipY1 = 0.35f;
++        return;
++    }
++    if (pw64_split_lr) {
++        if (i == 0) {
++            cameraSetViewport(cam, SUBSCREEN_X0, midx - 1, SUBSCREEN_Y0, SUBSCREEN_Y1);
++        } else {
++            cameraSetViewport(cam, midx + 1, SUBSCREEN_X1, SUBSCREEN_Y0, SUBSCREEN_Y1);
++        }
++    } else if (i == 0) {
++        cameraSetViewport(cam, SUBSCREEN_X0, SUBSCREEN_X1, mid + 1, SUBSCREEN_Y1);
++    } else {
++        cameraSetViewport(cam, SUBSCREEN_X0, SUBSCREEN_X1, SUBSCREEN_Y0, mid - 1);
++    }
++    // Keep the frustum's shape = the shown view's: the game's 4:3 frustum
++    // is x +/-0.4906542, y +/-0.35 for the 300x214 subscreen. A wider view
++    // keeps x and shrinks y; a taller view keeps y and shrinks x. A
++    // left/right view on a wider output (widescreen or fill) is stretched
++    // by the renderer from its outer subscreen edge (x 10/310) to the
++    // output's edge (N64 x 160 -/+ 120*out): that much wider here.
++    w = cam->viewX1 - cam->viewX0;
++    h = cam->viewY1 - cam->viewY0;
++    out = pw64_split_out_aspect();
++    if (pw64_split_lr && out > 0.0f) {
++        w += 120.0f * out - (SUBSCREEN_X1 - SUBSCREEN_X0) / 2;
++    }
++    aspect = w / h;
++    if (aspect >= 0.4906542f / 0.35f) {
++        cam->clipX1 = 0.4906542f;
++        cam->clipY1 = 0.4906542f / aspect;
++    } else {
++        cam->clipY1 = 0.35f;
++        cam->clipX1 = 0.35f * aspect;
++    }
++    cam->clipX0 = -cam->clipX1;
++    cam->clipY0 = -cam->clipY1;
++}
++
++// PW64 split-screen: the gyro reticle's "107" (code_7CF30.c func_802F6DC8)
++// is the full view's half height, assuming HUD scale 1. The projection's
++// real half height is the uvGfxClipRect guard viewport (view +/-5 px, 58
++// rows for a top/bottom view), and pw64-gfx scales each split HUD by
++// k = min(h/214, w/300) (w with the left/right widening, as in
++// pw64_split_viewport): HUD px per NDC = guard half / k. Full view: 107.
++float pw64_split_reticle_half(void* camera) {
++    Camera* cam = camera;
++    s32 g0, g1;
++    f32 w, h, k, out;
++    if (cam->viewX0 == SUBSCREEN_X0 && cam->viewX1 == SUBSCREEN_X1 &&
++        cam->viewY0 == SUBSCREEN_Y0 && cam->viewY1 == SUBSCREEN_Y1) {
++        return 107.0f;
++    }
++    w = cam->viewX1 - cam->viewX0;
++    h = cam->viewY1 - cam->viewY0;
++    out = pw64_split_out_aspect();
++    if (pw64_split_lr && out > 0.0f) {
++        w += 120.0f * out - (SUBSCREEN_X1 - SUBSCREEN_X0) / 2;
++    }
++    k = h / (SUBSCREEN_Y1 - SUBSCREEN_Y0);
++    if (w / (SUBSCREEN_X1 - SUBSCREEN_X0) < k) {
++        k = w / (SUBSCREEN_X1 - SUBSCREEN_X0);
++    }
++    if (k > 1.0f) {
++        k = 1.0f;
++    }
++    // uvGfxClipRect's guard rows (clamped like it).
++    g0 = cam->viewY0 - 5;
++    if (g0 < 0) {
++        g0 = 0;
++    }
++    g1 = cam->viewY1 + 5;
++    if (g1 > SCREEN_HEIGHT - 1) {
++        g1 = SCREEN_HEIGHT - 1;
++    }
++    return ((g1 - g0) / 2.0f) / k;
++}
++
++// PW64 split-screen: camera-only file state, per player (pw64_players.c).
++// Camera i only runs while player i is live (update and draw pass), so
++// swapping them is the same as indexing them by camera->unk22C.
++void pw64_reg_camera(void) {
++    PW64_REG(D_8034E9E0);
++    PW64_REG(D_8034E9E4);
++    PW64_REG(D_80359A24);
++}

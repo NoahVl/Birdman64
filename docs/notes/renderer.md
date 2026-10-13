@@ -364,6 +364,13 @@ PW64_NO_INPUT=1 PW64_NO_AUDIO=1 PW64_AUDIO_VIRTUAL=1` (host CPU: laptop i7/RTX 3
   `font.c` stores `pw64_hud_anchor` per message and re-emits it there. Anchor back to C after the HUD, so menus,
   briefing and results are untouched.
 
+- **Split-screen HUD** (`DrawCall::split`, `Renderer::split_placement`): G_NOOP "PWS"+`X`/`Y` (rect in w0's
+  low 24 bits: `a<<12|b`, x then top-down rows; `0` = off) tags draws with their view. Non-Extend draws map
+  `Wide::SUBSCREEN` into the view: uniform k = view_h/214 (≤ 1:1) per axis at the `Anchor`/`VAnchor`;
+  `Stretch` fills spanning the subscreen stretch onto the view; full-screen scissors become the view, others
+  move, all clipped to it. The view takes the Hor+ width when it spans `MAIN_VIEW`. `split: None` = old path
+  (stripped from the identity hash like `hud: false`).
+
 ## Fill screen (`PW64_FILL_SCREEN`)
 Option: remove the game's own black bars around world views (flight, demo, replay, title, class summary,
 briefing, results, credits) by showing the 3D there too; HUD moves to the true top/bottom edges. Name it
@@ -427,7 +434,9 @@ covering/cropping the bar rows):
   projection-relative, independent of bars/Hor+. Keep it that way: a wider photo would show things scoring
   never considered.
 - Per-object projections (dobj `unk34 & 2`) stay 4:3 (as Hor+). Snow (snow.c: fb indexes, x ±150, z −102..112
-  around row 120) stays inside the old view (possible follow-up: snow.c.patch z bounds −119..120 with fill).
+  around row 120 = the 10..310 × 8..222 view) is drawn as an overlay task (`fb_overlay`: keeps the margins
+  and `filled`) whose flakes are `Stretch`ed from that view onto the output (`pixels::place_in_view`; rows only
+  onto a `filled` fb). Snow is screen-space noise (200 px focal, not the projection), so the stretch is invisible.
 - Game logic: searched `viewY0/1`, `gGfxViewY*`, `SUBSCREEN_*`, `clipY*`, `camera->aspect` (written, never read):
   only clears/fades/bars, culling, snow, the gyro reticle (projection-based), camera near-probe
   (`camera_802D4514`, collision), photo scoring (projection-based). Nothing reads what the bars hide. Low risk.
@@ -562,6 +571,24 @@ identity tests (`interp_identity`, `render_identity`, all existing placement ass
   (crash cam, replay fade, results, album grid, single photo), skydiving (cloud fade), rocket belt 21:9,
   MSAA 4; fill off 16:9 + 4:3 control. No bars/stale rows in world views at any aspect; HUD at the true
   edges, nothing clipped; fades stretch full height; photos/album unchanged; fill off = the old look.
+
+## Infinite LOD / view distance (`PW64_INFINITE_LOD`, `PW64_INFINITE_VIEW_DISTANCE`)
+- C side only (`native/src/pw64_visibility.c`); both off = the ROM's code paths.
+- **LOD:** `uvDobjGetLODIndex`/`uvSobjGetLODIndex` return 0. Past the last LOD radius a model is
+  culled (0xFF) unless view distance is on, so LOD alone doesn't widen the view. Texture mips stay.
+- **Far plane:** the game's world far is `camera->clipFar` = 2000. `uvChan_80204FE4` swaps the
+  channel's far for one reaching every terrain-bbox corner from the camera (+ `unk24` + 1000)
+  for the draw only and puts the game's back after, so game-logic checks (`uvChan_80204EC0`)
+  keep 2000. Setting it once in `uvChan_80204C94` instead made it grow every frame.
+- **Sea + haze:** the sea is a camera-following UVEN model clipped by that far plane; at 2000 its
+  edge sits well below eye level and `env_802E0CF0`'s fog-coloured band hides it. Removing the
+  band left a hard sea edge and the sea painted over the lower sky; the band now uses the
+  extended far (so it sits at the new horizon), which also keeps the 0.996 fog-factor two-pass
+  terrain split. From ~600 m the far sea now covers what used to be sky: expected.
+- **Budgets** (`pw64_native.h`): worst measured (split, both on, a:rb:1 hovering at 670 m and
+  spinning): 25045 commands, 1247 matrices (over the split-screen 0x400), 73 sort entries.
+- **Cost** (CPU per retrace, same flight, p95): off 0.74 ms, LOD 0.73, distance 4.8, both 9.1;
+  split + both ≈ 16 ms (DL interpretation 2.4 ms/task avg).
 
 ## OLED care (`RenderOptions::oled`)
 - `Oled { brightness: f32, drift: [f32; 2] }`, default (1.0, [0, 0]) =

@@ -146,6 +146,13 @@ pub struct DrawCall {
     /// options (drift + dim) apply to. Ignored when OLED care is off
     /// (default options are bit-identical).
     pub hud: bool,
+    /// Split-screen view rect (N64 px x0, row0, x1, row1; the native game's
+    /// `G_NOOP` "PWS" tags, `interp::SPLIT_TAG`); `None` = full screen.
+    /// With `hud`: a HUD draw laid out into the view
+    /// (`Renderer::split_placement`, `pw64_hud_split_tag`). Without: a
+    /// left/right world view stretched to the output edge
+    /// (`Renderer::split_world_placement`, `pw64_widescreen_tag`).
+    pub split: Option<[f32; 4]>,
 }
 
 /// Horizontal HUD anchor in widescreen: a `Wide::Fixed` draw is shifted by
@@ -222,6 +229,9 @@ impl Wide {
     /// view's rows (8..222), the replay fades (7..223) and the sky clip box
     /// (3..227).
     pub const MAIN_VIEW_Y: [f32; 2] = [10.0, 220.0];
+    /// The flight HUD's layout frame (N64 px x0, row0, x1, row1): the
+    /// overscan-inset subscreen. Split-screen maps it into each view.
+    pub const SUBSCREEN: [f32; 4] = [10.0, 8.0, 310.0, 222.0];
 }
 
 /// One processed display list.

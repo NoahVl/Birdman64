@@ -1,0 +1,201 @@
+--- a/src/kernel/audio_event.c
++++ b/src/kernel/audio_event.c
+@@ -9,6 +9,56 @@
+ EventCallbackInfo D_8025C5A0;
+ EventCallbackInfo D_8025C5A8;
+ 
++// PW64 split-screen (pw64_native.h "sound events"): owning player + 1 per
++// callback slot, 0 = shared (snd.c, env_sound.c). A vehicle sound handler
++// (its event list has 0x16, which no world handler takes) belongs to the
++// player live at registration. A post made in player i's scope reaches
++// only player i's handlers; an unscoped post reaches every handler (a
++// muted player's only for teardown-type events). An owned handler runs
++// with its player live and in its scope, so what it posts (a crash's 0x12)
++// stays with that player.
++static u8 sPw64UserOwner[36][4]; // events up to 35 index past D_8025BF00[30]
++static u8 sPw64SysOwner[ARRAY_COUNT(D_8025C3F0)][10];
++int pw64_evt_scope = -1;
++unsigned int pw64_evt_mute;
++
++static void pw64_evt_call(EventCallbackInfo* e, u8 owner, s32 scope, s32 event, s32 data) {
++    s32 p = owner - 1;
++    s32 prevCur;
++    s32 prevScope;
++
++    if (pw64_level_players < 2) {
++        e->cb(event, e->arg, data);
++        return;
++    }
++    if (owner == 0) {
++        if (scope < 0) {
++            e->cb(event, e->arg, data);
++        }
++        return;
++    }
++    // Muted: no frame update, crash check or unmute; teardown (0xD) still runs.
++    if ((p >= pw64_level_players) || ((scope >= 0) && (scope != p)) ||
++        ((pw64_evt_mute & (1u << p)) && ((event == 1) || (event == 0x13) || (event == 0x16)))) {
++        return;
++    }
++    prevCur = pw64_player_cur;
++    prevScope = pw64_evt_scope;
++    pw64_player_switch(p);
++    pw64_evt_scope = p;
++    e->cb(event, e->arg, data);
++    pw64_evt_scope = prevScope;
++    pw64_player_switch(prevCur);
++}
++
++void pw64_evt_post_player(int i, int event) {
++    s32 prevScope = pw64_evt_scope;
++
++    pw64_evt_scope = i;
++    uvEventPost(event, 0);
++    pw64_evt_scope = prevScope;
++}
++
+ // forward declarations
+ void uvEvent_80203434(s32, void*, s32);
+ void uvEvent_802035AC(s32, void*, s32);
+@@ -55,7 +105,18 @@
+     SystemEventCallbackInfo* temp_v0;
+     UserEventCallbackInfo* temp_v0_2;
+     va_list args;
++    u8 pw64Owner = 0;
+ 
++    // PW64 split-screen: a vehicle sound handler (takes 0x16) is owned.
++    if (pw64_players > 1) {
++        va_start(args, arg0);
++        while ((temp_a1 = va_arg(args, s32)) < 36) {
++            if (temp_a1 == 0x16) {
++                pw64Owner = (u8)(pw64_player_cur + 1);
++            }
++        }
++        va_end(args);
++    }
+     va_start(args, arg0);
+ 
+     while (TRUE) {
+@@ -66,6 +127,7 @@
+         if (temp_a1 < 5) {
+             temp_v0 = &D_8025C3F0[temp_a1];
+             if (temp_v0->count < 10) {
++                sPw64SysOwner[temp_a1][temp_v0->count] = pw64Owner;
+                 temp_v0->unk0[temp_v0->count] = arg0;
+                 temp_v0->count++;
+             } else {
+@@ -74,6 +136,7 @@
+         } else {
+             temp_v0_2 = &D_8025BF00[temp_a1];
+             if (temp_v0_2->count < 4) {
++                sPw64UserOwner[temp_a1][temp_v0_2->count] = pw64Owner;
+                 temp_v0_2->unk0[temp_v0_2->count] = arg0;
+                 temp_v0_2->count++;
+             } else {
+@@ -88,6 +151,9 @@
+     s32 count;
+     s32 i;
+     EventCallbackInfo sp64[4];
++    u8 pw64Owner[4]; // PW64 split-screen
++    // Frame events (< 5) are never scoped (graphics.c posts them).
++    s32 pw64Scope = (arg0 >= 5) ? pw64_evt_scope : -1;
+ 
+     if (arg0 >= 0x23) {
+         _uvDebugPrintf("unknown event posted\n");
+@@ -99,10 +165,11 @@
+ 
+     for (i = 0; i < count; i++) {
+         sp64[i] = temp_t3->unk0[i];
++        pw64Owner[i] = sPw64UserOwner[arg0][i];
+     }
+ 
+     for (i = 0; i < count; i++) {
+-        sp64[i].cb(arg0, sp64[i].arg, arg1);
++        pw64_evt_call(&sp64[i], pw64Owner[i], pw64Scope, arg0, arg1);
+     }
+ }
+ 
+@@ -135,7 +202,9 @@
+                     for (j = i; j < var_a3->count - 1; j++) {
+                         var_a3->unk0[j].cb = var_a3->unk0[j + 1].cb;
+                         var_a3->unk0[j].arg = var_a3->unk0[j + 1].arg;
++                        sPw64SysOwner[temp_v0][j] = sPw64SysOwner[temp_v0][j + 1];
+                     }
+-                    var_a3->unk0[var_a3->count].cb = NULL;
+-                    var_a3->unk0[var_a3->count].arg = NULL;
++                    // PW64: clear the vacated last slot; [count] of a full list overlaps .count (-> -1).
++                    var_a3->unk0[var_a3->count - 1].cb = NULL;
++                    var_a3->unk0[var_a3->count - 1].arg = NULL;
+                     var_a3->count--;
+@@ -148,7 +217,9 @@
+                     for (j = i; j < var_a1->count - 1; j++) {
+                         var_a1->unk0[j].cb = var_a1->unk0[j + 1].cb;
+                         var_a1->unk0[j].arg = var_a1->unk0[j + 1].arg;
++                        sPw64UserOwner[temp_v0][j] = sPw64UserOwner[temp_v0][j + 1];
+                     }
+-                    var_a1->unk0[var_a1->count].cb = NULL;
+-                    var_a1->unk0[var_a1->count].arg = NULL;
++                    // PW64: as above (full list of 4: unk0[4] is .count).
++                    var_a1->unk0[var_a1->count - 1].cb = NULL;
++                    var_a1->unk0[var_a1->count - 1].arg = NULL;
+                     var_a1->count--;
+@@ -163,16 +234,18 @@
+     s32 count;
+     s32 i;
+     EventCallbackInfo sp64[10];
++    u8 pw64Owner[10]; // PW64 split-screen
+ 
+     temp_t3 = &D_8025C3F0[arg0];
+     count = temp_t3->count;
+ 
+     for (i = 0; i < count; i++) {
+         sp64[i] = temp_t3->unk0[i];
++        pw64Owner[i] = sPw64SysOwner[arg0][i];
+     }
+ 
+     for (i = 0; i < count; i++) {
+-        sp64[i].cb(arg0, sp64[i].arg, arg2);
++        pw64_evt_call(&sp64[i], pw64Owner[i], -1, arg0, arg2);
+     }
+ }
+ 
+@@ -181,16 +254,18 @@
+     s32 count;
+     s32 i;
+     EventCallbackInfo sp64[10];
++    u8 pw64Owner[10]; // PW64 split-screen
+ 
+     temp_t3 = &D_8025C3F0[arg0];
+     count = temp_t3->count;
+ 
+     for (i = 0; i < count; i++) {
+         sp64[i] = temp_t3->unk0[i];
++        pw64Owner[i] = sPw64SysOwner[arg0][i];
+     }
+ 
+     for (i = 0; i < count; i++) {
+-        sp64[i].cb(arg0, sp64[i].arg, arg2);
++        pw64_evt_call(&sp64[i], pw64Owner[i], -1, arg0, arg2);
+     }
+ }
+ 
+@@ -199,16 +274,18 @@
+     s32 count;
+     s32 i;
+     EventCallbackInfo sp64[10];
++    u8 pw64Owner[10]; // PW64 split-screen
+ 
+     temp_t3 = &D_8025C3F0[arg0];
+     count = temp_t3->count;
+ 
+     for (i = 0; i < count; i++) {
+         sp64[i] = temp_t3->unk0[i];
++        pw64Owner[i] = sPw64SysOwner[arg0][i];
+     }
+ 
+     for (i = 0; i < count; i++) {
+-        sp64[i].cb(arg0, sp64[i].arg, arg2);
++        pw64_evt_call(&sp64[i], pw64Owner[i], -1, arg0, arg2);
+     }
+ }
+ 

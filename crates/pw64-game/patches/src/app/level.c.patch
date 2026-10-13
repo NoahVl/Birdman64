@@ -1,6 +1,19 @@
 --- a/src/app/level.c
 +++ b/src/app/level.c
-@@ -277,7 +277,7 @@ LevelObjects* levelLoadMapObjects(u8 mapIdx) {
+@@ -236,6 +236,12 @@ void levelComputeAppend(u8 pilot, u8 vehicle) {
+     } else {
+         uvLevelAppend(var_a2);
+     }
++    // PW64 split-screen: player 2's own pilot (pw64_p2_pilot, picked in
++    // the pilot select's second pass) flies the same vehicle: load that
++    // pilot's models too. The nested call has pilot == pw64_p2_pilot.
++    if ((pw64_players > 1) && (pw64_p2_pilot >= 0) && (pw64_p2_pilot != pilot) && !D_80362690->unkA4) {
++        levelComputeAppend(pw64_p2_pilot, vehicle);
++    }
+ }
+
+ void level_8030BD20(void) {
+@@ -277,7 +283,7 @@ LevelObjects* levelLoadMapObjects(u8 mapIdx) {
      LevelObjects* temp;
      u8 tmp8;
  
@@ -9,7 +22,7 @@
      temp = &sLevelObjects;
      uvMemSet((void*)temp, 0, sizeof(LevelObjects));
      sLevelObjects.dataWOBJ = sLevelWOBJ;
-@@ -293,28 +293,37 @@ LevelObjects* levelLoadMapObjects(u8 mapIdx) {
+@@ -293,28 +299,37 @@ LevelObjects* levelLoadMapObjects(u8 mapIdx) {
              for (i = 0; i < temp->countESND; i++) {
                  _uvMediaCopy(&esnd, srcPtr, sizeof(esnd));
                  srcPtr += sizeof(esnd);

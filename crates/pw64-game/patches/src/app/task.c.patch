@@ -1,6 +1,229 @@
 --- a/src/app/task.c
 +++ b/src/app/task.c
-@@ -596,7 +596,7 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
+@@ -304,7 +304,18 @@ void taskLoad(void) {
+     D_803507A4 = 0;
+ }
+
++void pw64_task_deinit_player(void); // PW64 split-screen, below
++
+ void taskDeinitLevel(void) {
++    s32 pw64I;
++
++    // PW64 split-screen: free the other players' objective dobjs too (a
++    // no-op for a player whose objectives are already deinit).
++    for (pw64I = 1; pw64I < pw64_players; pw64I++) {
++        pw64_player_switch(pw64I);
++        pw64_task_deinit_player();
++    }
++    pw64_player_switch(0);
+     taskDeinit();
+     thermDeinit();
+     windDeinit();
+@@ -393,6 +404,167 @@ s32 taskFrameUpdate(Mtx4F* arg0, f32 arg1) {
+     return sp18;
+ }
+ 
++// PW64 split-screen: taskFrameUpdate in two halves (game.c.patch, used only
++// with 2 players; one player keeps calling taskFrameUpdate). World ticks
++// run once per frame (else they'd advance twice and consume RNG twice);
++// called with player 1 live, so effects, smoke and ambient sound follow
++// player 1's pose. Balls are per player (pw64_task_player_update).
++// Each player's hawk (falco.c.patch) ticks here with that player live,
++// also while it is finished or on the results screen, like the original.
++void pw64_task_world_update(Mtx4F* arg0, f32 arg1) {
++    s32 pw64Cur = pw64_player_cur;
++    s32 i;
++
++    therm_8034695C();
++    wind_8034D548();
++    env_802E15F0();
++    if (sFalcoCount > 0) { // this task has a hawk
++        for (i = 0; i < pw64_level_players; i++) {
++            pw64_player_switch(i);
++            falcoFrameUpdate();
++        }
++        pw64_player_switch(pw64Cur);
++    }
++    func_802EB424(arg0, arg1);
++    envSoundFrameUpdate(arg0);
++}
++
++// PW64 split-screen: per-player objectives. Every objective module's hit
++// state is a registered region (pw64_reg_task), so each player passes
++// rings / pops balls / ... of their own copy; each copy has its own dobjs
++// (pw64_task_setup_player), owned by that player: drawn only in that
++// player's view and collided with only by that player (pw64_dobj_owner).
++// Photos and hawks are per player too (snap.c.patch pw64_reg_snap, falco.c.patch).
++// Not per player: teleports (task_803456D8 moves the shared terra: player 1 only).
++void pw64_rings_clone(void);
++void pw64_falco_clone(void);
++void pw64_reg_falco(void);
++void pw64_env_sound_player(Mtx4F* arg0);
++void pw64_balls_clone(void);
++void pw64_targets_clone(void);
++void pw64_hover_pads_clone(void);
++void pw64_ball_target_clone(void);
++void pw64_bonus_clone(void);
++void pw64_hopper_goals_clone(void);
++void pw64_reg_rings(void);
++void pw64_reg_balls(void);
++void pw64_reg_targets(void);
++void pw64_reg_hover_pads(void);
++void pw64_reg_ball_target(void);
++void pw64_reg_bonus(void);
++void pw64_reg_hopper_goals(void);
++static u8 sPw64OwnObjs; // this player's objectives have their own dobjs
++static s32 sPw64TaskRegFirst; // pw64_reg_task's regions: [first, end)
++static s32 sPw64TaskRegEnd;
++
++void pw64_reg_task(void) {
++    s32 first = pw64_region_count();
++
++    PW64_REG(sPw64OwnObjs);
++    PW64_REG(D_8035079C);
++    PW64_REG(D_803507A0);
++    PW64_REG(D_803507A4);
++    PW64_REG(D_80362690->unkA0); // objectives active (cleared when all done)
++    pw64_reg_rings();
++    pw64_reg_balls();
++    pw64_reg_targets();
++    pw64_reg_hover_pads();
++    pw64_reg_ball_target();
++    pw64_reg_bonus();
++    pw64_reg_hopper_goals();
++    pw64_reg_falco();
++    if (sPw64TaskRegEnd == 0) { // first registration (later calls add none)
++        sPw64TaskRegFirst = first;
++        sPw64TaskRegEnd = pw64_region_count();
++    }
++}
++
++// PW64 split-screen: after a mid-test taskLoad with player 1 live (the next
++// cannonball target): every other player's objective state becomes a copy of
++// player 1's fresh one, as pw64_players_sync does at test setup, so it clones
++// its own dobjs again on its next pw64_task_player_update (sPw64OwnObjs 0).
++void pw64_task_sync_players(void) {
++    pw64_players_sync_regions(sPw64TaskRegFirst, sPw64TaskRegEnd);
++}
++
++// PW64 split-screen: player i (live) got player 1's objective state (and
++// dobj ids) from pw64_players_sync at test setup; give it its own dobjs.
++// Runs from player i's first pw64_task_player_update, before its first
++// draw pass (sPw64OwnObjs comes from player 1, who never clones: 0).
++static void pw64_task_setup_player(void) {
++    pw64_rings_clone();
++    pw64_balls_clone();
++    pw64_targets_clone();
++    pw64_hover_pads_clone();
++    pw64_ball_target_clone();
++    pw64_bonus_clone();
++    pw64_hopper_goals_clone();
++    pw64_falco_clone();
++}
++
++// PW64 split-screen: taskDeinit for a player other than player 1: only the
++// per-player modules (snap state is shared, player 1's).
++void pw64_task_deinit_player(void) {
++    u16 veh;
++
++    veh = D_80362690->unkC[D_80362690->unk9C].veh;
++    if (D_8035079C != 0) {
++        ringsDeinit();
++        ballsDeinit();
++        targetsDeinit();
++        hoverPadDeinit();
++        ballTgtDeinit();
++        falcoDeinit();
++        func_802FB518();
++        if ((veh != VEHICLE_CANNONBALL) && (veh != VEHICLE_SKY_DIVING)) {
++            bonusDeinit();
++        }
++        D_8035079C = 0;
++    }
++}
++
++// PW64 split-screen: the current player's checks (taskFrameUpdate's
++// per-player half). Landing pads write the current player's results
++// (func_8032BE10). A finished ring/ball goal ends the test for player 1
++// only (game.c.patch); other players just keep their D_803507A4.
++s32 pw64_task_player_update(Mtx4F* arg0, UNUSED f32 arg1) {
++    u16 veh;
++    s32 sp18;
++    s32 temp_v0;
++
++    veh = D_80362690->unkC[D_80362690->unk9C].veh;
++    sp18 = 0;
++    if ((pw64_player_cur != 0) && !sPw64OwnObjs) {
++        pw64_task_setup_player();
++        sPw64OwnObjs = TRUE;
++    }
++    if (pw64_player_cur != 0) {
++        pw64_env_sound_player(arg0); // player 1's: envSoundFrameUpdate
++    }
++    ballsFrameUpdate();
++    padsFrameUpdate(arg0);
++    targetsFrameUpdate(arg0);
++    hoverPadFrameUpdate(arg0);
++    if ((veh != VEHICLE_CANNONBALL) && (veh != VEHICLE_SKY_DIVING)) {
++        bonusFrameUpdate(arg0);
++    }
++    // The veh write below is the decomp's (it's what the game does); it
++    // would swap a still-flying player 2's vehicle type: player 1 only.
++    if (ballTgtInGoal() == 1) {
++        D_803507A4 = 1;
++        sp18 = 1;
++        if (pw64_player_cur == 0) {
++            D_80362690->unkC[0].veh = VEHICLE_ROCKET_BELT;
++            if (D_80362690->unkC[0].veh != VEHICLE_HANG_GLIDER) {
++                sndSetMusic(BGM_ROCKET_BELT_LAND_OK);
++                sndSetMusicState(MUS_STATE_PLAY_SEQ);
++                func_8033FCD0(D_80362690->unkC[0].veh);
++            }
++        }
++    }
++    if (rings_803243D8(arg0) == 1) {
++        D_803507A4 = 1;
++        sp18 = 1;
++        if (pw64_player_cur == 0) {
++            D_80362690->unkC[0].veh = VEHICLE_ROCKET_BELT;
++            if (D_80362690->unkC[0].veh != VEHICLE_HANG_GLIDER) {
++                sndSetMusic(BGM_ROCKET_BELT_LAND_OK);
++                sndSetMusicState(MUS_STATE_PLAY_SEQ);
++                func_8033FCD0(D_80362690->unkC[0].veh);
++            }
++        }
++    }
++    if ((D_80362690->unkC[D_80362690->unk9C].veh == VEHICLE_JUMBLE_HOPPER) && (func_802FB308(D_80362690->unkC[D_80362690->unk9C].vehicleData) == 1)) {
++        sp18 = 1;
++    }
++    if (pw64_player_cur == 0) {
++        temp_v0 = task_803456D8(arg0);
++        switch (temp_v0) {
++        case 1:
++            taskUpdateState();
++            func_802EDDEC(arg0);
++            break;
++        case 2:
++            func_802EDDEC(arg0);
++            break;
++        }
++    }
++    if ((D_80362690->unkA0 != 0) && (taskGet_80346364() == 3) && (func_8032C080(NULL) != 0)) {
++        D_803507A0 = TRUE;
++        if (pw64_player_cur == 0) {
++            taskDeinit();
++        } else {
++            pw64_task_deinit_player();
++        }
++        D_80362690->unkA0 = 0;
++    }
++    return sp18;
++}
++
+ s32 task_803456D8(Mtx4F* arg0) {
+     LevelTPTS* sp8C;
+     f32 temp_fv0;
+@@ -596,7 +768,7 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
  
      dst = &sTaskObjects;
      sp34 = uvUserFileRead(sTaskUserFileIdxLookup[taskIdx], MEM_ROM_OFFSET);
@@ -9,7 +232,7 @@
      uvMemSet(&sTaskObjects, 0, sizeof(sTaskObjects));
  
      while ((tag = uvFileReadBlock(idx, &size, &data, 2)) != 0) {
-@@ -612,6 +612,15 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
+@@ -612,6 +784,15 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
              break;
          case 'COMM': // 0x434F4D4D
              _uvMediaCopy(&dst->comm, data, sizeof(dst->comm));
@@ -25,7 +248,7 @@
              mem_init();
              dst->dataTPAD = mem_get(dst->comm.countTPAD * sizeof(TaskTPAD));
              dst->dataLPAD = mem_get(dst->comm.countLPAD * sizeof(TaskLPAD));
-@@ -632,51 +641,68 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
+@@ -632,51 +813,68 @@ TaskObjects* taskLoadCommObj(u32 taskIdx) {
              break;
          case 'THER': // 0x54484552
              _uvMediaCopy(dst->dataTHER, data, size);

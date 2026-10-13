@@ -1,0 +1,95 @@
+--- a/src/app/results.c
++++ b/src/app/results.c
+@@ -21,6 +21,25 @@
+ #include "total_results.h"
+
++// PW64 split-screen (game.c.patch): whose tally is shown (0 = player 1);
++// "Next" on player 1's shows the other players' first.
++extern s32 pw64_results_player;
++void pw64_results_other_players(void);
++
++// PW64 split-screen: "PLAYER n" above the tally.
++static void pw64_results_label(void) {
++    static char sLabel[] = "PLAYER 1";
++
++    sLabel[7] = (char)('1' + pw64_results_player);
++    uvFontSet(6);
++    uvFontScale(1.0, 1.0);
++    uvFontColor(0xFA, 0xFA, 0x00, 0xFF);
++    uvFontPrintStr((SCREEN_WIDTH / 2) - (uvFontWidth(sLabel) / 2), 196, sLabel);
++}
++
++// PW64 split-screen: the shown tally's player's film (snap.c state is per
++// player, pw64_reg_snap): their photo count, and Check photo with them
++// live (their photos, vehicle and camera). Kept photos go to the album of
++// the save file (player 1's). No-ops for player 1.
++static s32 pw64_results_photo_count(void) {
++    s32 n;
++
++    pw64_player_switch(pw64_results_player);
++    n = func_8033F62C();
++    pw64_player_switch(0);
++    return n;
++}
++
++static s32 pw64_results_check_photos(void) {
++    s32 kept;
++
++    pw64_player_switch(pw64_results_player);
++    kept = func_8033E3A8(2);
++    pw64_player_switch(0);
++    return kept;
++}
++
+ STATIC_DATA s16 sPtsTally0[8];
+ STATIC_DATA s16 sPtsTally1[8];
+ STATIC_DATA s16 sPtsTally2[8];
+@@ -230,3 +253,3 @@
+-    if (resultListPhoto() && !func_8033F62C()) {
++    if (resultListPhoto() && !pw64_results_photo_count()) {
+         menu_8030B69C(1);
+     }
+@@ -391,9 +416,17 @@ s32 resultMenuChoose(s32 arg0) {
+         case 2:
++            // PW64 split-screen: another player's tally ends here.
++            if (pw64_results_player != 0) {
++                menuDeinit();
++                return GAME_STATE_TEST_DETAILS;
++            }
+             if (D_80362690->unkC[D_80362690->unk9C].unk7B != 0) {
+                 return GAME_STATE_VEHICLE_CLASS_SELECT;
+             }
+             menuDeinit();
++            if (pw64_level_players > 1) {
++                pw64_results_other_players();
++            }
+             if (((unkC->veh != VEHICLE_CANNONBALL) || (unkC->unk8B != 0)) && (unkC->veh != VEHICLE_BIRDMAN)) {
+                 ret = totResultHandler();
+             } else {
+                 ret = GAME_STATE_TEST_DETAILS;
+             }
+             sScreenFadeDuration = 1.5f;
+             break;
+         case 1:
++            // PW64 split-screen: the shown tally's player's own flight (its
++            // recorder, vehicle and full-screen camera); no-op for player 1.
++            pw64_player_switch(pw64_results_player);
+             func_8032C540(D_80362690);
++            pw64_player_switch(0);
+@@ -409,3 +441,3 @@
+         case 0:
+-            if (func_8033E3A8(2) != 0) {
++            // PW64 split-screen: the shown player's photos. Not saved from
++            // another player's tally: its results are swapped into
++            // D_80364210[0] then (the album is saved with player 1's run).
++            if ((pw64_results_check_photos() != 0) && (pw64_results_player == 0)) {
+                 saveFileWrite(unkC->unk8A);
+@@ -557,5 +589,8 @@ void resultDrawTally(s32 arg0) {
+             uvFontPrintStr16(X_TOTAL, Y_TOTAL, sPtsDeductedStr, 4, 0xFFE);
+         }
+     }
++    if (pw64_level_players > 1) {
++        pw64_results_label();
++    }
+     uvFontGenDlist();
+ }

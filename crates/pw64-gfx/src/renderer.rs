@@ -13,8 +13,8 @@
 //!   [`ShaderKey`], textures per content key (with generated mipmaps).
 
 use crate::frame::{
-    DrawCall, DrawUniforms, Frame, N64_HEIGHT, N64_WIDTH, PipelineKey, ShaderKey, ShaderMode,
-    Vertex, Wide,
+    Anchor, DrawCall, DrawUniforms, Frame, N64_HEIGHT, N64_WIDTH, PipelineKey, ShaderKey,
+    ShaderMode, VAnchor, Vertex, Wide,
 };
 use crate::rdp::FinalBlend;
 use crate::shader;
@@ -749,6 +749,14 @@ impl Renderer {
         size: (u32, u32),
         hud_shift: [f32; 2],
     ) -> ([f32; 4], [u32; 4]) {
+        if let Some(view) = d.split {
+            if !d.hud {
+                return Self::split_world_placement(widescreen, fill, d, view, size);
+            }
+            if d.wide != Wide::Extend {
+                return Self::split_placement(widescreen, fill, d, view, size, hud_shift);
+            }
+        }
         let (tw, th) = (size.0 as f32, size.1 as f32);
         let aspect = Self::aspect(widescreen, size);
         let ([ox, _, ow, _], [x0, y0, rw, rh]) = Self::region(size, aspect);
@@ -831,6 +839,162 @@ impl Renderer {
         let c = |v: f32, max: f32| v.round().clamp(0.0, max) as u32;
         let (l, r, t, b) = (c(l, tw), c(r, tw), c(t, th), c(b, th));
         (screen, [l, t, r.saturating_sub(l), b.saturating_sub(t)])
+    }
+
+    /// A split view's target px: (left, right, top, bottom) and the target
+    /// px per N64 px of the 4:3 area. On a wider output (Hor+ or fill) a
+    /// view side on the subscreen's edge (top/bottom views: both, left/right
+    /// views: the outer one) reaches the output area's edge; the other side
+    /// (the seam) and the rows stay at their 4:3 place.
+    fn split_rect(
+        widescreen: Widescreen,
+        fill: bool,
+        view: [f32; 4],
+        size: (u32, u32),
+    ) -> ([f32; 4], f32) {
+        let aspect = Self::aspect(widescreen, size);
+        let ([ox, _, ow, _], [x0, y0, rw, _]) = Self::region(size, aspect);
+        let u = rw / N64_WIDTH;
+        let wide = aspect > 4.0 / 3.0 + 1e-4 || fill;
+        let l = if wide && view[0] <= Wide::MAIN_VIEW[0] {
+            ox
+        } else {
+            x0 + view[0] * u
+        };
+        let r = if wide && view[2] >= Wide::MAIN_VIEW[1] {
+            ox + ow
+        } else {
+            x0 + view[2] * u
+        };
+        ([l, r, y0 + view[1] * u, y0 + view[3] * u], u)
+    }
+
+    /// `placement` of a left/right split world-view draw (`DrawCall::split`
+    /// without `hud`; only tagged on a wider output, `pw64_widescreen_tag`):
+    /// the view's N64 x range is stretched onto its `split_rect` columns
+    /// (outer side to the output's edge), rows 1:1 as in 4:3. The C side
+    /// gave the camera a frustum that wide (`pw64_split_viewport`), so the
+    /// picture is not distorted. The draw's scissor is clipped to the view.
+    fn split_world_placement(
+        widescreen: Widescreen,
+        fill: bool,
+        d: &DrawCall,
+        view: [f32; 4],
+        size: (u32, u32),
+    ) -> ([f32; 4], [u32; 4]) {
+        let (tw, th) = (size.0 as f32, size.1 as f32);
+        let ([l, r, t, b], u) = Self::split_rect(widescreen, fill, view, size);
+        let mx = (r - l) / (view[2] - view[0]).max(1.0);
+        let ax = l - view[0] * mx;
+        // Rows: the 4:3 mapping (`t` is view row 0 + view[1] · u).
+        let ay = t - view[1] * u;
+        let screen = [
+            2.0 * mx / tw,
+            2.0 * ax / tw - 1.0,
+            -2.0 * u / th,
+            1.0 - 2.0 * ay / th,
+        ];
+        let c = |v: f32, lo: f32, hi: f32| v.clamp(lo, hi).round() as u32;
+        let sc = d.scissor;
+        let (sl, sr) = (c(ax + sc[0] * mx, l, r), c(ax + sc[2] * mx, l, r));
+        let (st, sb) = (c(ay + sc[1] * u, t, b), c(ay + sc[3] * u, t, b));
+        let (sl, sr) = (sl.min(size.0), sr.min(size.0));
+        let (st, sb) = (st.min(size.1), sb.min(size.1));
+        (
+            screen,
+            [sl, st, sr.saturating_sub(sl), sb.saturating_sub(st)],
+        )
+    }
+
+    /// `placement` of a split-screen HUD draw (`DrawCall::split` = its view,
+    /// N64 px): the HUD's layout frame (`Wide::SUBSCREEN`, 300×214) is laid
+    /// out inside the view with one uniform scale (the largest that fits
+    /// the view's height and width, at most 1:1) instead of squashing the
+    /// screen into it: top/bottom views scale by height, narrow left/right
+    /// views by width. Each axis keeps
+    /// its anchor (`Anchor` L/C/R, `VAnchor` T/M/B): an element keeps its
+    /// scaled distance to that edge/centre of the view, so the gauges
+    /// spread to the view's corners. Untextured fills spanning the
+    /// subscreen on an axis (`Wide::Stretch`: crash/cloud fades) are
+    /// stretched onto the view on that axis instead. The view itself takes
+    /// the Hor+ width like the world draws it frames (`split_rect`); the
+    /// scissor is clipped to the view.
+    fn split_placement(
+        widescreen: Widescreen,
+        fill: bool,
+        d: &DrawCall,
+        view: [f32; 4],
+        size: (u32, u32),
+        hud_shift: [f32; 2],
+    ) -> ([f32; 4], [u32; 4]) {
+        let (tw, th) = (size.0 as f32, size.1 as f32);
+        let [rx0, ry0, rx1, ry1] = Wide::SUBSCREEN;
+        let ([l, r, t, b], u) = Self::split_rect(widescreen, fill, view, size);
+        let k = ((b - t) / (ry1 - ry0)).min((r - l) / (rx1 - rx0)).min(u);
+        let shift = if d.hud {
+            [(hud_shift[0] * k).round(), (hud_shift[1] * k).round()]
+        } else {
+            [0.0; 2]
+        };
+        // Target px = a + N64 px · m, per axis.
+        let (mx, ax) = match d.wide {
+            Wide::Stretch([a, bb]) if a <= Wide::MAIN_VIEW[0] && bb >= Wide::MAIN_VIEW[1] => {
+                let m = (r - l) / (rx1 - rx0);
+                (m, l - rx0 * m)
+            }
+            _ => (
+                k,
+                match d.anchor {
+                    Anchor::Left => l - rx0 * k,
+                    Anchor::Centre => (l + r) / 2.0 - (rx0 + rx1) / 2.0 * k,
+                    Anchor::Right => r - rx1 * k,
+                } + shift[0],
+            ),
+        };
+        let (my, ay) = match d.wide {
+            Wide::Stretch(_)
+                if d.stretch_y[0] <= Wide::MAIN_VIEW_Y[0]
+                    && d.stretch_y[1] >= Wide::MAIN_VIEW_Y[1] =>
+            {
+                let m = (b - t) / (ry1 - ry0);
+                (m, t - ry0 * m)
+            }
+            _ => (
+                k,
+                match d.vanchor {
+                    VAnchor::Top => t - ry0 * k,
+                    VAnchor::Middle => (t + b) / 2.0 - (ry0 + ry1) / 2.0 * k,
+                    VAnchor::Bottom => b - ry1 * k,
+                } + shift[1],
+            ),
+        };
+        let screen = [
+            2.0 * mx / tw,
+            2.0 * ax / tw - 1.0,
+            -2.0 * my / th,
+            1.0 - 2.0 * ay / th,
+        ];
+        // A scissor spanning the screen on an axis (the HUD's own, 0..320 ×
+        // 0..240) is the view; a smaller one moves with its draw. Either is
+        // clipped to the view.
+        let c = |v: f32, lo: f32, hi: f32| v.clamp(lo, hi).round() as u32;
+        let sc = d.scissor;
+        let (sl, sr) = if sc[0] <= Wide::MAIN_VIEW[0] && sc[2] >= Wide::MAIN_VIEW[1] {
+            (c(l, l, r), c(r, l, r))
+        } else {
+            (c(ax + sc[0] * mx, l, r), c(ax + sc[2] * mx, l, r))
+        };
+        let (st, sb) = if sc[1] <= Wide::MAIN_VIEW_Y[0] && sc[3] >= Wide::MAIN_VIEW_Y[1] {
+            (c(t, t, b), c(b, t, b))
+        } else {
+            (c(ay + sc[1] * my, t, b), c(ay + sc[3] * my, t, b))
+        };
+        let (sl, sr) = (sl.min(size.0), sr.min(size.0));
+        let (st, sb) = (st.min(size.1), sb.min(size.1));
+        (
+            screen,
+            [sl, st, sr.saturating_sub(sl), sb.saturating_sub(st)],
+        )
     }
 
     /// Renders `frame` into `target` (of this renderer's format and `size`),
@@ -1266,7 +1430,6 @@ fn fs_box_main(v: VOut) -> @location(0) vec4<f32> {
 mod tests {
     use super::*;
     use crate::Interpreter;
-    use crate::frame::{Anchor, VAnchor};
     use crate::matrix;
     use crate::memory::VecMemory;
     use pw64_formats::gbi::geom;
@@ -1439,6 +1602,7 @@ mod tests {
             vanchor: VAnchor::Middle,
             stretch_y: [0.0; 2],
             hud: false,
+            split: None,
         };
         Frame {
             vertices: verts(0.0, 320.0),
@@ -1703,6 +1867,174 @@ mod tests {
             place(&draw(false, Wide::Stretch([0.0, 320.0]))).1,
             "stretched fills never shift"
         );
+    }
+
+    /// Split-screen HUD: the subscreen layout frame is scaled uniformly by
+    /// view height / 214 into the view, per-axis anchored; subscreen-wide
+    /// fills stretch onto the view; the scissor stays inside the view;
+    /// draws without a view are untouched.
+    #[test]
+    fn split_hud_placement() {
+        let base = red_green_frame().draws[0].clone();
+        let view = [10.0, 8.0, 310.0, 115.0]; // top half of the subscreen
+        let draw = |wide: Wide, anchor: Anchor, vanchor: VAnchor| DrawCall {
+            wide,
+            anchor,
+            vanchor,
+            scissor: [0.0, 0.0, 320.0, 240.0],
+            split: Some(view),
+            hud: true,
+            ..base.clone()
+        };
+        let size = (640, 480); // 2 target px per N64 px, view 20..620 × 16..230
+        let place = |ws, d: &DrawCall| Renderer::placement(ws, false, d, size, [0.0; 2]);
+        let px = |s: [f32; 4], x: f32| ((x * s[0] + s[1]) + 1.0) / 2.0 * 640.0;
+        let py = |s: [f32; 4], y: f32| (1.0 - (y * s[2] + s[3])) / 2.0 * 480.0;
+        let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+        let k = 1.0; // (230 - 16) / 214
+
+        let (s, sc) = place(
+            Widescreen::Off,
+            &draw(Wide::Fixed, Anchor::Left, VAnchor::Top),
+        );
+        assert_eq!(sc, [20, 16, 600, 214], "scissor clipped to the view");
+        assert!(close(px(s, 10.0), 20.0) && close(px(s, 27.0), 20.0 + 17.0 * k));
+        assert!(close(py(s, 8.0), 16.0) && close(py(s, 18.0), 26.0));
+        let (s, _) = place(
+            Widescreen::Off,
+            &draw(Wide::Fixed, Anchor::Right, VAnchor::Bottom),
+        );
+        assert!(close(px(s, 310.0), 620.0) && close(py(s, 222.0), 230.0));
+        let (s, _) = place(
+            Widescreen::Off,
+            &draw(Wide::Fixed, Anchor::Centre, VAnchor::Middle),
+        );
+        assert!(close(px(s, 160.0), 320.0) && close(py(s, 115.0), 123.0));
+        // Crash fade (subscreen quad) fills the view.
+        let mut fade = draw(
+            Wide::Stretch([10.0, 310.0]),
+            Anchor::Centre,
+            VAnchor::Middle,
+        );
+        fade.stretch_y = [8.0, 222.0];
+        let (s, sc) = place(Widescreen::Off, &fade);
+        assert!(close(px(s, 10.0), 20.0) && close(px(s, 310.0), 620.0));
+        assert!(close(py(s, 8.0), 16.0) && close(py(s, 222.0), 230.0));
+        assert_eq!(sc, [20, 16, 600, 214]);
+        // 16:9: the view takes the Hor+ width; right gauges move to its edge.
+        let (s, sc) = place(
+            Widescreen::Aspect(16.0 / 9.0),
+            &draw(Wide::Fixed, Anchor::Right, VAnchor::Top),
+        );
+        assert_eq!(sc[0] + sc[2], 640, "scissor reaches the output edge");
+        assert!(close(px(s, 310.0), 640.0));
+        // No view: the old placement.
+        let mut plain = draw(Wide::Fixed, Anchor::Left, VAnchor::Top);
+        plain.split = None;
+        assert_eq!(place(Widescreen::Off, &plain).1, [0, 0, 640, 480]);
+    }
+
+    /// Left/right split: the narrow view scales the HUD frame by width
+    /// (149 / 300), anchored to the view's own edges; on 16:9 the left
+    /// view's outer edge reaches the output edge, the seam stays put.
+    #[test]
+    fn split_hud_placement_left_right() {
+        let base = red_green_frame().draws[0].clone();
+        let view = [161.0, 8.0, 310.0, 222.0]; // right half of the subscreen
+        let draw = |anchor: Anchor, vanchor: VAnchor, view: [f32; 4]| DrawCall {
+            wide: Wide::Fixed,
+            anchor,
+            vanchor,
+            scissor: [0.0, 0.0, 320.0, 240.0],
+            split: Some(view),
+            hud: true,
+            ..base.clone()
+        };
+        let size = (640, 480);
+        let place = |ws, d: &DrawCall| Renderer::placement(ws, false, d, size, [0.0; 2]);
+        let px = |s: [f32; 4], x: f32| ((x * s[0] + s[1]) + 1.0) / 2.0 * 640.0;
+        let py = |s: [f32; 4], y: f32| (1.0 - (y * s[2] + s[3])) / 2.0 * 480.0;
+        let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+        let k = 2.0 * 149.0 / 300.0; // target px per HUD px
+
+        let (s, sc) = place(Widescreen::Off, &draw(Anchor::Left, VAnchor::Top, view));
+        assert_eq!(sc, [322, 16, 298, 428], "scissor = the view");
+        assert!(close(px(s, 10.0), 322.0) && close(px(s, 27.0), 322.0 + 17.0 * k));
+        // Width-bound: vertically the frame is centred on its anchor rows.
+        assert!(close(py(s, 8.0), 16.0) && close(py(s, 18.0), 16.0 + 10.0 * k));
+        let (s, _) = place(Widescreen::Off, &draw(Anchor::Right, VAnchor::Bottom, view));
+        assert!(close(px(s, 310.0), 620.0) && close(py(s, 222.0), 444.0));
+        // The whole 300-px frame fits the view: left and right columns can't meet.
+        assert!(close(px(s, 10.0), 322.0));
+        // 16:9 (853×480 area in 854 px): left view from the output edge.
+        let wide = (854, 480);
+        let left = [10.0, 8.0, 159.0, 222.0];
+        let (s, sc) = Renderer::placement(
+            Widescreen::Aspect(16.0 / 9.0),
+            false,
+            &draw(Anchor::Left, VAnchor::Top, left),
+            wide,
+            [0.0; 2],
+        );
+        let ox: f32 = (854.0 - 480.0 * 16.0 / 9.0) / 2.0;
+        let seam: f32 = (854.0 - 640.0) / 2.0 + 159.0 * 2.0;
+        assert_eq!(sc[0], ox.round() as u32, "outer edge = output edge");
+        assert_eq!(
+            sc[0] + sc[2],
+            seam.round() as u32,
+            "seam stays at its 4:3 place"
+        );
+        let pxw = |s: [f32; 4], x: f32| ((x * s[0] + s[1]) + 1.0) / 2.0 * 854.0;
+        assert!(close(pxw(s, 10.0), ox));
+    }
+
+    /// Left/right split world view (tagged view, no HUD bracket): plain 4:3
+    /// mapping when the output is 4:3; on 16:9 the view's x range is
+    /// stretched from the outer output edge to the seam, rows unchanged,
+    /// scissor clipped to the view (never into the other view).
+    #[test]
+    fn split_world_placement_left_right() {
+        let base = red_green_frame().draws[0].clone();
+        let left = [10.0, 8.0, 159.0, 222.0];
+        let d = DrawCall {
+            wide: Wide::Extend,
+            scissor: [10.0, 8.0, 159.0, 222.0],
+            split: Some(left),
+            hud: false,
+            ..base.clone()
+        };
+        let px = |s: [f32; 4], x: f32, w: f32| ((x * s[0] + s[1]) + 1.0) / 2.0 * w;
+        let py = |s: [f32; 4], y: f32| (1.0 - (y * s[2] + s[3])) / 2.0 * 480.0;
+        let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+        let (s, sc) = Renderer::placement(Widescreen::Off, false, &d, (640, 480), [0.0; 2]);
+        assert!(close(px(s, 10.0, 640.0), 20.0) && close(px(s, 159.0, 640.0), 318.0));
+        assert!(close(py(s, 8.0), 16.0) && close(py(s, 222.0), 444.0));
+        assert_eq!(sc, [20, 16, 298, 428]);
+        let (s, sc) = Renderer::placement(
+            Widescreen::Aspect(16.0 / 9.0),
+            false,
+            &d,
+            (854, 480),
+            [0.0; 2],
+        );
+        let ox: f32 = (854.0 - 480.0 * 16.0 / 9.0) / 2.0;
+        let seam: f32 = 107.0 + 159.0 * 2.0;
+        assert!(close(px(s, 10.0, 854.0), ox) && close(px(s, 159.0, 854.0), seam));
+        assert!(close(py(s, 8.0), 16.0) && close(py(s, 222.0), 444.0));
+        assert_eq!(sc[0] + sc[2], seam.round() as u32, "never past the seam");
+        // A wider scissor (e.g. the z clear's full screen) is clipped too.
+        let full = DrawCall {
+            scissor: [0.0, 0.0, 320.0, 240.0],
+            ..d.clone()
+        };
+        let (_, sc2) = Renderer::placement(
+            Widescreen::Aspect(16.0 / 9.0),
+            false,
+            &full,
+            (854, 480),
+            [0.0; 2],
+        );
+        assert_eq!(sc2, sc);
     }
 
     /// A texture wider than the device limit (texture packs take any size)

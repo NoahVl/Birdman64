@@ -4,8 +4,10 @@
 //!   and later run ([`run_pending_rsp`], from the OS core) through a host
 //!   hook (`set_gfx_task_handler` — the `pw64` exe wires it to `pw64-gfx`),
 //!   then complete with SP + DP done.
-//! - SI: one standard controller (idle unless the host publishes input via
-//!   `set_controller1`); reads post `OS_EVENT_SI`.
+//! - SI: up to four standard controllers (idle unless the host publishes
+//!   input via `set_controller1` / `set_controller`; how many are present
+//!   comes from `set_controllers_present`, default 1); reads post
+//!   `OS_EVENT_SI`.
 //!   EEPROM is a `.eep` file (`PW64_EEP`, else the host default set via
 //!   `set_default_eep_path`, else `pw64.eep` next to the CWD).
 
@@ -318,7 +320,8 @@ pub struct OSContPad {
     pub errno: u8,
 }
 
-/// Mirrors `osContInit`: controller 1 present, 2-4 absent.
+/// Mirrors `osContInit`: the first `present` controllers (set via
+/// `set_controllers_present`) report as present, the rest absent.
 ///
 /// # Safety
 /// `bitpattern` must be a writable u8 and `status` MAXCONTROLLERS writable
@@ -330,11 +333,12 @@ pub unsafe extern "C-unwind" fn osContInit(
     status: *mut OSContStatus,
 ) -> i32 {
     crate::first_call("osContInit");
+    let present = PRESENT.load(std::sync::atomic::Ordering::Relaxed) as usize;
     // SAFETY: C passes a u8 and MAXCONTROLLERS status slots.
     unsafe {
-        *bitpattern = 1;
+        *bitpattern = ((1u16 << present) - 1) as u8;
         for i in 0..MAXCONTROLLERS {
-            status.add(i).write(if i == 0 {
+            status.add(i).write(if i < present {
                 OSContStatus {
                     ty: CONT_TYPE_NORMAL,
                     status: 0,
@@ -360,33 +364,62 @@ pub extern "C-unwind" fn osContStartReadData(_mq: *mut c_void) -> i32 {
     0
 }
 
-/// Controller 1 as the host last published it: `button | stick_x << 16 |
-/// stick_y << 24`. One atomic word so the input thread and the OS core never
-/// see a torn pad. 0 = idle (the headless default).
-static PAD1: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Controllers as the host last published them: index = N64 controller
+/// number - 1, each `button | stick_x << 16 | stick_y << 24`. One atomic
+/// word per pad so the input thread and the OS core never see a torn pad.
+/// 0 = idle (the headless default).
+static PADS: [std::sync::atomic::AtomicU32; MAXCONTROLLERS] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; MAXCONTROLLERS];
 
-/// Host input (the `pw64` exe's `input` module) publishes controller 1 here;
-/// `osContGetReadData` delivers it. Callable from any thread.
-pub fn set_controller1(button: u16, stick_x: i8, stick_y: i8) {
-    let v = button as u32 | (stick_x as u8 as u32) << 16 | (stick_y as u8 as u32) << 24;
-    PAD1.store(v, std::sync::atomic::Ordering::Relaxed);
+/// How many controllers `osContInit` reports as present (and
+/// `osContGetReadData` delivers): 1 while the game is single-player,
+/// 2 with split-screen input. Must be set before the game boots —
+/// `osContInit` runs once.
+static PRESENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
+
+/// Sets how many controllers are present (`1..=4`, clamped). Call once
+/// before the game boots (`osContInit` runs once).
+pub fn set_controllers_present(n: u8) {
+    PRESENT.store(
+        n.clamp(1, MAXCONTROLLERS as u8),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
-/// Mirrors `osContGetReadData`: controller 1 = the host snapshot
-/// (`set_controller1`), 2-4 absent.
+/// Host input (the `pw64` exe's `input` module) publishes controller `n`
+/// (0-based) here; `osContGetReadData` delivers it. Calls for a controller
+/// beyond `MAXCONTROLLERS` are ignored. Callable from any thread.
+pub fn set_controller(n: usize, button: u16, stick_x: i8, stick_y: i8) {
+    if let Some(pad) = PADS.get(n) {
+        let v = button as u32 | (stick_x as u8 as u32) << 16 | (stick_y as u8 as u32) << 24;
+        pad.store(v, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Controller 1 shorthand (`set_controller(0, ..)`): every existing caller
+/// and test publishes controller 1.
+pub fn set_controller1(button: u16, stick_x: i8, stick_y: i8) {
+    set_controller(0, button, stick_x, stick_y);
+}
+
+/// Mirrors `osContGetReadData`: the first `present` controllers carry the
+/// host snapshots (`set_controller` / `set_controller1`), the rest are
+/// absent.
 ///
 /// # Safety
 /// `pads` must be MAXCONTROLLERS writable `OSContPad` slots.
 #[unsafe(no_mangle)]
 pub unsafe extern "C-unwind" fn osContGetReadData(pads: *mut OSContPad) {
     crate::first_call("osContGetReadData");
-    let v = PAD1.load(std::sync::atomic::Ordering::Relaxed);
+    let v = PADS[0].load(std::sync::atomic::Ordering::Relaxed);
     if v != 0 {
         static LOGGED: std::sync::Once = std::sync::Once::new();
         LOGGED.call_once(|| eprintln!("[input] first non-idle pad delivered: {v:#010x}"));
     }
-    for i in 0..MAXCONTROLLERS {
-        let pad = if i == 0 {
+    let present = PRESENT.load(std::sync::atomic::Ordering::Relaxed) as usize;
+    for (i, snapshot) in PADS.iter().enumerate() {
+        let pad = if i < present {
+            let v = snapshot.load(std::sync::atomic::Ordering::Relaxed);
             OSContPad {
                 button: v as u16,
                 stick_x: (v >> 16) as u8 as i8,
@@ -663,7 +696,45 @@ mod tests {
             ),
             (0x8010, -80, 42, 0)
         );
+        // Single-player (the default): a published controller 2 is not
+        // delivered, and `osContInit` reports pad 1 only.
+        set_controller(1, 0x8010, -80, 42);
+        // SAFETY: scratch buffer as above.
+        unsafe { osContGetReadData(pads.as_mut_ptr()) };
         assert_eq!(pads[1].errno, CONT_NO_RESPONSE_ERROR);
+        assert_eq!(pads[1].button, 0);
+        let mut pattern: u8 = 0;
+        let mut status: [OSContStatus; MAXCONTROLLERS] = std::array::from_fn(|_| OSContStatus {
+            ty: 0,
+            status: 0,
+            errno: 0xff,
+        });
+        // SAFETY: scratch buffers the C caller would pass.
+        unsafe { osContInit(std::ptr::null_mut(), &mut pattern, status.as_mut_ptr()) };
+        assert_eq!(pattern, 0b1);
+        assert_eq!(status[1].errno, CONT_NO_RESPONSE_ERROR);
+        // Split-screen: two present — controller 2 delivers, `osContInit`
+        // reports pads 1-2.
+        set_controllers_present(2);
+        // SAFETY: scratch buffer as above.
+        unsafe { osContGetReadData(pads.as_mut_ptr()) };
+        assert_eq!(
+            (
+                pads[1].button,
+                pads[1].stick_x,
+                pads[1].stick_y,
+                pads[1].errno
+            ),
+            (0x8010, -80, 42, 0)
+        );
+        // SAFETY: scratch buffers as above.
+        unsafe { osContInit(std::ptr::null_mut(), &mut pattern, status.as_mut_ptr()) };
+        assert_eq!(pattern, 0b11);
+        assert_eq!(status[1].errno, 0);
+        assert_eq!(status[2].errno, CONT_NO_RESPONSE_ERROR);
+        // Restore the globals for the other tests (they share the statics).
+        set_controllers_present(1);
+        set_controller(1, 0, 0, 0);
         assert_eq!(std::mem::size_of::<OSContPad>(), 6);
     }
 

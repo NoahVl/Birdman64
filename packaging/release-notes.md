@@ -1,3 +1,29 @@
+## What's new in 1.1.0
+
+### Added
+
+- Two-player split-screen: pick 1 Player or 2 Players on the title menu.
+  Both players fly the same test at once, each with their own pilot,
+  controller, HUD, objectives, sounds, results, replay and photos. Works with
+  every vehicle and bonus game (hang glider, rocket belt, gyrocopter,
+  cannonball, sky diving, jumble hopper, birdman) and with Free flight, which
+  you can start from the test menu.
+- A Split-screen page in the settings/pause menu: Assign player 2 (picks
+  the next controller you press, including a second pad of the same model),
+  Split layout (top/bottom or side by side), Pilots collide, and Share best
+  score (when player 2 scores higher, the run counts for player 1's save
+  file and class totals). The Assign row names player 2's controller.
+- Split-screen: each player's radar shows the other player as a cyan arrow.
+
+### Fixed
+
+- The game no longer crashes when a matrix translation goes out of range,
+  which could happen after saving a photo.
+- Snowy levels in widescreen: falling snow no longer shrinks the picture to
+  a 4:3 box, and now covers the whole screen.
+- Settings: when rebinding a controller button times out, the
+  "No button pressed" message now stays visible.
+
 **Windows:** download `Birdman64-windows-x64.zip`. **Linux:** download the `.AppImage`.
 
 You need your own Pilotwings 64 (US) ROM.

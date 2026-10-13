@@ -1,0 +1,35 @@
+--- a/src/app/balls.c
++++ b/src/app/balls.c
+@@ -94,6 +94,7 @@ void ballsInitBall(Ball* ball) {
+         ball->type = 0;
+     }
+     uvDobjModel(ball->objId, gBallModelIdLookup[ball->type]);
++    pw64_dobj_claim(ball->objId); // PW64 split-screen: this player's ball
+     uvDobjProps(ball->objId, 3, (f64)ball->scale, 0);
+     if (ball->initialized == 0) {
+         uvMat4Scale(&ball->pose, ball->scale, ball->scale, ball->scale);
+@@ -512,6 +513,24 @@ s32 ballsObjIdExists(u8 objId) {
+     return TRUE;
+ }
+ 
++// PW64 split-screen (task.c.patch pw64_reg_task): per-player balls, each
++// player's with their own dobjs (pw64_balls_clone).
++void pw64_reg_balls(void) {
++    PW64_REG(gBallCount);
++    PW64_REG(gBallSplitCount);
++    PW64_REG(gBalls);
++}
++
++void pw64_balls_clone(void) {
++    s32 i;
++
++    for (i = 0; i < gBallCount + gBallSplitCount; i++) {
++        if (gBalls[i].objId != 0xFFFF) {
++            gBalls[i].objId = pw64_dobj_clone(gBalls[i].objId);
++        }
++    }
++}
++
+ u8 ballsGetCount(void) {
+     return gBallCount + gBallSplitCount;
+ }

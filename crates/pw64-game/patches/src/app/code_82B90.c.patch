@@ -1,14 +1,42 @@
 --- a/src/app/code_82B90.c
 +++ b/src/app/code_82B90.c
-@@ -23,6 +23,7 @@
+@@ -23,6 +23,8 @@
  #include "app/code_66F70.h"
  #include "app/code_9A960.h"
  #include "app/code_D1ED0.h"
 +#include <pw64_rate.h>
++Unk80364210* func_8032BE10(void); // PW64 split-screen: code_B2900.c
  
  Unk802D3658_Unk111C D_80368C00;
  Unk802D3658_Unk111C D_80368D08;
-@@ -687,7 +688,8 @@ void func_802FD114(JumbleHopperData* jhData) {
+@@ -229,14 +231,21 @@ void func_802FBEFC(JumbleHopperData* jhData, f32 arg1) {
+ 
+     if (jhData->unk4F == 0) {
+         sp2C = &taskGet_80345C80()->unk0;
+-        hudWarningText(TEXT_OFF_2, 1.5f, 8.0f);
+-        sndPlaySfx(SFX_UI_POINT_PENALTY);
++        if (!pw64_free_flight) { // PW64 free flight: no score, no penalty
++            hudWarningText(TEXT_OFF_2, 1.5f, 8.0f);
++            sndPlaySfx(SFX_UI_POINT_PENALTY);
++        }
+         jhData->unk4F = 1;
+ 
+         // TODO: fix array and/or struct
+-        D_80364210[D_80362690->unk9C].unk38 = D_80364210[D_80362690->unk9C].unk38 - sp2C[11].unk4[5].y;
+-        if (D_80364210[D_80362690->unk9C].unk38 < -100) {
+-            D_80364210[D_80362690->unk9C].unk38 = -100;
++        // PW64 split-screen: the penalty goes to the hopping player's
++        // results (func_8032BE10); D_80364210[unk9C] is always player 1's.
++        {
++            Unk80364210* pw64Res = (pw64_level_players > 1) ? func_8032BE10() : &D_80364210[D_80362690->unk9C];
++            pw64Res->unk38 = pw64Res->unk38 - sp2C[11].unk4[5].y;
++            if (pw64Res->unk38 < -100) {
++                pw64Res->unk38 = -100;
++            }
+         }
+         jhData->unk534++;
+         splashClear();
+@@ -687,7 +696,8 @@ void func_802FD114(JumbleHopperData* jhData) {
  }
  
  void func_802FD388(JumbleHopperData* jhData) {
@@ -18,7 +46,7 @@
  }
  
  void func_802FD3E0(JumbleHopperData* jhData) {
-@@ -901,7 +903,7 @@ void func_802FDF8C(JumbleHopperData* jhData, f32 arg1) {
+@@ -901,7 +911,7 @@ void func_802FDF8C(JumbleHopperData* jhData, f32 arg1) {
      } else if (arg1 < -0.2f) {
          arg1 = -0.2f;
      }
@@ -27,7 +55,7 @@
  
      if (jhData->unk598 > 30.0f) {
          jhData->unk598 = 30.0f;
-@@ -917,7 +919,7 @@ void func_802FE054(JumbleHopperData* jhData, f32 arg1) {
+@@ -917,7 +927,7 @@ void func_802FE054(JumbleHopperData* jhData, f32 arg1) {
      } else if (arg1 < -0.2f) {
          arg1 = -0.2f;
      }
@@ -36,7 +64,7 @@
  
      if (jhData->unk5A0 > 10.0f) {
          jhData->unk5A0 = 10.0f;
-@@ -940,7 +942,7 @@ void func_802FE1A8(JumbleHopperData* jhData, f32 arg1) {
+@@ -940,7 +950,7 @@ void func_802FE1A8(JumbleHopperData* jhData, f32 arg1) {
      } else if (arg1 < -0.2f) {
          arg1 = -0.2f;
      }
@@ -45,7 +73,7 @@
  
      if (jhData->unk5A8 > 10.0f) {
          jhData->unk5A8 = 10.0f;
-@@ -986,7 +988,7 @@ void func_802FE2FC(JumbleHopperData* jhData) {
+@@ -986,7 +996,7 @@ void func_802FE2FC(JumbleHopperData* jhData) {
      if (jhData->unk548 > 360.0f) {
          jhData->unk548 -= 360.0f;
      }
@@ -54,7 +82,7 @@
      temp_fv1 = 50.0f;
      temp_fa0 = (uvCosF(jhData->unk548 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk54C) + (-15.0f + (temp_fv1 * 0.5f));
      func_802FBCA8(jhData, jhData->unk65A, temp_fa0, 'x');
-@@ -1011,10 +1013,10 @@ void func_802FE564(JumbleHopperData* jhData) {
+@@ -1011,10 +1021,10 @@ void func_802FE564(JumbleHopperData* jhData) {
      }
      if (jhData->unk55C != 0) {
          var_fa1 = 235.0f;
@@ -67,7 +95,7 @@
      }
  
      jhData->unk5A0 = (uvCosF(jhData->unk550 * 0.0174533f) * (var_fa1 * 0.5f) * jhData->unk554) + (-85.0f + (var_fa1 * 0.5f));
-@@ -1051,10 +1053,10 @@ void func_802FE7A0(JumbleHopperData* jhData) {
+@@ -1051,10 +1061,10 @@ void func_802FE7A0(JumbleHopperData* jhData) {
      }
      if (jhData->unk56C != 0) {
          var_fa1 = 235.0f;
@@ -80,7 +108,7 @@
      }
  
      jhData->unk5A8 = (uvCosF(jhData->unk560 * 0.0174533f) * (var_fa1 * 0.5f) * jhData->unk564) + (-85.0f + (var_fa1 * 0.5f));
-@@ -1078,7 +1080,7 @@ void func_802FE9DC(JumbleHopperData* jhData, f32 arg1) {
+@@ -1078,7 +1088,7 @@ void func_802FE9DC(JumbleHopperData* jhData, f32 arg1) {
      } else if (arg1 < -0.1f) {
          arg1 = -0.1f;
      }
@@ -89,7 +117,7 @@
  
      if (jhData->unk5CC > 15.0f) {
          jhData->unk5CC = 15.0f;
-@@ -1096,7 +1098,7 @@ void func_802FEAD0(JumbleHopperData* jhData, f32 arg1) {
+@@ -1096,7 +1106,7 @@ void func_802FEAD0(JumbleHopperData* jhData, f32 arg1) {
      } else if (arg1 < -0.1f) {
          arg1 = -0.1f;
      }
@@ -98,7 +126,7 @@
  
      if (jhData->unk5D4 > 15.0f) {
          jhData->unk5D4 = 15.0f;
-@@ -1119,19 +1121,19 @@ void func_802FEBC4(JumbleHopperData* jhData) {
+@@ -1119,19 +1129,19 @@ void func_802FEBC4(JumbleHopperData* jhData) {
      }
  
      if (jhData->unk57C == 3) {
@@ -122,7 +150,7 @@
          temp_fv1 = 45.0f;
          jhData->unk5CC = (uvCosF(jhData->unk570 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk574) + (-30.0f + (temp_fv1 * 0.5f));
      }
-@@ -1163,19 +1165,19 @@ void func_802FEEC0(JumbleHopperData* jhData) {
+@@ -1163,19 +1173,19 @@ void func_802FEEC0(JumbleHopperData* jhData) {
      }
  
      if (jhData->unk58C == 3) {
@@ -146,3 +174,13 @@
          temp_fv1 = 45.0f;
          jhData->unk5D4 = (uvCosF(jhData->unk580 * 0.0174533f) * (temp_fv1 * 0.5f) * jhData->unk584) + (-30.0f + (temp_fv1 * 0.5f));
      }
+@@ -2362,3 +2372,9 @@ void func_80303028(JumbleHopperData* jhData) {
+         jhData->unkF4.z = jhData->unk74.m[3][2];
+     }
+ }
++
++// PW64 split-screen: per-player crash head-shake sfx one-shots
++// (pw64_players.c).
++void pw64_reg_jumble_hopper(void) {
++    PW64_REG(D_8036905C);
++}

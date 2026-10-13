@@ -8,7 +8,19 @@
  
  // .bss
  f32 D_8035AF30;
-@@ -780,9 +781,11 @@ void falco_802E55A0(Falco* falco) {
+@@ -377,8 +378,10 @@ void falco_802E43C4(Falco* falco) {
+     }
+ }
+ 
++// PW64 split-screen: hoisted from falco_802E45B0 (the hawk's attack
++// cooldown) so it can be a per-player region (pw64_reg_falco).
++static f32 D_8034EFA0 = 0.0f;
+ void falco_802E45B0(Falco* falco) {
+-    static f32 D_8034EFA0 = 0.0f;
+     static f32 pad_D_8034EFA4 = 0.0f;
+     static f32 pad_D_8034EFA8 = 0.0f;
+     static f32 pad_D_8034EFAC = 0.0f;
+@@ -780,9 +783,11 @@ void falco_802E55A0(Falco* falco) {
              var_fv0 = 1.0f;
              break;
          }
@@ -22,3 +34,58 @@
      }
      sp48.f[0] = falco->unk16C.m[3][0];
      sp48.f[1] = falco->unk16C.m[3][1];
+@@ -953,6 +958,7 @@ void falco_802E5BF8(Unk8035A920* falco, Falco* arg1) {
+         } else {
+             uvDobjModel(falco->unk0, 0xFF);
+         }
++        pw64_dobj_claim(falco->unk0); // PW64 split-screen: the hawk's player's rock
+         uvMat4SetIdentity(&falco->unk8);
+         fv0 = uvRandF_LCG();
+         falco->unk58 = (arg1->unk14C * fv0) + arg1->unk148;
+@@ -1156,3 +1162,46 @@ void falco_802E64E0(s32 arg0, Mtx4F* arg1) {
+         uvMat4RotateAxis(arg1, sp18->unk80, 'x');
+     }
+ }
++
++// PW64 split-screen (task.c.patch pw64_reg_task): every player has its own
++// hawk and rocks, like the other objectives: it chases and attacks that
++// player (unkC[0] = the live player), only that player's missiles hit it
++// (owned dobjs) and its hits score for that player (falco_802E5818 at the
++// finish). pw64_task_world_update ticks each player's copy with it live.
++// D_8035AF30..3C are set from unk244 each call; 40..58 are smoothed.
++void pw64_reg_falco(void) {
++    PW64_REG(sFalcos);
++    PW64_REG(D_8035A5F0);
++    PW64_REG(D_8035A918);
++    PW64_REG(D_8035A920);
++    PW64_REG(D_8034EFA0);
++    PW64_REG(D_8035AF40);
++    PW64_REG(D_8035AF44);
++    PW64_REG(D_8035AF48);
++    PW64_REG(D_8035AF4C);
++    PW64_REG(D_8035AF50);
++    PW64_REG(D_8035AF54);
++    PW64_REG(D_8035AF58);
++}
++
++// PW64 split-screen: player i's own dobjs for the hawk (its three models)
++// and any rock in flight; the radar waypoints are already in
++// its own HUD copy (pw64_players_sync).
++void pw64_falco_clone(void) {
++    Falco* f;
++    s32 i;
++
++    for (i = 0; i < D_8035A5F0; i++) {
++        f = &sFalcos[i];
++        if (f->unk0 != 0xFFFF) {
++            f->unk0 = pw64_dobj_clone(f->unk0);
++            f->unk4 = pw64_dobj_clone(f->unk4);
++            f->unk8 = pw64_dobj_clone(f->unk8);
++        }
++    }
++    for (i = 0; i < D_8035A918; i++) {
++        if (D_8035A920[i].unk0 != 0xFFFF) {
++            D_8035A920[i].unk0 = pw64_dobj_clone(D_8035A920[i].unk0);
++        }
++    }
++}

@@ -1,0 +1,27 @@
+--- a/src/app/hover_pads.c
++++ b/src/app/hover_pads.c
+@@ -72,6 +72,24 @@ void hoverPadObjSetup(HoverPad* hover) {
+     }
+     uvDobjState(hover->objId, (hover->unk6A) ? 3 : 0);
+     uvDobjPosm(hover->objId, 0, &hover->pose);
++    pw64_dobj_claim(hover->objId); // PW64 split-screen
++}
++
++// PW64 split-screen (task.c.patch pw64_reg_task): per-player hover pads
++// with their own dobjs (pw64_hover_pads_clone).
++void pw64_reg_hover_pads(void) {
++    PW64_REG(sHoverPadCount);
++    PW64_REG(gHoverPads);
++}
++
++void pw64_hover_pads_clone(void) {
++    s32 i;
++
++    for (i = 0; i < sHoverPadCount; i++) {
++        if (gHoverPads[i].objId != INVALID_OBJECT_ID) {
++            gHoverPads[i].objId = pw64_dobj_clone(gHoverPads[i].objId);
++        }
++    }
+ }
+ 
+ void hoverPadLoad(void) {

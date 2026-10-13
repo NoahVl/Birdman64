@@ -14,3 +14,17 @@
      }
      return 0;
  }
+@@ -161,8 +163,13 @@
+             sp34.x *= 200.0f / sp34.y;
+             sp34.z *= 200.0f / sp34.y;
+             if (sp34.x > -150.0f && sp34.x < 150.0f && sp34.z > -102.0f && sp34.z < 112.0f) {
+                 x32 = (s32)sp34.x;
+                 z32 = (s32)sp34.z;
++                // PW64: split-screen's seam between the views (columns 159..161 / rows
++                // 114..116) is never redrawn: flakes there would pile up into a white line.
++                if (pw64_level_players > 1 && (pw64_split_lr ? (x32 >= -1 && x32 <= 1) : (z32 >= 4 && z32 <= 6))) {
++                    continue;
++                }
+                 *idxPtr++ = (x32 - (z32 * 320)) + 0x96A0;
+             }
+         }

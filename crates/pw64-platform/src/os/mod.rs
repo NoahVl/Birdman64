@@ -299,6 +299,15 @@ pub fn set_pause_hook(hook: fn()) {
     PAUSE_HOOK.with(|h| h.set(Some(hook)));
 }
 
+/// Virtual clock (non-throttled runs; before [`set_present_rate`] and
+/// [`boot`]): the count ignores host wall time and advances only when the
+/// loop skips idle time plus [`time::VIRTUAL_TICK_COUNTS`] per OS-call
+/// checkpoint. Game dt and the points where retraces/timers reach the
+/// threads then no longer depend on host speed: same script, same frames.
+pub fn set_virtual_clock() {
+    with(|k| k.clock.set_virtual());
+}
+
 /// Per-retrace wall-time profile (`PW64_PROFILE_RETRACES=1`; temporary
 /// instrumentation, renderer.md "144 Hz profiling"). With `PW64_NO_THROTTLE`
 /// every loop iteration below serves ~one retrace, so elapsed/delta ≈ the
@@ -476,6 +485,7 @@ pub(crate) fn checkpoint() {
     if !in_thread {
         return;
     }
+    with(|k| k.clock.tick());
     if with(|k| k.int_mask != misc::OS_IM_NONE && k.interrupt_due()) {
         deliver_interrupts();
     }

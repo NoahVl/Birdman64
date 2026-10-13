@@ -351,3 +351,9 @@ Gotcha for concurrent runs: run pw64 with a scratch **cwd** (its own `tmp/`), `P
 absolute — repo `tmp/frame_*.png` gets clobbered by concurrent runs; and wait for the exe
 (not the `cargo run` wrapper) to exit before moving frames.
 
+Determinism: non-throttled runs (`PW64_NO_THROTTLE`) use a virtual OS clock
+(`os::set_virtual_clock`, time.rs): host wall time never reaches `osGetCount`; it moves only
+by idle skips + ~1 µs per OS-call checkpoint. Cause before: game dt and the checkpoint where a
+retrace/timer reached the threads followed host speed. Now same script = byte-identical PNGs
+(sp + split, 2700 retraces). `PW64_WALL_CLOCK=1` restores the host clock; throttled runs never were.
+

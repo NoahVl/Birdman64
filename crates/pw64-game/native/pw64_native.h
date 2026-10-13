@@ -27,16 +27,6 @@ typedef __SIZE_TYPE__ size_t;
 
 #define PW64_NATIVE 1
 
-/* Native visibility budgets; keep matrix indices inside signed 16 bits. */
-#define PW64_GFX_DL_CAPACITY 65536
-#define PW64_TERRAIN_CAPACITY 1040
-#define PW64_SORT_CAPACITY 4096
-#define PW64_DOBJ_SORT_CAPACITY 128
-extern int pw64_infinite_lod;
-extern int pw64_infinite_view_distance;
-float pw64_visibility_far(const void* chan, float original_far);
-void* pw64_gfx_packet(void* packet);
-
 /* Pointer-width helpers for the pointer patch set (native-build.md §2).
  * The exe, RDRAM window (0x80000000..) and every other address the C sees
  * lie below 4 GB (asserted by pw64_game::memmap), so a 32-bit int holds any
@@ -95,6 +85,9 @@ void pw64_hud_anchor_xy(int x, int y);
  * hud.c.patch brackets the HUD branch of hudMainRender with it; the
  * renderer only uses the tag when OLED care is on. */
 void pw64_hud_tag(int on);
+/* Split-screen HUD view ("PWS", same file, pw64-gfx interp::SPLIT_TAG):
+ * hudMainRender brackets the HUD with the current player's view. */
+void pw64_hud_split_tag(int on);
 /* uvCopyFrameBuf (graphics.c.patch): copy the HLE renderer's framebuffer
  * target `src` into `dst` (N64 fb addresses; pw64-platform headless.rs). */
 void pw64_fb_copy(unsigned int dst, unsigned int src);
@@ -108,5 +101,154 @@ void pw64_fb_pixels(unsigned int fb, const unsigned PW64_LONG32* idx, int count,
  * whether present ticks (not retraces) latch swaps and start gfx. */
 void pw64_present_set_event(void* mq, void* msg);
 int pw64_present_active(void);
+/* Split-screen (native/src/pw64_split.c): 0 = off, 1 = on (set by Rust
+ * before boot, pw64_game::set_split). pw64_split_layout: 0 top/bottom, 1
+ * left/right (Rust, any time); pw64_split_lr: the layout latched at test
+ * start. The helpers live in camera.c.patch; they take the game's Camera
+ * as void* because this header is force-included before camera.h exists.
+ * pw64_split_out_aspect (pw64_widescreen.c): the output aspect a
+ * left/right view extends into (0 = none: plain 4:3 halves). */
+extern int pw64_split;
+/* Live switch (splitscreen.md "Live switch"): pw64_split_apply(on) sets
+ * pw64_split/pw64_players (+ player 2's one-time setup and kernel pad 2) —
+ * only where no test is loaded; pw64_split_poll applies a pending Rust
+ * request (pw64_split_req, settings row). pw64_cont_enable: controller.c.patch. */
+extern int pw64_split_req;
+extern int pw64_split_hint;
+void pw64_split_apply(int on);
+void pw64_split_poll(void);
+void pw64_cont_enable(int idx, int on);
+extern int pw64_split_layout;
+extern int pw64_split_lr;
+void pw64_split_viewport(void* camera, int i);
+float pw64_split_out_aspect(void);
+/* Gyro aim reticle (code_7CF30.c.patch func_802F6DC8): the HUD px per unit
+ * of projected NDC y for `camera`'s view; 107 (the N64 constant) unless the
+ * camera has a split viewport. */
+float pw64_split_reticle_half(void* camera);
+/* Pilot collisions (native/src/pw64_collide.c, splitscreen.md "Interactions
+ * toggle"): 1 = the two pilots can crash into each other. Read at each test
+ * start; Rust may set it any time (pw64_game::set_split_collide, also live
+ * from the settings screen). */
+extern int pw64_split_collide;
+/* Share best score (native/src/pw64_split.c): 1 = the better run of the
+ * players is saved to player 1's file. Rust, any time. */
+extern int pw64_split_share;
+/* Split-screen players (native/src/pw64_players.c, splitscreen.md "M2"):
+ * per-player state lives in the game's ordinary globals; only the current
+ * player's copy is live. Registered regions are swapped on a switch
+ * (live -> slot[cur], slot[i] -> live). Registration is explicit (no
+ * constructors: the game module also builds as a dylib with our CRT
+ * replacement) and runs once, on the first switch to 2 players
+ * (pw64_split_apply: gameInit or the live switch). */
+#define PW64_MAX_PLAYERS 2
+extern int pw64_players;    /* 1; 2 with split-screen (gameInit: pw64_split ? 2 : 1) */
+extern int pw64_player_cur; /* whose state is live in the globals */
+/* Players in the current test (game.c.patch test setup): pw64_players for
+ * a split-capable test, else 1. Gates every split path (1 = original). */
+extern int pw64_level_players;
+void pw64_player_register(void* addr, unsigned int size); /* current bytes -> every slot */
+void pw64_player_switch(int i);                           /* no-op if i == cur */
+void pw64_players_sync(void);                             /* live bytes -> every other slot */
+int pw64_region_count(void);                              /* regions registered so far */
+void pw64_players_sync_regions(int first, int end); /* pw64_players_sync for regions [first, end) */
+void* pw64_player_peek(int i, void* addr); /* player i's copy of a registered region (or NULL) */
+#define PW64_REG(sym) pw64_player_register(&(sym), (unsigned int)sizeof(sym))
+/* One per patched file that owns per-player statics; pw64_players_init
+ * calls them all (gameInit, only if pw64_players > 1). */
+void pw64_reg_game(void);
+void pw64_reg_camera(void);
+void pw64_reg_hud(void);
+void pw64_reg_shadow(void);
+void pw64_reg_hang_glider0(void);
+void pw64_reg_hang_glider1(void);
+void pw64_reg_hang_glider2(void);
+void pw64_reg_rocket_belt(void);
+void pw64_reg_rocket_belt_sound(void);
+void pw64_reg_rocket_belt_poses(void); /* code_AE460.c */
+void pw64_reg_rocket_belt_move(void);  /* code_AC1A0.c */
+void pw64_reg_gyrocopter(void);        /* gyrocopter.c: rate trim */
+void pw64_reg_gyrocopter_sound(void);  /* gyrocopter_sound.c */
+void pw64_reg_gyrocopter_poses(void);  /* code_7C4C0.c */
+void pw64_reg_gyrocopter_move(void);   /* code_7CF30.c */
+void pw64_reg_jumble_hopper(void);     /* code_82B90.c */
+void pw64_reg_birdman(void);        /* birdman0.c: camera-look toggle + rate state */
+void pw64_reg_birdman_sound(void);  /* bmsound.c */
+void pw64_reg_birdman_flutter(void); /* birdman1.c */
+void pw64_reg_birdman_move(void);   /* birdman2.c */
+void pw64_reg_cannonball(void);       /* cannonball.c: aim, scoring, round state */
+void pw64_reg_cannonball_pilot(void); /* code_60020.c: pilot wobble */
+void pw64_reg_skydiving(void);        /* skydiving.c: formation, scoring, countdown */
+void pw64_reg_skydiving_drift(void);  /* code_BA190.c: rate drift hold */
+void pw64_reg_skydiving_sound(void);  /* sdsound.c */
+void pw64_players_init(void);
+void pw64_reg_task(void); /* task.c: objective hit state (+ its modules) */
+void pw64_reg_snap(void); /* snap.c: shutter + this test's photos */
+/* Per-player objective dobjs (kernel dobj.c.patch): owning player + 1 per
+ * dobj, 0 = shared. Draw and collision loops skip another player's dobj. */
+extern unsigned char pw64_dobj_owner[100];
+#define PW64_DOBJ_OTHER(id) \
+    (pw64_dobj_owner[id] != 0 &&pw64_dobj_owner[id] != pw64_player_cur + 1)
+/* Cockpit hide (dobj.c.patch): player + 1 whose first-person view hid the
+ * dobj (its state's visible bit off); the other views still draw it. */
+extern unsigned char pw64_dobj_cockpit[100];
+#define PW64_DOBJ_COCKPIT_OTHER(id) \
+    (pw64_dobj_cockpit[id] != 0 && pw64_dobj_cockpit[id] != pw64_player_cur + 1)
+/* First-person near draw (dobj.c.patch): player + 1 whose view set state
+ * bit 4 (near list) and hid pw64_dobj_near_parts; the other views draw it
+ * in the normal pass with those parts shown. Set by the vehicle each frame. */
+extern unsigned char pw64_dobj_near[100];
+extern unsigned PW64_LONG32 pw64_dobj_near_parts[100];
+#define PW64_DOBJ_NEAR_OTHER(id) \
+    (pw64_dobj_near[id] != 0 && pw64_dobj_near[id] != pw64_player_cur + 1)
+#define PW64_DOBJ_NEAR_PARTS_SHOWN(id) \
+    (PW64_DOBJ_NEAR_OTHER(id) ? pw64_dobj_near_parts[id] : 0u)
+void pw64_dobj_near_set(PW64_LONG32 objId, PW64_LONG32 on, unsigned PW64_LONG32 parts);
+void pw64_dobj_claim(PW64_LONG32 objId);          /* owned by the current player */
+PW64_LONG32 pw64_dobj_clone(PW64_LONG32 src);     /* copy for the current player */
+/* Kernel controller reads (controller.c.patch): with 2+ players, pad 0
+ * means "the current player's pad", so hardcoded-0 sites follow the swap. */
+#define PW64_CONT(i) ((pw64_players > 1 && (i) == 0) ? pw64_player_cur : (i))
+/* Split-screen sound events (kernel audio_event.c.patch): vehicle sound
+ * handlers are owned by the player live when they registered. A post made
+ * while pw64_evt_scope = i (>= 0) reaches only player i's handlers; an
+ * unscoped one (-1) reaches all but muted players' (pw64_evt_mute bit i:
+ * finished or respawning). pw64_evt_post_player posts in player i's scope. */
+extern int pw64_evt_scope;
+extern unsigned int pw64_evt_mute;
+void pw64_evt_post_player(int i, int event);
+/* Listener pose of player i > 0 (kernel audio_emitter.c.patch, a Mtx4F*):
+ * positional emitters are heard from the nearest player's listener. */
+void pw64_listener_set(int i, void* mat);
+float pw64_player_dist(int i, float x, float y, float z); /* from player i > 0 */
+/* Split-screen free flight (game.c.patch, test_menu.c.patch): 1 while a
+ * flight started from the test menu's Free flight item runs. */
+extern int pw64_free_flight;
+/* Split-screen: player 2's pilot (native/src/pw64_split.c), -1 = player
+ * 1's. Set by the pilot select's second pass (game.c.patch) or, on a
+ * PW64_START boot, by PW64_P2_PILOT (pw64-platform start.rs). */
+extern int pw64_p2_pilot;
+int pw64_p2_pilot_env(void);
+/* Our ASCII text in the game's 16-bit glyph strings (native/src/pw64_text.c):
+ * glyphs + 0xFFE + -1 into out[max]; returns the glyph count. */
+int pw64_text_encode(const char* ascii, short* out, int max);
+int pw64_text_encode_style(const char* ascii, short* out, int max, int bold);
+/* Per-frame draw budgets, raised from the ROM's (4200 commands, 0x15E
+ * matrices, 0x1E look-ats, 100 + 60 sort entries) for split-screen (two
+ * world passes) and infinite view distance (every model on the island).
+ * Measured worst case, both on, split-screen rocket belt hovering high over
+ * an island (PW64_START=a:rb:1): 25045 commands,
+ * 1247 matrices, 0 look-ats (0x60 kept), 73 + 16 sort entries. Display
+ * list: kernel/graphics.c.patch; matrices: uv_graphics.h.patch (indices are
+ * s16); sort lists: chan.c.patch. */
+#define PW64_DL_LEN 65536
+#define PW64_MATRIX_LEN 4096
+#define PW64_SORT_LEN 512
+#define PW64_SORT_DOBJ_LEN 128
+/* Infinite LOD / infinite view distance (native/src/pw64_visibility.c),
+ * set before boot by pw64_game::set_visibility. */
+extern int pw64_infinite_lod;
+extern int pw64_infinite_view_distance;
+float pw64_visibility_far(const void* chan, float far);
 
 #endif

@@ -1,0 +1,45 @@
+--- a/src/app/pilot_select.c
++++ b/src/app/pilot_select.c
+@@ -66,6 +66,14 @@
+     -0.745f, -1.336f, -1.221f, -0.828f, -1.36f, -1.076f,
+ };
+ 
++// PW64 split-screen: game.c.patch runs this screen once per player, with
++// that player live (pw64_player_cur; PW64_CONT gives its pad). Each player
++// keeps their own cursor (col D_8034EDA0, row D_8034EDA4[0]) and a label
++// says whose pick it is.
++static s8 sPw64Cursor[PW64_MAX_PLAYERS][2];
++static s32 sPw64CursorOwner;
++static s16 sPw64Label[12];
++
+ // forward declarations
+ STATIC_FUNC void func_802DD57C(Camera* camera);
+ STATIC_FUNC s32 func_802DD8E8(Camera* camera, Unk80367868*, s32);
+@@ -77,6 +85,13 @@
+     s32 result;
+     s32 selectedPilot;
+ 
++    if ((pw64_players > 1) && (sPw64CursorOwner != pw64_player_cur)) {
++        sPw64Cursor[sPw64CursorOwner][0] = D_8034EDA0;
++        sPw64Cursor[sPw64CursorOwner][1] = D_8034EDA4[0];
++        D_8034EDA0 = sPw64Cursor[pw64_player_cur][0];
++        D_8034EDA4[0] = sPw64Cursor[pw64_player_cur][1];
++        sPw64CursorOwner = pw64_player_cur;
++    }
+     func_802DD57C(camera);
+     // @fake
+     func_802DD8E8(camera, arg1, arg1->unk4[D_8034EDC0].pilot * 0);
+@@ -469,6 +484,13 @@
+         uvFontPrintStr16(x, 206, selectPilotText, 0x14, 0xFFE);
+ #endif
+     }
++    if (pw64_players > 1) {
++        char label[] = "PLAYER 1";
++        label[7] = (char)('1' + pw64_player_cur);
++        pw64_text_encode(label, sPw64Label, ARRAY_COUNT(sPw64Label));
++        uvFontColor(0xFF, 0xFF, 0x00, 0xFF); // the cursor's yellow
++        uvFontPrintStr16(225 - (uvFontStr16Width(sPw64Label) / 2), 184, sPw64Label, 0x14, 0xFFE);
++    }
+     pilotName = textGetDataByIdx(arg1->unk4[D_8034EDC0].textId);
+     uvFontSet(6);
+     uvFontColor(0xFF, 0xFF, 0xFF, 0xFF);

@@ -1,0 +1,28 @@
+--- a/src/app/rings.c
++++ b/src/app/rings.c
+@@ -135,6 +135,25 @@ void rings_803234A4(Ring* ring) {
+     if (ring->objId != 0xFFFF) {
+         uvDobjState(ring->objId, state);
+         uvDobjPosm(ring->objId, 0, &ring->pose);
++        pw64_dobj_claim(ring->objId); // PW64 split-screen: this player's ring
++    }
++}
++
++// PW64 split-screen (task.c.patch pw64_reg_task): per-player ring state;
++// each player's rings have their own dobjs (pw64_rings_clone).
++void pw64_reg_rings(void) {
++    PW64_REG(sRingsCount);
++    PW64_REG(gRings);
++    PW64_REG(gRingChildIndexes);
++}
++
++void pw64_rings_clone(void) {
++    s32 i;
++
++    for (i = 0; i < sRingsCount; i++) {
++        if (gRings[i].objId != 0xFFFF) {
++            gRings[i].objId = pw64_dobj_clone(gRings[i].objId);
++        }
+     }
+ }
+ 

@@ -1,0 +1,29 @@
+--- a/src/app/targets.c
++++ b/src/app/targets.c
+@@ -82,6 +82,26 @@ void targetsLoad(void) {
+                 break;
+             }
+             uvDobjPosm(var_s1->objId, 0, &var_s1->unk4);
++            pw64_dobj_claim(var_s1->objId); // PW64 split-screen
++        }
++    }
++}
++
++// PW64 split-screen (task.c.patch pw64_reg_task): per-player missile
++// targets with their own dobjs (pw64_targets_clone); D_803506A0[0] is
++// the spin angle, advanced in each player's targetsFrameUpdate.
++void pw64_reg_targets(void) {
++    PW64_REG(sMissileTargetCount);
++    PW64_REG(sMissileTargets);
++    PW64_REG(D_803506A0);
++}
++
++void pw64_targets_clone(void) {
++    s32 i;
++
++    for (i = 0; i < sMissileTargetCount; i++) {
++        if (sMissileTargets[i].objId != 0xFFFF) {
++            sMissileTargets[i].objId = pw64_dobj_clone(sMissileTargets[i].objId);
+         }
+     }
+ }

@@ -1,0 +1,46 @@
+--- a/src/app/bonus.c
++++ b/src/app/bonus.c
+@@ -80,6 +80,7 @@ void bonusLoad(void) {
+                               temp_s0->unk14 * 0.0174533f, // DEG_TO_RAD(1)
+                               &var_s1->unk4);
+                 uvDobjPosm(var_s1->objId, 0, &var_s1->unk4);
++                pw64_dobj_claim(var_s1->objId); // PW64 split-screen
+             }
+         }
+     }
+@@ -103,6 +104,11 @@ void bonusFrameUpdate(Mtx4F* arg0) {
+         }
+     }
+ 
++    // PW64 split-screen: no warp to the birdman bonus (func_802EE14C
++    // reloads the level for one vehicle); the stars only spin.
++    if (pw64_level_players > 1) {
++        return;
++    }
+     if ((D_80362690->state != GAME_STATE_RESULTS) && (D_80362690->unkC[D_80362690->unk9C].unkA == 1)) {
+         px = arg0->m[3][0];
+         py = arg0->m[3][1];
+@@ -130,6 +136,23 @@ void bonusFrameUpdate(Mtx4F* arg0) {
+     }
+ }
+ 
++// PW64 split-screen (task.c.patch pw64_reg_task): per-player stars with
++// their own dobjs (pw64_bonus_clone), so each spins once per frame.
++void pw64_reg_bonus(void) {
++    PW64_REG(sBonusStarCount);
++    PW64_REG(sBonusStars);
++}
++
++void pw64_bonus_clone(void) {
++    s32 i;
++
++    for (i = 0; i < sBonusStarCount; i++) {
++        if (sBonusStars[i].objId != 0xFFFF) {
++            sBonusStars[i].objId = pw64_dobj_clone(sBonusStars[i].objId);
++        }
++    }
++}
++
+ void bonusDeinit(void) {
+     s32 i;
+     for (i = 0; i < sBonusStarCount; i++) {

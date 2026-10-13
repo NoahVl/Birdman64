@@ -1,6 +1,6 @@
 --- a/src/app/code_7CF30.c
 +++ b/src/app/code_7CF30.c
-@@ -196,6 +196,11 @@
+@@ -196,6 +196,11 @@ void func_802F5F80(GyrocopterData* gcData) {
      shadow_80334C70();
  }
  
@@ -12,7 +12,7 @@
  void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
      s32 pad[2];
      HUDState* hud;
-@@ -225,7 +230,11 @@
+@@ -225,7 +230,11 @@ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
          }
  
          if ((gcData->elapsedTime > 0.0f) || (buttons & A_BUTTON)) {
@@ -25,3 +25,57 @@
          }
  
          gcData->unk9C = func_80313F08(&D_80368880, ABS_NOEQ(xAxisInput));
+@@ -438,9 +447,12 @@ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
+         if (gcData->unk5D != 0) {
+             gcData->unk2 |= 2;
+             uvDobjState(gcData->objId, gcData->unk2);
++            pw64_dobj_cockpit[gcData->objId] = 0; // PW64 split-screen
+         } else {
+             if (gcData->unk2 & 2) {
+                 gcData->unk2 &= ~2;
+             }
+             uvDobjState(gcData->objId, gcData->unk2);
++            // PW64 split-screen: hidden for this player's cockpit view only
++            // (dobj.c.patch _uvDobjsDraw still draws it in the other views).
++            pw64_dobj_cockpit[gcData->objId] = (u8)(pw64_player_cur + 1);
+         }
+@@ -484,12 +493,14 @@ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
+                 hud->power = 0.0f;
+             }
+             if (gcData->unkC1 != 0) {
++                if (!pw64_free_flight) { // PW64 free flight: no score, no penalty
+ #if defined(VERSION_JP)
+                 hudText_8031D8E0(TEXT_OFF_5, 1.5f, 8.0f);
+ #else // VERSION_US
+                 hudWarningText(TEXT_OFF_5, 1.5f, 8.0f);
+ #endif
+                 sndPlaySfx(SFX_UI_POINT_PENALTY);
++                }
+             } else {
+                 if ((gcData->fuel <= 0.0f) && !gcData->fuelEmpty) {
+                     hudWarningText(TEXT_FUEL_OUT, 1.5f, 8.0f);
+@@ -537,3 +550,5 @@ void func_802F6DC8(GyrocopterData* gcData, u8 unkFlag) {
+         temp_fv1 = gcData->camera->clipNear * -0.105104235;
+         temp_fa0 = (-gcData->camera->clipNear * gcData->camera->clipY0) / gcData->camera->unk20;
+-        gcData->reticleY = (107.0f * temp_fv1) / temp_fa0;
++        // PW64 split-screen: 107 = the full view's half height (exactly 107
++        // there); a split view's guard half height / HUD scale (camera.c.patch).
++        gcData->reticleY = (pw64_split_reticle_half(gcData->camera) * temp_fv1) / temp_fa0;
+@@ -734,4 +745,5 @@ void func_802F764C(GyrocopterData* gcData) {
+     if (gcData->unkD0 != 0) {
+         gcData->camera->unk6 = 0;
+         gcData->unk2 = gcData->camera->unk6;
+         uvDobjState(gcData->objId, gcData->unk2);
++        pw64_dobj_cockpit[gcData->objId] = 0; // PW64 split-screen: sunk, hidden in every view
+@@ -1188,3 +1199,11 @@ void gyrocopterLoadPilot(u8 pilot, GyrocopterData* gcData) {
+         break;
+     }
+ }
++
++// PW64 split-screen: per-player button edge detect, sfx one-shot and test
++// timer (pw64_players.c).
++void pw64_reg_gyrocopter_move(void) {
++    PW64_REG(D_8034F380);
++    PW64_REG(D_8034F384);
++    PW64_REG(sPw64TestTime);
++}

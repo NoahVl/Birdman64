@@ -1,0 +1,28 @@
+--- a/src/app/gyrocopter_sound.c
++++ b/src/app/gyrocopter_sound.c
+@@ -346,5 +346,13 @@
+     for (i = 0; i < 2; i++) {
+         gcData->unk690[i].unk50 = func_8033F8CC(gcData->unk690[i].unk50);
+     }
+-    uvEventRemoveCb(D_80369E50, 1, 0xD, 0x12, 0x13, 0x16, 0xC, 0x10, 0x24);
++    // PW64 split-screen: remove this gyro's own callback (cb + arg), not
++    // the last-registered one in the static: with two gyros the static
++    // holds player 2's. Same as the static with one gyro.
++    {
++        EventCallbackInfo info = D_80369E50;
++        info.cb = &hsound_callback;
++        info.arg = gcData;
++        uvEventRemoveCb(info, 1, 0xD, 0x12, 0x13, 0x16, 0xC, 0x10, 0x24);
++    }
+ }
+@@ -362,4 +370,10 @@
+     uvEmitterSetVol(emitterId, 1.0f);
+     uvEmitterSetPitch(emitterId, 1.0f);
+     uvEmitterSetMatrix(emitterId, mat);
+ }
++
++// PW64 split-screen: per-player gyrocopter sound callback info
++// (pw64_players.c).
++void pw64_reg_gyrocopter_sound(void) {
++    PW64_REG(D_80369E50);
++}

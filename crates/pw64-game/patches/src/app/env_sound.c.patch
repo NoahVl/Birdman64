@@ -8,7 +8,29 @@
  
  typedef struct {
      f32 unk0;
-@@ -242,7 +243,8 @@ void envSound_802E2A00(s32 eventType, void* arg1, s32 eventData) {
+@@ -64,6 +65,10 @@ static u8 sEnvSoundIsInit = FALSE;
+ STATIC_DATA EnvSoundState sEnvSoundState;
+ STATIC_DATA f32 sEnvSoundFutureTime; // time set +4 seconds, only set
+ STATIC_DATA u8 sEnvSoundStateCount[20];
++// PW64 split-screen: sEnvSoundStateCount[1] / sEnvSoundFutureTime for
++// players 2.. (pw64_env_sound_player).
++static u8 sPw64Covered[PW64_MAX_PLAYERS];
++static f32 sPw64CoverTime[PW64_MAX_PLAYERS];
+ 
+ // forward declarations
+ void envSound_802E2904(EnvSoundState*);
+@@ -80,6 +85,10 @@ void envSoundInit(void) {
+     }
+ 
+     sEnvSoundFutureTime = 0.0f;
++    for (i = 0; i < PW64_MAX_PLAYERS; i++) { // PW64 split-screen
++        sPw64Covered[i] = 0;
++        sPw64CoverTime[i] = 0.0f;
++    }
+     sEnvSoundIsInit = TRUE;
+     envSound_802E2904(&sEnvSoundState);
+     sEnvSoundEventCb.cb = &envSound_802E2A00;
+@@ -242,7 +251,8 @@ void envSound_802E2A00(s32 eventType, void* arg1, s32 eventData) {
          for (i = 0; i < esState->count; i++) {
              emitter = &esState->emitters[i];
              if (D_8034EF20 != 0) {
@@ -18,3 +40,53 @@
              } else {
                  if ((sp26C == emitter->unk6) || (emitter->unk6 == 0xA)) {
                      switch (emitter->sndId) {
+@@ -510,3 +520,49 @@ void envSoundFrameUpdate(Mtx4F* arg0) {
+         }
+     }
+ }
++
++// PW64 split-screen: envSoundFrameUpdate's covered-spot cue for player 2..
++// (live, from task.c.patch pw64_task_player_update): an APTS type-1 point
++// probes up from the pilot; leaving cover (bridge, arch) plays sfx 0x50.
++// envSoundFrameUpdate runs once, for player 1; its type-0 ambience
++// crossfade is one mixer channel volume, so it stays player 1's.
++void pw64_env_sound_player(Mtx4F* arg0) {
++    LevelAPTS* aptsRef;
++    LevelAPTS* apt;
++    u8 aptCount;
++    u8 i;
++    s32 p = pw64_player_cur;
++    Vec3F d;
++    Vec3F top;
++    Vec3F pos;
++    Unk802D3658_Unk1224 hit;
++
++    aptCount = levelGetAPTS(&aptsRef);
++    if ((aptCount == 0) || (sEnvSoundState.flags & 1)) {
++        return;
++    }
++    for (i = 0; i < aptCount; i++) {
++        apt = &aptsRef[i];
++        d.x = arg0->m[3][0] - apt->pos.x;
++        d.y = arg0->m[3][1] - apt->pos.y;
++        d.z = arg0->m[3][2] - apt->pos.z;
++        if ((apt->unk14 != 1) || (uvVec3Len(&d) > apt->unk10)) {
++            continue;
++        }
++        pos.x = top.x = arg0->m[3][0];
++        pos.y = top.y = arg0->m[3][1];
++        pos.z = arg0->m[3][2];
++        top.z = apt->unk10 + pos.z;
++        if (func_802DB224(&hit, 0xB, 0xFFFF, 0, &pos, &top) != 0) {
++            sPw64Covered[p]++;
++        } else {
++            if ((sPw64Covered[p] > 0) && (D_80362690->unkC[0].unkA != 4) && (D_80362690->unkC[0].veh != VEHICLE_JUMBLE_HOPPER)) {
++                if (sPw64CoverTime[p] < D_8034F850) {
++                    sPw64CoverTime[p] = D_8034F850 + 4.0f;
++                    sndPlaySfx(0x50);
++                }
++            }
++            sPw64Covered[p] = 0;
++        }
++    }
++}

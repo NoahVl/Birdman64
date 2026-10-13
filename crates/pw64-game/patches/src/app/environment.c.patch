@@ -8,19 +8,74 @@
  
  typedef struct {
      Vec3F unk0;
-@@ -95,6 +96,11 @@
+@@ -93,10 +94,14 @@ s32 env_802E0CF0(void) {
+     u8 fogA;
+     f32 sp3C;
      f32 sp38;
++    f32 clipFar;
  
      uvEnvProps(D_80362690->envId, ENV_PROP_FOG_FACTOR(0.0f), ENV_PROP_END);
-+    // Whole-island views must not draw the N64 curtain at camera->clipFar.
-+    // Leaving it in front of the newly visible sea creates a bright stripe.
-+    if (pw64_infinite_view_distance) {
-+        return 0;
-+    }
      uvMat4SetIdentity(&spA8);
      camera = D_80362690->unkC[D_80362690->unk9C].unk70;
++    // PW64: the haze band sits at the far plane: with infinite view distance
++    // that's the channel's extended one this frame draws with (chan.c.patch).
++    clipFar = pw64_infinite_view_distance ? D_80261730[camera->unk22C].unk1FC : camera->clipFar;
      uvMat4Copy(&sp68, &camera->unk108);
-@@ -313,7 +319,9 @@
+     sp154.x = sp68.m[1][0];
+     sp154.y = sp68.m[1][1];
+@@ -106,16 +111,16 @@ s32 env_802E0CF0(void) {
+     sp130.z = 0.0f;
+     uvVec3Cross(&sp13C, &sp130, &sp154);
+     uvVec3Normal(&sp13C, &sp13C);
+-    spF4 = sp68.m[3][0] + ((0.875f * camera->clipFar) * sp154.x);
+-    spF8 = sp68.m[3][1] + ((0.875f * camera->clipFar) * sp154.y);
+-    spFC = sp68.m[3][2] + ((0.875f * camera->clipFar) * sp154.z);
+-    spE8 = ((0.875f * camera->clipFar) * sp13C.x) + spF4;
+-    spEC = ((0.875f * camera->clipFar) * sp13C.y) + spF8;
+-    var_fa1 = ((0.875f * camera->clipFar) * sp13C.z) + spFC;
++    spF4 = sp68.m[3][0] + ((0.875f * clipFar) * sp154.x);
++    spF8 = sp68.m[3][1] + ((0.875f * clipFar) * sp154.y);
++    spFC = sp68.m[3][2] + ((0.875f * clipFar) * sp154.z);
++    spE8 = ((0.875f * clipFar) * sp13C.x) + spF4;
++    spEC = ((0.875f * clipFar) * sp13C.y) + spF8;
++    var_fa1 = ((0.875f * clipFar) * sp13C.z) + spFC;
+     sp60 = spE8 - spF4;
+     sp5C = spEC - spF8;
+     var_fv0 = var_fa1 - spFC;
+-    if (var_fv0 < (camera->clipFar * 0.1)) {
++    if (var_fv0 < (clipFar * 0.1)) {
+         uvEnvProps(D_80362690->envId, ENV_PROP_FOG_FACTOR(0.996f), ENV_PROP_END);
+         return 0;
+     }
+@@ -127,12 +132,12 @@ s32 env_802E0CF0(void) {
+     }
+     sp16C = (sp54 * sp60) + spF4;
+     sp170 = (sp54 * sp5C) + spF8;
+-    spF4 = sp68.m[3][0] + (camera->clipFar * sp154.x);
+-    spF8 = sp68.m[3][1] + (camera->clipFar * sp154.y);
+-    spFC = sp68.m[3][2] + (camera->clipFar * sp154.z);
+-    spE8 = (camera->clipFar * sp13C.x) + spF4;
+-    spEC = (camera->clipFar * sp13C.y) + spF8;
+-    var_fa1 = (camera->clipFar * sp13C.z) + spFC;
++    spF4 = sp68.m[3][0] + (clipFar * sp154.x);
++    spF8 = sp68.m[3][1] + (clipFar * sp154.y);
++    spFC = sp68.m[3][2] + (clipFar * sp154.z);
++    spE8 = (clipFar * sp13C.x) + spF4;
++    spEC = (clipFar * sp13C.y) + spF8;
++    var_fa1 = (clipFar * sp13C.z) + spFC;
+     if (var_fa1 == spFC) {
+         sp54 = 0.0f;
+     } else {
+@@ -140,7 +145,7 @@ s32 env_802E0CF0(void) {
+     }
+     var_fa1 = 1.0f / camera->unk20;
+     var_ft4 = (camera->clipX1 * (var_fa1));
+-    sp38 = 2.0f * (camera->clipFar * var_ft4);
++    sp38 = 2.0f * (clipFar * var_ft4);
+     sp148 = sp154.y * sp38;
+     sp14C = -sp154.x * sp38;
+     sp38 = sp68.m[3][2] / 15.0f;
+@@ -313,7 +314,9 @@ void env_802E14E8(Vec3F* arg0, f32 arg1, f32 arg2, f32 arg3, f32 arg4) {
  void env_802E15F0(void) {
      f32 var_fv1;
  
@@ -31,7 +86,7 @@
      if ((D_80359D80.unk20 < D_80359D80.unk10) && (var_fv1 > 0.0f)) {
          var_fv1 = -var_fv1;
      }
-@@ -321,7 +329,7 @@
+@@ -321,7 +324,7 @@ void env_802E15F0(void) {
          var_fv1 = -var_fv1;
      }
      D_80359D80.unk10 += var_fv1;

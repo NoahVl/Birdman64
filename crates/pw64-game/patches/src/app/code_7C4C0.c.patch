@@ -1,0 +1,34 @@
+--- a/src/app/code_7C4C0.c
++++ b/src/app/code_7C4C0.c
+@@ -13,5 +13,9 @@
+ Unk80371120 D_80368370;
+ Unk80371120 D_80368520;
+ Unk80371120 D_803686D0;
++
++// PW64 split-screen: hoisted from func_802F56B4 so they can be registered
++// as per-player state (pw64_reg_gyrocopter_poses).
++static f32 D_8034F370 = 0.0f;
++static f32 D_8034F374 = 0.5f;
+ 
+ void func_802F5358(GyrocopterData*);
+@@ -136,5 +140,3 @@
+ void func_802F56B4(GyrocopterData* gcData, u8 arg1) {
+-    static f32 D_8034F370 = 0.0f;
+-    static f32 D_8034F374 = 0.5f;
+     f32 var_fa1;
+     u8 sp23;
+@@ -223,4 +225,14 @@
+     gcData->unkF0 = 0.0f;
+     gcData->unkE8 = 0.0f;
+     func_802F50CC(gcData);
+ }
++
++// PW64 split-screen: per-player gyrocopter landing-pose + anim state
++// (pw64_players.c).
++void pw64_reg_gyrocopter_poses(void) {
++    PW64_REG(D_80368370);
++    PW64_REG(D_80368520);
++    PW64_REG(D_803686D0);
++    PW64_REG(D_8034F370);
++    PW64_REG(D_8034F374);
++}

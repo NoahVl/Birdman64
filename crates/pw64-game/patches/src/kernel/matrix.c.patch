@@ -1,0 +1,23 @@
+--- a/src/kernel/matrix.c
++++ b/src/kernel/matrix.c
+@@ -189,1 +189,4 @@
+-        *(s16*)1 = 0;
++        // PW64: the N64 debug trap (a write to address 1) crashed the game
++        // on a translation past the 16.16 range; the value is already
++        // clamped above, so log the caller and carry on.
++        PW64_LOGF("uvMat4CopyF2L: translation overflow, caller", (u32)(unsigned long long)__builtin_return_address(0));
+@@ -193,1 +196,1 @@
+-        *(s16*)1 = 0;
++        PW64_LOGF("uvMat4CopyF2L: translation overflow, caller", (u32)(unsigned long long)__builtin_return_address(0));
+@@ -203,1 +206,1 @@
+-        *(s16*)1 = 0;
++        PW64_LOGF("uvMat4CopyF2L: translation overflow, caller", (u32)(unsigned long long)__builtin_return_address(0));
+@@ -207,1 +210,1 @@
+-        *(s16*)1 = 0;
++        PW64_LOGF("uvMat4CopyF2L: translation overflow, caller", (u32)(unsigned long long)__builtin_return_address(0));
+@@ -217,1 +220,1 @@
+-        *(s16*)1 = 0;
++        PW64_LOGF("uvMat4CopyF2L: translation overflow, caller", (u32)(unsigned long long)__builtin_return_address(0));
+@@ -221,1 +224,1 @@
+-        *(s16*)1 = 0;
++        PW64_LOGF("uvMat4CopyF2L: translation overflow, caller", (u32)(unsigned long long)__builtin_return_address(0));

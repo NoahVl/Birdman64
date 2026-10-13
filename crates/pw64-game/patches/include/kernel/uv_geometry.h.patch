@@ -1,0 +1,12 @@
+--- a/include/kernel/uv_geometry.h
++++ b/include/kernel/uv_geometry.h
+@@ -3,7 +3,8 @@
+ 
+ #include <uv_common.h>
+ 
+-#define UV_GEOM_NUM_VERTICES 0x320
++// PW64: was 0x320; per-frame budget shared by both split-screen passes.
++#define UV_GEOM_NUM_VERTICES 0x800
+ 
+ void uvVtxInit(void);
+ s16 uvVtx(s32 x, s32 y, s32 z, s32 s, s32 t, s32 r, s32 g, s32 b, s32 a);

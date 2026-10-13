@@ -1,0 +1,27 @@
+--- a/src/app/glider_toys.c
++++ b/src/app/glider_toys.c
+@@ -99,6 +99,25 @@ STATIC_FUNC void gliderToyModelLookup(s32 idx) {
+ STATIC_FUNC s32 gliderToyModelLookup(s32 idx) {
+     Unk80362690_Unk0* unkC;
+     unkC = &D_80362690->unkC[D_80362690->unk9C];
++    // PW64 split-screen: player 2's own pilot (pw64_p2_pilot, same rule as
++    // level.c.patch) isn't a toy either. The original order (Lark, Goose,
++    // Hawk, Kiwi, Ibis, Robin) without both pilots leaves 4 = the most toys
++    // a map has; level 0x1A loads every low-poly glider.
++    if ((pw64_players > 1) && (pw64_p2_pilot >= 0) && (pw64_p2_pilot != unkC->pilot) && !D_80362690->unkA4) {
++        s32 pw64Pilot;
++
++        for (pw64Pilot = 0; pw64Pilot < PILOT_COUNT; pw64Pilot++) {
++            if ((pw64Pilot == unkC->pilot) || (pw64Pilot == pw64_p2_pilot)) {
++                continue;
++            }
++            if (idx == 0) {
++                return MODEL_HG_LARK_LOWPOLY + pw64Pilot;
++            }
++            idx--;
++        }
++        return 0;
++    }
+     switch (unkC->pilot) {
+     case PILOT_LARK:
+         switch (idx) {

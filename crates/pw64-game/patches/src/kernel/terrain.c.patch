@@ -1,35 +1,17 @@
 --- a/src/kernel/terrain.c
 +++ b/src/kernel/terrain.c
-@@ -401,7 +401,7 @@
+@@ -401,7 +401,9 @@ typedef struct Unk802C5BC0 {
      s8 unkC;
  } Unk802C5BC0;
  
 -Unk802C5BC0 D_802C5BC0[64];
-+Unk802C5BC0 D_802C5BC0[PW64_TERRAIN_CAPACITY];
++// PW64: was 64, which long views (infinite view distance) overran; at most
++// one entry per terrain cell, as the per-cell D_80263060[1040] (chan.c).
++Unk802C5BC0 D_802C5BC0[1040];
  s32 D_802C5FC0;
  
  void uvTerra_8022EE90(UnkStruct_80204D94* arg0, ParsedUVTR* arg1, f32 arg2) {
-@@ -480,6 +480,9 @@
- 
-     func_802070B8(arg0, &arg0->unk374);
- 
-+    if (spC8->unk18 * spC8->unk19 > PW64_TERRAIN_CAPACITY) {
-+        pw64_fatal("terrain grid capacity exceeded", spC8->unk18 * spC8->unk19);
-+    }
-     sp168 = spC8->unk1C;
-     sp164 = spC8->unk20;
- 
-@@ -590,6 +593,9 @@
-             temp_v0 = spDE & ~var_s6;
- 
-             if (spDE) {
-+                if (D_802C5FC0 >= PW64_TERRAIN_CAPACITY) {
-+                    pw64_fatal("visible terrain capacity exceeded", D_802C5FC0);
-+                }
-                 temp_s0_3 = &D_802C5BC0[D_802C5FC0];
-                 temp_s0_3->unk0 = temp_s2;
-                 temp_s0_3->unk6 = spDE;
-@@ -601,9 +607,6 @@
+@@ -601,9 +603,6 @@ void _uvTerraDraw(UnkStruct_80204D94* arg0, u8 arg1) {
                  temp_s0_3->unk8 = uvSqrtF(SQ(temp_fs4) + (SQ(temp_ft4) + SQ(temp_ft5)));
  
                  D_802C5FC0++;

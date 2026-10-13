@@ -20,6 +20,11 @@ Holiday Island at 1080p, 16:9, 8x MSAA.
 
 ![A hang glider banking over the coast in a widescreen view](https://github.com/NoahVl/Birdman64/releases/download/media/hero.jpg)
 
+Two-player split-screen: both players fly the same test at once, each with
+their own controller, HUD and score.
+
+![Two gyrocopters in side-by-side split-screen over Holiday Island](https://github.com/NoahVl/Birdman64/releases/download/media/split-screen.jpg)
+
 The original 4:3 image (left) and Birdman64 at 16:9 (right). Widescreen shows
 more of the world instead of stretching it.
 
@@ -133,6 +138,8 @@ button printed B is the N64 A):
 
 ## Features
 
+- Two-player split-screen (top/bottom or side by side) with every vehicle,
+  bonus game and Free flight; pick 2 Players on the title menu
 - Widescreen by default on wide monitors (any ratio up to 21:9, menu
   backgrounds stay 4:3 by design); fill the screen without letterbox bars
 - Window, borderless fullscreen or exclusive fullscreen with a chosen video
@@ -179,7 +186,8 @@ picks up where the last one stopped.
 **Settings screen:** press F10, Esc (or pad Select) to pause the game and
 change options. Changes are saved when you close the screen; volume and
 most graphics options apply immediately, a few (MSAA, widescreen, fill
-screen) are marked "(restart)" and need the game restarted to apply. Reset
+screen, infinite LOD, infinite view distance) are marked "(restart)" and need
+the game restarted to apply. Reset
 rows restore the defaults.
 
 `pw64.toml` example (all keys optional, the same options exist as
@@ -197,8 +205,8 @@ vsync = false              # display-paced pacing (less judder, more latency)
 display_mode = "windowed"  # "windowed", "borderless" or "exclusive"
 fullscreen_resolution = "1920x1080@60" # exclusive video mode WxH[@Hz]
 show_fps = false           # frame rate in the window title
-infinite_lod = false       # highest model detail at any distance (restart)
-infinite_view_distance = false # whole-island view without distance fog (restart)
+infinite_lod = false       # models at full detail at any distance (restart)
+infinite_view_distance = false # see the whole island (restart; costs frame time)
 no_audio = true            # no audio output device
 volume = 0.8               # 0.0..1.0
 
@@ -266,6 +274,8 @@ when both are set:
 | `PW64_FILTER=<bilinear\|n64>` | texture filter (the N64 look is `n64`) |
 | `PW64_WIDESCREEN=<1\|w:h\|0>` | widescreen aspect; the default is your monitor's aspect when it is wider than 4:3 (up to 21:9) |
 | `PW64_FILL_SCREEN=<0\|1>` | no letterbox bars around world views (default: follows widescreen) |
+| `PW64_INFINITE_LOD=<0\|1>` | models at full detail at any distance (restart) |
+| `PW64_INFINITE_VIEW_DISTANCE=<0\|1>` | see the whole island instead of fading out after ~2 km (restart) |
 | `PW64_FPS=<monitor\|N\|0>` | frame rate (uncapped with 0) |
 | `PW64_VSYNC=<0\|1>` | display-paced pacing (V-Sync) |
 | `PW64_DISPLAY_MODE=<windowed\|borderless\|exclusive>` | window, borderless fullscreen or exclusive fullscreen |
@@ -412,15 +422,6 @@ keeps the port and the C in sync bit-for-bit. See
 compile-time C macros at the bottom are part of the native layer, not
 environment variables):
 
-The experimental **Infinite LOD** and **Infinite view distance** options are in
-the port's **Display & graphics** menu (F10), with independent On/Off values saved
-to `pw64.toml`. Both default to off and take effect on restart; the menu offers
-**Restart now** after a change. Whole-island distance uses a finite far plane covering
-the terrain bounds and omits the original short-distance fog curtain. Test it on
-your hardware before relying on it for regular play. On Linux, the native selector
-and packet-boundary regressions run with
-`python3 crates/pw64-game/tests/visibility.py` (`PW64_ZIG` must point to Zig 0.16.0).
-
 <details>
 <summary>Full PW64_* variable list</summary>
 
@@ -430,8 +431,6 @@ and packet-boundary regressions run with
 | `PW64_MAX_RETRACES=<n>` | headless run, stop after n frames (implies headless) |
 | `PW64_NO_THROTTLE=1` | skip idle time between frames |
 | `PW64_NO_INPUT=1` | no gamepad thread |
-| `PW64_INFINITE_LOD=1` | experimental: keep geometric model LOD 0 at every distance; texture mipmapping stays enabled |
-| `PW64_INFINITE_VIEW_DISTANCE=1` | experimental: extend terrain views to cover the island and keep models beyond their final LOD cutoff |
 | `PW64_TRACE_OS=1` | log OS-core thread events |
 | `PW64_INPUT_SCRIPT=<file>` | scripted controller input |
 | `PW64_DUMP_FRAMES=<n\|r1,r2..>` | dump frames to `tmp/frame_<retrace>.png` |

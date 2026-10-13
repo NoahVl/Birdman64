@@ -1,8 +1,94 @@
 --- a/src/app/title_screen.c
 +++ b/src/app/title_screen.c
+@@ -58,1 +58,53 @@
+-STATIC_DATA s32 sMainMenuItems[] = { TEXT_GAMESTART, TEXT_OPTION };
++// PW64 split-screen: a third item, "1 Player" / "2 Players" (our own glyph
++// string, menuSetItem; the TEXT_OPTION entry is only its placeholder). It
++// sits last so Game Start / Option keep their places, and toggles
++// split-screen live (game.c.patch pw64_split_apply).
++STATIC_DATA s32 sMainMenuItems[] = { TEXT_GAMESTART, TEXT_OPTION, TEXT_OPTION };
++#define PW64_MENU_PLAYERS 2
++static s16 sPw64PlayersStr[16];
++static s16 sPw64HintStr[40];
++static s32 sPw64PlayersShown = -1;
++static s32 sPw64MenuDy; // the extra item's row height (box grows down)
++static s32 sPw64HintW;  // the hint's width (font 6, measured at menu creation)
++static const char sPw64Hint[] = "Connect a second controller";
++
++// The Players item shows the current mode; re-encoded whenever it changed
++// (the item itself, or the settings row via pw64_split_poll).
++static void pw64_title_players_label(void) {
++    if (sPw64PlayersShown != pw64_split) {
++        sPw64PlayersShown = pw64_split;
++        pw64_text_encode_style(pw64_split ? "2 Players" : "1 Player", sPw64PlayersStr,
++                               ARRAY_COUNT(sPw64PlayersStr), 1);
++        menuSetItem(PW64_MENU_PLAYERS, sPw64PlayersStr);
++    }
++}
++
++// Under the box while split-screen is on and player 2's controller isn't
++// connected (pw64_split_hint, Rust input routing): one line, plain style,
++// on its own darker box (drawn with the menu box, the text after the menu).
++#define PW64_HINT_X ((SCREEN_WIDTH - sPw64HintW) / 2)
++#define PW64_HINT_Y (76 - 2 * sPw64MenuDy - 4)
++static s32 pw64_title_hint_on(void) {
++    return pw64_split && pw64_split_hint;
++}
++
++static void pw64_title_hint_box(void) {
++    if (pw64_title_hint_on()) {
++        screenDrawBox(PW64_HINT_X - 4, PW64_HINT_Y - 3, PW64_HINT_X + sPw64HintW + 4,
++                      PW64_HINT_Y + sPw64MenuDy + 1, 0, 0, 0, 0xA0);
++    }
++}
++
++static void pw64_title_hint(void) {
++    if (!pw64_title_hint_on()) {
++        return;
++    }
++    if (sPw64HintStr[0] == 0 && sPw64HintStr[1] == 0) {
++        pw64_text_encode(sPw64Hint, sPw64HintStr, ARRAY_COUNT(sPw64HintStr));
++    }
++    uvFontSet(6);
++    uvFontScale(1.0f, 1.0f);
++    uvFontColor(0xFF, 0xFF, 0xFF, 0xFF);
++    uvFontPrintStr16(PW64_HINT_X, PW64_HINT_Y, sPw64HintStr, 100, 0xFFE);
++}
+@@ -98,1 +150,4 @@
+         var_s1 = func_80343550();
++        // PW64 split-screen: a settings-row switch made at the title applies now.
++        pw64_split_poll();
++        pw64_title_players_label();
+@@ -200,1 +255,9 @@
+-    menuCreateItems(102, 60, 6, 1.0f, 1.0f, sMainMenuItems, 2);
++    // PW64 split-screen: three items, the menu grown down by one row.
++    uvFontSet(6);
++    uvFontScale(1.0f, 1.0f);
++    sPw64MenuDy = uvFontHeight() + 1;
++    sPw64HintW = uvFontWidth(sPw64Hint);
++    menuCreateItems(102, 60 - sPw64MenuDy, 6, 1.0f, 1.0f, sMainMenuItems, 3);
++    sPw64PlayersShown = -1;
++    pw64_title_players_label();
 @@ -327,1 +327,4 @@
 -    while (uvClkGetSec(UV_CLKID_APP) < 1.0) { }
 +    // PW64: the native scheduler is cooperative; a spin that never yields
 +    // starves the scheduler/audio threads (snap.c.patch, native-build.md).
 +    // No caller in the US build, patched for consistency.
 +    while (uvClkGetSec(UV_CLKID_APP) < 1.0) { osYieldThread(); }
+@@ -443,1 +446,9 @@
+             break;
++        case PW64_MENU_PLAYERS:
++            // PW64 split-screen: switch live (no test is loaded here); the
++            // host follows (input routing, pw64.toml) on its next retrace.
++            pw64_split_req = -1;
++            pw64_split_apply(!pw64_split);
++            pw64_title_players_label();
++            D_80378CE4 = 0.0f; // restart the attract-demo idle timer
++            break;
+@@ -483,1 +494,4 @@
+-    screenDrawBox(97, 76, 202, 118, 0, 0, 0, sp30);
++    screenDrawBox(97, 76 - sPw64MenuDy, 202, 118, 0, 0, 0, sp30); // PW64: + Players row
++    pw64_title_hint_box();
+@@ -487,1 +501,2 @@
+         menuRender();
++        pw64_title_hint();

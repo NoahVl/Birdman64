@@ -1,0 +1,27 @@
+--- a/src/app/code_82520.c
++++ b/src/app/code_82520.c
+@@ -66,6 +66,24 @@ void func_802FB0DC(Unk80368B80* arg0) {
+     uvDobjProps(arg0->objId, 3, arg0->unk0->scale, 0);
+     uvDobjState(arg0->objId, 2);
+     uvDobjPosm(arg0->objId, 0, &sp30);
++    pw64_dobj_claim(arg0->objId); // PW64 split-screen
++}
++
++// PW64 split-screen (task.c.patch pw64_reg_task): per-player hopper goals
++// with their own dobjs (pw64_hopper_goals_clone).
++void pw64_reg_hopper_goals(void) {
++    PW64_REG(D_8034F3A0);
++    PW64_REG(D_80368B80);
++}
++
++void pw64_hopper_goals_clone(void) {
++    s32 i;
++
++    for (i = 0; i < D_8034F3A0; i++) {
++        if (D_80368B80[i].objId != 0xFFFF) {
++            D_80368B80[i].objId = pw64_dobj_clone(D_80368B80[i].objId);
++        }
++    }
+ }
+ 
+ void func_802FB1D8(Unk80368B80* arg0) {

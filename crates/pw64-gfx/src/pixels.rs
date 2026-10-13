@@ -60,6 +60,24 @@ pub fn fill_pixels_dl(mem: &mut VecMemory, fb: u32, idx: &[u32], color: u16) -> 
     mem.push_words(&words)
 }
 
+/// The world view snow.c projects onto: x 160±150, rows 120−z for z in
+/// −102..112 (the camera subscreen, N64 px).
+const SNOW_VIEW_X: [f32; 2] = [10.0, 310.0];
+const SNOW_VIEW_Y: [f32; 2] = [8.0, 222.0];
+
+/// Places a snow frame like the world view it belongs to: on a wider
+/// output (Hor+ / fill view) the flakes are stretched from the 4:3 view
+/// onto the whole output area instead of staying in a 4:3 column. Snow is
+/// screen-space noise (fixed 200 px focal length, not the real
+/// projection), so the stretch is invisible; 4:3 without fill is unchanged
+/// (`Stretch` only applies on a wider/filled output).
+pub fn place_in_view(frame: &mut crate::Frame) {
+    for d in &mut frame.draws {
+        d.wide = crate::Wide::Stretch(SNOW_VIEW_X);
+        d.stretch_y = SNOW_VIEW_Y;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

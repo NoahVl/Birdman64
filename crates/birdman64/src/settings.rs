@@ -114,6 +114,10 @@ enum Row {
     Bind(Kind, usize),
     /// Reset one input kind to its defaults (Controls page).
     Reset(Kind),
+    /// Split-screen page: capture the next pad / BLE press (or any key) as player 2's
+    /// input ("Assign player 2…", directly under the Player-2 controller
+    /// row). Greyed while the staged Split value is off.
+    P2Assign,
     /// Main: back to the game (closes the screen, D2 auto-save applies).
     Resume,
     /// Main: open the Graphics page.
@@ -122,6 +126,8 @@ enum Row {
     ResetGraphics,
     /// Open the Controls page (Main page).
     Controls,
+    /// Open the Split-screen page (Main page).
+    SplitScreen,
     /// Leave a sub-page (back to Main).
     Back,
     /// Main: open the save/data folder in the file manager (U15).
@@ -141,13 +147,15 @@ enum Kind {
 }
 
 /// The overlay pages (U2): Main ("Paused": Resume / Controls / Display &
-/// graphics / Volume), Graphics (display + picture quality) and Controls
-/// (rebinding). B / Escape on a sub-page goes back to Main.
+/// graphics / Volume), Graphics (display + picture quality), Controls
+/// (rebinding) and Split (two players: player 2's input, layout, rules).
+/// B / Escape on a sub-page goes back to Main.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
     Main,
     Graphics,
     Controls,
+    Split,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +184,22 @@ enum Opt {
     /// Switch 2 pads over Bluetooth LE (`ble.rs`, Controls page): live,
     /// switches the scanner on/off without a restart.
     Ble,
+    /// Split-screen, two players on one screen (Split-screen page): live, the
+    /// game switches in its next menu state that holds no test (same switch
+    /// as the main menu's Players item).
+    Split,
+    /// Which input method drives player 2 in split-screen (Split-screen page):
+    /// live while split-screen runs (`input::set_p2`).
+    P2Input,
+    /// Split-screen pilot collisions (Split-screen page): live from the next
+    /// test start (`pw64_game::set_split_collide`, read at each test start).
+    Collisions,
+    /// Split-screen "Share best score" (Split-screen page): live, read when the
+    /// results close (`pw64_game::set_split_share`).
+    ShareScores,
+    /// Split-screen view layout, top/bottom or left/right (Split-screen page):
+    /// live from the next test start (`pw64_game::set_split_layout`).
+    SplitLayout,
 }
 
 /// Frame-rate choices (the running one is added if it's another rate).
@@ -208,6 +232,16 @@ const REVERT: Duration = Duration::from_secs(10);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the Quit row stays armed ("Press again to quit", U3).
 const QUIT_ARM: Duration = Duration::from_secs(3);
+/// How long the Assign-player-2 row confirms a just-applied assignment
+/// ("Player 2 now uses: …") before naming the current controller again.
+const P2_ASSIGN_CONFIRM: Duration = Duration::from_secs(4);
+/// A nav move scrolls the selected row into view for this long after the
+/// overlay opens: the panel fades in over egui's animation time, and a
+/// scroll queued on the first (still tiny, invisible) frame — nav keys fed
+/// at open, a pad press right at open — centres the row in a viewport that
+/// isn't at its final size and is lost. Re-applying until the fade is done
+/// centres it at the real one.
+const FADE_FOLLOW: Duration = Duration::from_millis(500);
 
 /// Menu actions use physical positions independently of game rebinding.
 /// Nintendo's south/east buttons are B/A, the reverse of Xbox's A/B.
@@ -232,6 +266,14 @@ struct Capture {
     kind: Kind,
     slot: usize,
     name: &'static str,
+    started: Instant,
+}
+
+/// A player-2 assignment capture in progress (`Overlay::p2_capture`, the
+/// "Assign player 2" row): when it started (it times out like a Bind
+/// capture). What to assign arrives via `input::take_captured_source` (pad /
+/// BLE press) or `on_key` (any key but Escape → keyboard).
+struct P2Capture {
     started: Instant,
 }
 
@@ -274,14 +316,15 @@ pub struct Overlay {
     widescreen_sel: usize,
     /// Staged fill screen (restart-only, like widescreen).
     fill_screen: bool,
+    /// Staged infinite LOD / view distance (restart-only, read before boot).
     infinite_lod: bool,
     infinite_view_distance: bool,
     /// S8: the staged widescreen is the monitor default from "Reset to
     /// defaults": saving removes the key (the file follows the display)
     /// instead of pinning a value. Cleared by any Widescreen row change.
     widescreen_follow: bool,
-    /// S7: the restart-only values (MSAA, widescreen aspect, fill screen)
-    /// this session last saved; `open` stages these instead of the running
+    /// S7: the restart-only values (MSAA, widescreen aspect, fill screen,
+    /// infinite LOD / view distance) this session last saved; `open` stages these instead of the running
     /// ones while that restart is pending.
     saved_restart: Option<Running>,
     fps: Vec<opts::Fps>,
@@ -329,6 +372,22 @@ pub struct Overlay {
     pause_background: bool,
     /// Switch 2 pads over BLE (live: `ble::set_enabled` on change).
     ble: bool,
+    /// Split-screen (live: `input::request_split` on change; the game
+    /// applies it in its next menu state that holds no test).
+    split: bool,
+    /// Staged pilot collisions (live from the next test start, like P2's
+    /// controller routing; greyed while the staged Split value is off).
+    collisions: bool,
+    /// Staged best-score sharing (live; greyed like collisions).
+    share_scores: bool,
+    /// Staged split-screen layout (live from the next test start, like
+    /// collisions; greyed while the staged Split value is off).
+    split_layout: input::SplitLayout,
+    /// The Player-2 controller choices ([`p2_choices`]: all gamepads, one
+    /// per connected pad, keyboard, BLE — plus a saved-but-unconnected pad)
+    /// and the staged index. Restaged at open.
+    p2_choices: Vec<P2Choice>,
+    p2_sel: usize,
     /// Toast queued by a close that saved restart-pending changes (or
     /// failed to save); the window takes it (`take_toast`) and shows it
     /// over the game.
@@ -355,6 +414,13 @@ pub struct Overlay {
     monitor_hz: Option<u32>,
     /// A binding capture in progress (`None`: idle).
     capture: Option<Capture>,
+    /// A player-2 assignment capture in progress ("Assign player 2", None:
+    /// idle).
+    p2_capture: Option<P2Capture>,
+    /// The last successful player-2 assignment (`apply_p2`): when it was
+    /// applied and its row label, so the Assign row can confirm it for a few
+    /// seconds (`None`: nothing applied since the last capture armed).
+    p2_assigned: Option<(Instant, String)>,
     /// Red line for a rejected key ("reserved") or a timed-out pad capture.
     capture_error: Option<String>,
     /// Window scale factor (physical px per egui point) times the UI zoom
@@ -397,6 +463,12 @@ impl Overlay {
         // these in tests).
         let (widescreen, widescreen_sel) = widescreen_choices(running.widescreen);
         let (fps, fps_sel) = fps_choices(opts::Fps::Monitor);
+        // The Player-2 controller row: the configured routing (the live one
+        // while split-screen runs) and the connected pads.
+        let saved_p2 = input::p2_current();
+        let pads = input::connected_pad_names();
+        let p2 = p2_choices(&pads, &saved_p2);
+        let p2_sel = p2_select(&p2, &pads, &saved_p2);
         Self {
             ctx: egui::Context::default(),
             renderer: None,
@@ -410,6 +482,12 @@ impl Overlay {
             infinite_view_distance: staged_distance,
             widescreen_follow: false,
             saved_restart: None,
+            split: input::split_wanted(),
+            collisions: input::live_split_collisions(),
+            share_scores: input::live_split_share(),
+            split_layout: input::live_split_layout(),
+            p2_choices: p2,
+            p2_sel,
             fps,
             fps_sel,
             vsync: false,
@@ -442,6 +520,8 @@ impl Overlay {
             restart_error: None,
             monitor_hz: None,
             capture: None,
+            p2_capture: None,
+            p2_assigned: None,
             capture_error: None,
             ppp: 1.0,
             events: Vec::new(),
@@ -485,6 +565,11 @@ impl Overlay {
         self.pause_background = gpu.pause_background;
         // BLE pads (live): the switch as it stands.
         self.ble = crate::ble::is_on();
+        // Pilot collisions, score sharing, layout (live): the values in
+        // force (env, file or a live change from an earlier open).
+        self.collisions = input::live_split_collisions();
+        self.share_scores = input::live_split_share();
+        self.split_layout = input::live_split_layout();
         self.fb = gpu.fb_size_for_scale(self.scale);
         // Display mode (live): stage the running one; Exclusive is left out
         // of the choices when this window can't do it (Wayland).
@@ -562,22 +647,24 @@ impl Overlay {
         // A pad capture still armed (the pad Select that closed the overlay)
         // must not outlive it.
         self.end_capture();
+        self.end_p2_capture();
         // Closing keeps what was applied: the countdown has nothing to revert
         // to once the overlay stops redrawing.
         self.revert = None;
         // D2 auto-save: write what changed since open. A restart-pending
         // close queues the usual toast, a failed save the error toast.
-        self.save_changes(false);
+        self.save_changes();
         if OPEN.swap(false, Ordering::AcqRel) {
             input::overlay_toggled(false);
         }
     }
 
-    /// S7: stages the restart-only rows (MSAA, widescreen, fill screen) from
-    /// what this session last saved (that restart is still pending), else
-    /// from the running values, so a saved change can be undone before the
-    /// restart. The banner and "(restart)" marks keep comparing against
-    /// `running`.
+    /// S7: stages the restart-only rows (MSAA, widescreen, fill screen, ...)
+    /// from what this session last saved (that restart is still pending),
+    /// else from the running values, so a saved change can be undone before
+    /// the restart. The banner and "(restart)" marks keep comparing against
+    /// `running`. Split-screen (live) stages the game's state, or a switch
+    /// still waiting for a menu (the main menu's item may have changed it).
     fn stage_restart_rows(&mut self) {
         let saved = self.saved_restart.unwrap_or(self.running);
         self.msaa = saved.msaa;
@@ -585,21 +672,24 @@ impl Overlay {
         self.fill_screen = saved.fill_screen;
         self.infinite_lod = saved.infinite_lod;
         self.infinite_view_distance = saved.infinite_view_distance;
+        self.split = input::split_wanted();
         self.widescreen_follow = false;
+        // The Player-2 controller row stages the routing as it stands: the
+        // live one while split-screen runs (a live change has been saved by
+        // then), this session's choice or the configured one otherwise.
+        let saved_p2 = input::p2_current();
+        let pads = input::connected_pad_names();
+        self.p2_choices = p2_choices(&pads, &saved_p2);
+        self.p2_sel = p2_select(&self.p2_choices, &pads, &saved_p2);
     }
 
     /// The D2 auto-save, shared by `close` and the "Restart now" row (U16):
     /// writes what changed since the snapshot taken at open. A restart-pending
     /// save queues the usual toast, a failed save the error toast.
-    fn save_changes(&mut self, for_restart: bool) -> bool {
+    fn save_changes(&mut self) {
         let staged = self.staged_settings();
-        if staged != self.snapshot || for_restart {
-            let changes = if for_restart {
-                changes_for_restart(staged, &self.snapshot)
-            } else {
-                changed_since(staged, &self.snapshot)
-            };
-            match config::save_settings(changes) {
+        if staged != self.snapshot {
+            match config::save_settings(changed_since(staged, &self.snapshot)) {
                 Ok(()) => {
                     // S7: the next open stages these, not the running ones.
                     self.saved_restart = Some(Running {
@@ -620,11 +710,9 @@ impl Overlay {
                 Err(e) => {
                     eprintln!("[settings] {e}");
                     self.saved_toast = Some(format!("Couldn't save settings: {e}"));
-                    return false;
                 }
             }
         }
-        true
     }
 
     /// The toast from the last successful Save (`None`: nothing pending).
@@ -665,10 +753,7 @@ impl Overlay {
     /// `restart_now`'s body, taking the command so tests can inject one
     /// without spawning anything real.
     fn restart_with(&mut self, cmd: std::io::Result<std::process::Command>) {
-        if !self.save_changes(true) {
-            self.restart_error = Some("Couldn't restart: settings could not be saved".into());
-            return;
-        }
+        self.save_changes();
         // Drop the U14 running marker before the new instance starts, or it
         // can find it (we quit only after the spawn) and toast "didn't close
         // properly".
@@ -740,9 +825,69 @@ impl Overlay {
             input::bind_button(name, b);
             self.end_capture();
         } else if cap.started.elapsed() >= CAPTURE_TIMEOUT {
-            self.capture_error = Some("No button pressed. Select the row to try again.".into());
+            // Ended first (it clears the red line), then the message.
             self.end_capture();
+            self.capture_error = Some("No button pressed. Select the row to try again.".into());
         }
+    }
+
+    /// The player-2 assignment poll + timeout, each overlay frame (the
+    /// keyboard path is driven by `on_key` instead).
+    fn poll_p2_capture(&mut self) {
+        let Some(cap) = &self.p2_capture else { return };
+        if let Some(p2) = input::take_captured_source() {
+            self.apply_p2(p2);
+            self.end_p2_capture();
+        } else if cap.started.elapsed() >= CAPTURE_TIMEOUT {
+            // Ended first (it clears the red line), then the message.
+            self.end_p2_capture();
+            self.capture_error = Some("No button pressed. Select the row to try again.".into());
+        }
+    }
+
+    /// Ends the running player-2 assignment (done, cancelled, or the overlay
+    /// closed): disarms the source capture and re-syncs the pad edge state,
+    /// so the button that ended the capture doesn't re-confirm the row.
+    fn end_p2_capture(&mut self) {
+        if self.p2_capture.take().is_some() {
+            input::cancel_source_capture();
+            self.capture_error = None;
+            self.prev_pad = input::overlay_pad();
+        }
+    }
+
+    /// Applies a captured player-2 input exactly like cycling the
+    /// "Player 2 controller" row: the choices are restaged, the new value is
+    /// selected (so that row shows it) and — while split-screen runs — the
+    /// routing changes at once (`staged_settings` saves it either way).
+    /// The captured pad was connected a press ago; if it dropped since, it
+    /// keeps its own row, so the screen shows what was applied.
+    fn apply_p2(&mut self, p2: input::P2Input) {
+        let saved_p2 = input::p2_current();
+        self.p2_choices = p2_choices(&input::connected_pad_names(), &saved_p2);
+        let sel = self.p2_choices.iter().position(|c| c.input == p2);
+        self.p2_sel = match sel {
+            Some(i) => i,
+            None => {
+                let label = match &p2 {
+                    input::P2Input::Gamepad(Some(n)) => format!("{n} (not connected)"),
+                    input::P2Input::Keyboard => "Keyboard".into(),
+                    input::P2Input::Ble => "Switch 2 (Bluetooth)".into(),
+                    input::P2Input::Gamepad(None) => "All gamepads".into(),
+                };
+                self.p2_choices.push(P2Choice {
+                    input: p2.clone(),
+                    label,
+                });
+                self.p2_choices.len() - 1
+            }
+        };
+        // Confirmation for the Assign row (a few seconds of "Player 2 now
+        // uses: …" after the capture).
+        self.p2_assigned = Some((Instant::now(), self.p2_choices[self.p2_sel].label.clone()));
+        // Live: while split-screen runs, the routing changes at once (else
+        // it is kept for the next switch-on).
+        input::stage_p2(p2);
     }
 
     /// The next key of a keyboard capture (`on_key` routed it here).
@@ -833,6 +978,18 @@ impl Overlay {
             }
             return;
         }
+        // The "Assign player 2" capture owns the keyboard: Escape cancels,
+        // any other key assigns the keyboard to player 2.
+        if self.p2_capture.is_some() {
+            if code == KeyCode::Escape {
+                self.end_p2_capture();
+            } else if !repeat && !matches!(code, KeyCode::F10 | KeyCode::F11) {
+                // F10/F11 are the overlay/fullscreen hotkeys, not a choice.
+                self.apply_p2(input::P2Input::Keyboard);
+                self.end_p2_capture();
+            }
+            return;
+        }
         match code {
             KeyCode::ArrowUp => self.move_sel(-1),
             KeyCode::ArrowDown => self.move_sel(1),
@@ -877,6 +1034,7 @@ impl Overlay {
     /// live settings. Returns false once the overlay wants to close.
     pub fn render(&mut self, gpu: &mut Gpu, view: &wgpu::TextureView) -> bool {
         self.poll_capture();
+        self.poll_p2_capture();
         self.quit_check();
         self.pad_nav();
         self.running_mode = gpu.display_mode;
@@ -990,6 +1148,7 @@ impl Overlay {
             Page::Main => "Paused",
             Page::Controls => "Controls",
             Page::Graphics => "Display & graphics",
+            Page::Split => "Split-screen",
         };
         // The wide Controls page (U9): with room for both, the binding list
         // scrolls on the left and the controller drawing sits fixed on the
@@ -1066,6 +1225,7 @@ impl Overlay {
             Page::Main => vec![
                 Row::Resume,
                 Row::Controls,
+                Row::SplitScreen,
                 Row::Graphics,
                 Row::Opt(Opt::Volume),
                 // U26: pause when the window goes to the background.
@@ -1126,6 +1286,18 @@ impl Overlay {
                 rows.push(Row::Back);
                 rows
             }
+            // Split-screen (2 players), all live: on/off, player 2's
+            // controller ("Assign player 2" directly under it), the layout
+            // and the two rules.
+            Page::Split => vec![
+                Row::Opt(Opt::Split),
+                Row::Opt(Opt::P2Input),
+                Row::P2Assign,
+                Row::Opt(Opt::SplitLayout),
+                Row::Opt(Opt::Collisions),
+                Row::Opt(Opt::ShareScores),
+                Row::Back,
+            ],
         }
     }
 
@@ -1159,6 +1331,7 @@ impl Overlay {
             Page::Main => {
                 self.text_row(ui, at(Row::Resume), "Resume game");
                 self.text_row(ui, at(Row::Controls), "Controls \u{203a}");
+                self.text_row(ui, at(Row::SplitScreen), "Split-screen \u{203a}");
                 self.text_row(ui, at(Row::Graphics), "Display & graphics \u{203a}");
                 self.opt_row(ui, at(Row::Opt(Opt::Volume)), Opt::Volume);
                 self.opt_row(ui, at(Row::Opt(Opt::PauseBackground)), Opt::PauseBackground);
@@ -1302,6 +1475,21 @@ impl Overlay {
                 ui.add_space(4.0);
                 self.text_row(ui, at(Row::Back), "\u{2039} Back");
             }
+            Page::Split => {
+                if let Some(e) = &self.capture_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, e);
+                    ui.add_space(2.0);
+                }
+                for row in self.rows() {
+                    match row {
+                        Row::Opt(o) => self.opt_row(ui, at(row), o),
+                        Row::P2Assign => self.p2_assign_row(ui, at(row)),
+                        _ => {}
+                    }
+                }
+                ui.add_space(4.0);
+                self.text_row(ui, at(Row::Back), "\u{2039} Back");
+            }
         }
         // U5: one weak, wrapped help line for the selected row, above the
         // footer.
@@ -1314,7 +1502,12 @@ impl Overlay {
                 .size(13.0),
         );
         ui.weak(egui::RichText::new(crate::version_line()).small());
-        self.follow_sel = false;
+        // Consume the follow only once the fade-in is done (FADE_FOLLOW):
+        // while it runs the scroll re-applies at the growing panel's real
+        // viewport each frame.
+        if self.started.elapsed() >= FADE_FOLLOW {
+            self.follow_sel = false;
+        }
     }
 
     /// One selectable row: highlight the current selection, support clicks.
@@ -1324,22 +1517,19 @@ impl Overlay {
     fn opt_row(&mut self, ui: &mut egui::Ui, i: usize, o: Opt) {
         let disabled = (o == Opt::Fps && self.vsync)
             || (o == Opt::Resolution && self.display_mode_choice() != opts::DisplayMode::Exclusive)
-            || (o == Opt::Ble && crate::ble::locked_by().is_some());
+            || (o == Opt::Ble && crate::ble::locked_by().is_some())
+            // Player 2's controller only matters in split-screen: greyed
+            // while the staged Split value is off (like Frame rate under
+            // V-Sync).
+            || (o == Opt::P2Input && !self.split)
+            // Pilot collisions only matter in split-screen: same greying.
+            || (o == Opt::Collisions && !self.split)
+            || (o == Opt::ShareScores && !self.split)
+            || (o == Opt::SplitLayout && !self.split);
         if disabled {
             let (name, value, hint) = self.row_text(o);
             let text = format!("{name}: {value}  {hint}");
-            ui.add_enabled_ui(false, |ui| {
-                let resp = ui.selectable_label(
-                    self.sel == i,
-                    egui::RichText::new(text.trim_end()).size(16.0),
-                );
-                // Hover/clicks on a disabled widget don't fire; the selection
-                // still shows where keyboard/pad navigation is, and still
-                // scrolls into view (U1).
-                if self.sel == i && self.follow_sel {
-                    resp.scroll_to_me(Some(egui::Align::Center));
-                }
-            });
+            self.disabled_row(ui, i, &text);
             return;
         }
         // Restart rows get their value in orange while it differs from the
@@ -1355,6 +1545,53 @@ impl Overlay {
             }
         };
         self.selectable(ui, i, text);
+    }
+
+    /// A disabled row (greyed out): clicks don't act; the selection still
+    /// shows where keyboard/pad navigation is, and still scrolls into view
+    /// (U1).
+    fn disabled_row(&mut self, ui: &mut egui::Ui, i: usize, text: &str) {
+        ui.add_enabled_ui(false, |ui| {
+            let resp = ui.selectable_label(
+                self.sel == i,
+                egui::RichText::new(text.trim_end()).size(16.0),
+            );
+            if self.sel == i && self.follow_sel {
+                resp.scroll_to_me(Some(egui::Align::Center));
+            }
+        });
+    }
+
+    /// The "Assign player 2" row (under the Player-2 controller row): while
+    /// its capture runs, the row says what to press; greyed while the staged
+    /// Split value is off (like the Pilots-collide row).
+    fn p2_assign_row(&mut self, ui: &mut egui::Ui, i: usize) {
+        if self.p2_capture.is_some() {
+            self.text_row(
+                ui,
+                i,
+                "Press any button on player 2's controller (Esc cancels)",
+            );
+        } else if !self.split {
+            self.disabled_row(ui, i, "Assign player 2\u{2026}");
+        } else {
+            self.text_row(ui, i, &self.p2_assign_text());
+        }
+    }
+
+    /// The Assign row's idle text while split-screen is on: a just-applied
+    /// assignment confirms itself for a few seconds ("Player 2 now uses:
+    /// …"), otherwise the row names player 2's current controller.
+    fn p2_assign_text(&self) -> String {
+        if let Some((at, label)) = &self.p2_assigned
+            && at.elapsed() < P2_ASSIGN_CONFIRM
+        {
+            return format!("Player 2 now uses: {label}");
+        }
+        format!(
+            "Assign player 2\u{2026} ({})",
+            self.p2_choices[self.p2_sel].label
+        )
     }
 
     /// A plain selectable row (Resume / the sub-page rows / Back): same look
@@ -1554,6 +1791,35 @@ impl Overlay {
                 if self.ble { "On" } else { "Off" }.into(),
                 "(experimental)",
             ),
+            Opt::Split => (
+                "Split-screen (2 players)",
+                if self.split { "On" } else { "Off" }.into(),
+                "",
+            ),
+            Opt::P2Input => (
+                "Player 2 controller",
+                self.p2_choices[self.p2_sel].label.clone(),
+                "",
+            ),
+            Opt::Collisions => (
+                "Pilots collide",
+                if self.collisions { "On" } else { "Off" }.into(),
+                "",
+            ),
+            Opt::ShareScores => (
+                "Share best score",
+                if self.share_scores { "On" } else { "Off" }.into(),
+                "",
+            ),
+            Opt::SplitLayout => (
+                "Split layout",
+                match self.split_layout {
+                    input::SplitLayout::TopBottom => "Top / bottom",
+                    input::SplitLayout::LeftRight => "Side by side",
+                }
+                .into(),
+                "",
+            ),
         }
     }
 
@@ -1589,10 +1855,11 @@ impl Overlay {
         out
     }
 
-    /// The restart rows (Anti-aliasing, Widescreen, Fill screen) as rich text:
-    /// the value turns orange while the staged value differs from the running
-    /// one, and the weak "(restart)" suffix is always there. `None` for the
-    /// other rows (plain text, built in `opt_row`).
+    /// The restart rows (Anti-aliasing, Widescreen, Fill screen) as rich
+    /// text: the value turns orange while the staged
+    /// value differs from the running one, and the weak "(restart)" suffix
+    /// is always there. `None` for the other rows (plain text, built in
+    /// `opt_row`).
     fn restart_row(&self, o: Opt, v: &egui::Visuals) -> Option<egui::WidgetText> {
         let (name, value, changed) = match o {
             Opt::Msaa => (
@@ -1659,10 +1926,11 @@ impl Overlay {
         let rows = self.rows();
         // A click (mouse) can land on any row while a capture runs; only a
         // Bind row replaces the capture, everything else ends it first.
-        let capturing = self.capture.is_some();
-        let is_bind = matches!(rows[self.sel], Row::Bind(..));
+        let capturing = self.capture.is_some() || self.p2_capture.is_some();
+        let is_bind = matches!(rows[self.sel], Row::Bind(..) | Row::P2Assign);
         if capturing && !is_bind {
             self.end_capture();
+            self.end_p2_capture();
         }
         // Confirming anything but Quit disarms the Quit row (U3).
         if rows[self.sel] != Row::Quit {
@@ -1676,6 +1944,7 @@ impl Overlay {
             },
             Row::Resume => self.show = false,
             Row::Controls => self.enter_page(Page::Controls, Row::Controls),
+            Row::SplitScreen => self.enter_page(Page::Split, Row::SplitScreen),
             Row::Graphics => self.enter_page(Page::Graphics, Row::Graphics),
             // U15: the save/data folder in the OS file manager.
             Row::OpenSaveFolder => crate::paths::open_in_file_manager(crate::paths::data_dir()),
@@ -1713,6 +1982,19 @@ impl Overlay {
                 Kind::Keyboard => input::reset_keyboard(),
                 Kind::Gamepad => input::reset_gamepad(),
             },
+            // "Assign player 2" (split-screen only): arm the source capture —
+            // the next pad / BLE press (or any key) becomes player 2's input.
+            // Re-confirming re-arms it (the 5 s timeout restarts).
+            Row::P2Assign if !self.split => {}
+            Row::P2Assign => {
+                input::start_source_capture();
+                self.capture_error = None;
+                // A new capture replaces the confirmation message at once.
+                self.p2_assigned = None;
+                self.p2_capture = Some(P2Capture {
+                    started: Instant::now(),
+                });
+            }
         }
     }
 
@@ -1791,6 +2073,53 @@ impl Overlay {
                 Opt::InfiniteViewDistance => {
                     self.infinite_view_distance = !self.infinite_view_distance
                 }
+                // The Player-2 controller row is disabled while the staged
+                // Split value is off (greyed, like Frame rate under V-Sync).
+                Opt::P2Input if !self.split => {}
+                Opt::P2Input => {
+                    let n = self.p2_choices.len() as i32;
+                    let next = self.p2_sel as i32 + d;
+                    self.p2_sel = if wrap {
+                        next.rem_euclid(n)
+                    } else {
+                        next.clamp(0, n - 1)
+                    } as usize;
+                    // Live: while split-screen runs, the routing changes at
+                    // once (staged_settings saves it either way).
+                    input::stage_p2(self.p2_choices[self.p2_sel].input.clone());
+                }
+                // Live: the game switches in its next menu state that holds
+                // no test (at once on the menus).
+                Opt::Split => {
+                    self.split = !self.split;
+                    input::request_split(self.split);
+                }
+                // The Pilot-collisions row is disabled while the staged
+                // Split value is off (greyed, like the P2 row above).
+                Opt::Collisions if !self.split => {}
+                Opt::Collisions => {
+                    self.collisions = !self.collisions;
+                    // Live: the game reads the flag at each test start, so
+                    // the change applies from the next test (staged_settings
+                    // saves it either way).
+                    input::apply_split_collide(self.collisions);
+                }
+                Opt::ShareScores if !self.split => {}
+                Opt::ShareScores => {
+                    self.share_scores = !self.share_scores;
+                    // Live: read when a test's results close.
+                    input::apply_split_share(self.share_scores);
+                }
+                // Same greying as the collisions row.
+                Opt::SplitLayout if !self.split => {}
+                Opt::SplitLayout => {
+                    self.split_layout = match self.split_layout {
+                        input::SplitLayout::TopBottom => input::SplitLayout::LeftRight,
+                        input::SplitLayout::LeftRight => input::SplitLayout::TopBottom,
+                    };
+                    // Live: the game latches the layout at each test start.
+                    input::apply_split_layout(self.split_layout);
+                }
                 Opt::OledDrift => self.oled_drift = !self.oled_drift,
                 Opt::ShowFps => self.show_fps = !self.show_fps,
                 Opt::PauseBackground => self.pause_background = !self.pause_background,
@@ -1811,17 +2140,18 @@ impl Overlay {
                     );
                 }
             },
-            // The Controls / Back / Quit / "Open save folder" rows have
-            // nothing to cycle.
+            // The Controls / Back / Quit / "Open save folder" /
+            // "Assign player 2" rows have nothing to cycle.
             Row::Controls
             | Row::Back
             | Row::Bind(..)
             | Row::Reset(..)
+            | Row::P2Assign
             | Row::Quit
             | Row::OpenSaveFolder
             | Row::RestartNow => {}
             // Neither do Resume / the page-open rows / Reset to defaults.
-            Row::Resume | Row::Graphics | Row::ResetGraphics => {}
+            Row::Resume | Row::Graphics | Row::SplitScreen | Row::ResetGraphics => {}
         }
     }
 
@@ -1916,6 +2246,13 @@ impl Overlay {
             // BLE pads (live). An env-set value can't change here, so it is
             // never saved (`changed_since`).
             ble: Some(self.ble),
+            // Split-screen and player 2's controller: the staged values (a
+            // live p2 change applies at once; Save pins it either way).
+            splitscreen_enabled: Some(self.split),
+            p2_input: Some(self.p2_choices[self.p2_sel].input.to_config()),
+            splitscreen_collisions: Some(self.collisions),
+            splitscreen_share: Some(self.share_scores),
+            split_layout: Some(self.split_layout.to_config()),
             // The rebinding maps as they stand now (empty = defaults, so
             // the sub-table is dropped from the file).
             keyboard: Some(input::keyboard_overrides()),
@@ -1928,7 +2265,7 @@ impl Overlay {
     /// Skipped while a capture runs: the A that arms it must not confirm
     /// again, and a captured button must not navigate.
     fn pad_nav(&mut self) {
-        if self.capture.is_some() {
+        if self.capture.is_some() || self.p2_capture.is_some() {
             return;
         }
         let pad = input::overlay_pad();
@@ -2147,6 +2484,76 @@ fn save_fill(staged: bool, staged_widescreen: Option<f32>) -> Option<bool> {
     (staged != opts::fill_default(staged_widescreen)).then_some(staged)
 }
 
+/// One "Player 2 controller" choice: the input it stands for and its
+/// player-facing label.
+struct P2Choice {
+    input: input::P2Input,
+    label: String,
+}
+
+/// The Player-2 controller choices (`P2Input` cycling): All gamepads, one
+/// per connected pad (by name), the keyboard and the Switch 2 pads over
+/// Bluetooth. Pads sharing a name (two "Xbox Controller"s) list as
+/// distinct rows labelled `name (k)`: the first is spelled `name`, the
+/// k-th `name#k` (`input::pad_value`, as the capture spells them); unique
+/// names are unchanged. A configured pad that isn't connected keeps its row
+/// ("\<name> (not connected)"), so cycling doesn't lose it. Pure: the pad
+/// names come from `input::connected_pad_names`, the configured value from
+/// `input::resolve_p2` / `input::p2_input`.
+fn p2_choices(pads: &[String], saved: &input::P2Input) -> Vec<P2Choice> {
+    let mut out = vec![P2Choice {
+        input: input::P2Input::Gamepad(None),
+        label: "All gamepads".into(),
+    }];
+    for (i, name) in pads.iter().enumerate() {
+        let same = pads.iter().filter(|n| *n == name).count();
+        let k = pads[..i].iter().filter(|n| *n == name).count() + 1;
+        // Same spelling as the "Assign player 2" capture (`pad_value`).
+        let label = if same > 1 {
+            format!("{name} ({k})")
+        } else {
+            name.clone()
+        };
+        out.push(P2Choice {
+            input: input::P2Input::Gamepad(Some(input::pad_value(name, k))),
+            label,
+        });
+    }
+    if let input::P2Input::Gamepad(Some(n)) = saved {
+        // The routing's own rule decides whether the saved pad is here.
+        let names: Vec<&str> = pads.iter().map(String::as_str).collect();
+        if input::pick_p2_pad(n, &names).is_none() {
+            out.push(P2Choice {
+                input: input::P2Input::Gamepad(Some(n.clone())),
+                label: format!("{n} (not connected)"),
+            });
+        }
+    }
+    out.push(P2Choice {
+        input: input::P2Input::Keyboard,
+        label: "Keyboard".into(),
+    });
+    out.push(P2Choice {
+        input: input::P2Input::Ble,
+        label: "Switch 2 (Bluetooth)".into(),
+    });
+    out
+}
+
+/// The index of the configured player-2 input among [`p2_choices`] built
+/// from the same `pads`: a saved pad selects the pad the routing picks
+/// (`input::pick_p2_pad`), else its "(not connected)" row.
+fn p2_select(choices: &[P2Choice], pads: &[String], saved: &input::P2Input) -> usize {
+    if let input::P2Input::Gamepad(Some(n)) = saved {
+        let names: Vec<&str> = pads.iter().map(String::as_str).collect();
+        // Row 0 is "All gamepads", then one row per pad.
+        if let Some(i) = input::pick_p2_pad(n, &names) {
+            return i + 1;
+        }
+    }
+    choices.iter().position(|c| c.input == *saved).unwrap_or(0)
+}
+
 /// The D2 auto-save update: only the fields that differ from the snapshot
 /// taken at open (None = leave the key as-is), so values the player never
 /// touched (env-var overrides, the low-end preset, hand-edited keys) are not
@@ -2176,23 +2583,14 @@ fn changed_since(s: config::SavedSettings, snap: &config::SavedSettings) -> conf
         show_fps: keep(s.show_fps, &snap.show_fps),
         pause_in_background: keep(s.pause_in_background, &snap.pause_in_background),
         ble: keep(s.ble, &snap.ble),
+        splitscreen_enabled: keep(s.splitscreen_enabled, &snap.splitscreen_enabled),
+        p2_input: keep(s.p2_input, &snap.p2_input),
+        splitscreen_collisions: keep(s.splitscreen_collisions, &snap.splitscreen_collisions),
+        splitscreen_share: keep(s.splitscreen_share, &snap.splitscreen_share),
+        split_layout: keep(s.split_layout, &snap.split_layout),
         keyboard: keep(s.keyboard, &snap.keyboard),
         gamepad: keep(s.gamepad, &snap.gamepad),
     }
-}
-
-/// A restart clears the two environment overrides, so pin both staged
-/// choices, including any unchanged choice inherited from the environment.
-fn changes_for_restart(
-    s: config::SavedSettings,
-    snap: &config::SavedSettings,
-) -> config::SavedSettings {
-    let infinite_lod = s.infinite_lod;
-    let infinite_view_distance = s.infinite_view_distance;
-    let mut changed = changed_since(s, snap);
-    changed.infinite_lod = infinite_lod;
-    changed.infinite_view_distance = infinite_view_distance;
-    changed
 }
 
 /// The U16 restart command: this exe with the original command-line arguments
@@ -2201,10 +2599,6 @@ fn changes_for_restart(
 fn restart_command() -> std::io::Result<std::process::Command> {
     let mut cmd = std::process::Command::new(std::env::current_exe()?);
     cmd.args(std::env::args_os().skip(1));
-    // A restart from the menu applies the saved switches even when this
-    // process was started with the experimental environment presets.
-    cmd.env_remove("PW64_INFINITE_LOD");
-    cmd.env_remove("PW64_INFINITE_VIEW_DISTANCE");
     Ok(cmd)
 }
 
@@ -2347,15 +2741,17 @@ fn help(row: Row) -> &'static str {
                 "Draws flights to the screen edges instead of with the original black bars. \
                  Needs a restart."
             }
+            Opt::InfiniteLod => {
+                "Draws every model at full detail, however far away. Off = original look. \
+                 Needs a restart."
+            }
+            Opt::InfiniteViewDistance => {
+                "Lets you see the whole island instead of the haze about 2 km out. Can lower \
+                 the frame rate, more so with split-screen. Needs a restart."
+            }
             Opt::Fps => {
                 "How smoothly the game runs. Match display is best; pick 60 if the game \
                  stutters."
-            }
-            Opt::InfiniteLod => {
-                "Keeps the most detailed models at every distance. May reduce frame rate. Needs a restart."
-            }
-            Opt::InfiniteViewDistance => {
-                "Shows the whole island without distance fog. May reduce frame rate. Needs a restart."
             }
             Opt::Vsync => {
                 "Paces frames to your display: removes stutter and tearing, adds a little \
@@ -2389,13 +2785,34 @@ fn help(row: Row) -> &'static str {
                 "Play with Switch 2 Joy-Con or a Pro Controller 2 over Bluetooth. Experimental: \
                  may not work with every PC."
             }
+            Opt::Split => {
+                "Two players on one screen (also on the main menu). \
+                 Switched during a test, it applies after the test."
+            }
+            Opt::P2Input => "Which controller player 2 uses. Everything else is player 1.",
+            Opt::Collisions => {
+                "On: the two pilots can crash into each other. Applies from the next test."
+            }
+            Opt::ShareScores => {
+                "On: when player 2 scores more, player 2's run is saved to player 1's file \
+                 (only player 1's file is saved)."
+            }
+            Opt::SplitLayout => {
+                "Player 1 on top or on the left. Side by side suits a wide screen. Applies \
+                 from the next test."
+            }
         },
         Row::Bind(..) => "Press a key or button to bind it to this slot.",
         Row::Reset(..) => "Restores this section's default keys and buttons.",
+        Row::P2Assign => {
+            "Press a button on player 2's controller (or any key) to assign it to player 2. \
+             Esc cancels."
+        }
         Row::Resume => "Back to the game.",
         Row::Graphics => "Fullscreen, widescreen, frame rate and picture quality.",
         Row::ResetGraphics => "Puts every option on this page back to its default.",
         Row::Controls => "See and change keyboard and controller buttons.",
+        Row::SplitScreen => "Two players on one screen: player 2's controller, layout and rules.",
         Row::Back => "Back to the previous page.",
         Row::Quit => "Closes Birdman64. Progress since the game last saved is lost.",
         Row::OpenSaveFolder => {
@@ -2884,34 +3301,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn restart_keeps_an_unchanged_visibility_choice_from_environment() {
-        let snapshot = config::SavedSettings {
-            infinite_lod: Some(true),
-            infinite_view_distance: Some(true),
-            ..Default::default()
-        };
-        let mut staged = snapshot.clone();
-        staged.infinite_lod = Some(false);
-        let changes = changes_for_restart(staged, &snapshot);
-        assert_eq!(changes.infinite_lod, Some(false));
-        assert_eq!(changes.infinite_view_distance, Some(true));
-        let mut table = toml::Table::new();
-        config::apply(&mut table, &changes, false).unwrap();
-        assert!(table["graphics"].get("infinite_lod").is_none());
-        assert_eq!(
-            table["graphics"]["infinite_view_distance"].as_bool(),
-            Some(true)
-        );
-        // An unrelated graphics restart must retain both inherited values.
-        let mut staged = snapshot.clone();
-        staged.msaa = Some(4);
-        let changes = changes_for_restart(staged, &snapshot);
-        assert_eq!(changes.infinite_lod, Some(true));
-        assert_eq!(changes.infinite_view_distance, Some(true));
-        assert_eq!(changes.msaa, Some(4));
-    }
-
     /// D2 auto-save writes only what changed since open; a widescreen
     /// change also writes fill screen (its saved form depends on it).
     #[test]
@@ -2961,6 +3350,11 @@ mod tests {
             show_fps: Some(true),
             pause_in_background: Some(false),
             ble: Some(true),
+            splitscreen_enabled: Some(true),
+            p2_input: Some("keyboard".into()),
+            splitscreen_collisions: Some(true),
+            splitscreen_share: Some(true),
+            split_layout: Some("left_right"),
             keyboard: Some(
                 [("A".to_string(), "KeyX".to_string())]
                     .into_iter()
@@ -2992,6 +3386,11 @@ mod tests {
             show_fps: Some(false),
             pause_in_background: Some(true),
             ble: Some(false),
+            splitscreen_enabled: Some(false),
+            p2_input: Some("gamepad".into()),
+            splitscreen_collisions: Some(false),
+            splitscreen_share: Some(false),
+            split_layout: Some("top_bottom"),
             keyboard: Some(std::collections::BTreeMap::new()),
             gamepad: Some(std::collections::BTreeMap::new()),
         };
@@ -3004,7 +3403,9 @@ mod tests {
              \n[oled]\ndrift = true\nbrightness = 0.7\n\
              \n[ui]\npause_in_background = false\n\
              \n[input.keyboard]\nA = \"KeyX\"\n\n[input.gamepad]\nA = \"East\"\n\
-             \n[input.ble]\nenabled = true\n",
+             \n[input.ble]\nenabled = true\n\
+             \n[splitscreen]\nenabled = true\np2_input = \"keyboard\"\ncollisions = true\n\
+             share_scores = true\nlayout = \"left_right\"\n",
         )
         .unwrap();
         config::apply(&mut table, &d, false).unwrap();
@@ -3034,6 +3435,13 @@ mod tests {
         assert!(i.get("gamepad").is_none());
         // BLE off (the default) removes the key and its sub-table.
         assert!(i.get("ble").is_none());
+        // Split-screen defaults removed too.
+        let ss = &table["splitscreen"];
+        assert!(ss.get("enabled").is_none());
+        assert!(ss.get("p2_input").is_none());
+        assert!(ss.get("collisions").is_none());
+        assert!(ss.get("share_scores").is_none());
+        assert!(ss.get("layout").is_none());
     }
 
     /// A reverted exclusive resolution is re-staged, so the auto-save does
@@ -3070,22 +3478,23 @@ mod tests {
     #[test]
     fn rows_pages_and_controls_row() {
         let mut o = Overlay::new();
-        // Main: Resume, the two sub-pages, Volume, the background-pause
+        // Main: Resume, the three sub-pages, Volume, the background-pause
         // row, Open save folder, Quit (U2, U3, U15, U26).
         let rows = o.rows();
-        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.len(), 8);
         assert_eq!(rows[0], Row::Resume);
         assert_eq!(rows[1], Row::Controls);
-        assert_eq!(rows[2], Row::Graphics);
-        assert_eq!(rows[3], Row::Opt(Opt::Volume));
-        assert_eq!(rows[4], Row::Opt(Opt::PauseBackground));
-        assert_eq!(rows[5], Row::OpenSaveFolder);
-        assert_eq!(rows[6], Row::Quit);
+        assert_eq!(rows[2], Row::SplitScreen);
+        assert_eq!(rows[3], Row::Graphics);
+        assert_eq!(rows[4], Row::Opt(Opt::Volume));
+        assert_eq!(rows[5], Row::Opt(Opt::PauseBackground));
+        assert_eq!(rows[6], Row::OpenSaveFolder);
+        assert_eq!(rows[7], Row::Quit);
         // Confirm on Display & graphics opens the Graphics page: the
         // eleven graphics options (incl. Show FPS, U25), the two OLED care
         // rows, Reset to defaults, and Back (no restart-pending change yet,
         // so no banner row, U16).
-        o.sel = 2;
+        o.sel = 3;
         o.confirm();
         assert_eq!(o.page, Page::Graphics);
         let rows = o.rows();
@@ -3112,8 +3521,8 @@ mod tests {
         assert_eq!(o.rows()[o.sel], Row::Graphics);
         // Confirm on Controls opens the Controls page with the two binding
         // grids in the U9 order (game controls first, unused slots last:
-        // 18 keyboard + reset, 11 gamepad + reset), the Switch 2 (BLE)
-        // row and Back.
+        // 18 keyboard + reset, 11 gamepad + reset), the Switch 2 (BLE) row
+        // and Back.
         o.sel = 1;
         o.confirm();
         assert_eq!(o.page, Page::Controls);
@@ -3136,6 +3545,28 @@ mod tests {
         o.confirm();
         assert_eq!(o.page, Page::Main);
         assert_eq!(o.rows()[o.sel], Row::Controls);
+        // Confirm on Split-screen opens its own page: on/off, player 2's
+        // controller with "Assign player 2" directly under it, the layout,
+        // the two rules, and Back.
+        o.sel = 2;
+        o.confirm();
+        assert_eq!(o.page, Page::Split);
+        assert_eq!(
+            o.rows(),
+            [
+                Row::Opt(Opt::Split),
+                Row::Opt(Opt::P2Input),
+                Row::P2Assign,
+                Row::Opt(Opt::SplitLayout),
+                Row::Opt(Opt::Collisions),
+                Row::Opt(Opt::ShareScores),
+                Row::Back,
+            ]
+        );
+        o.sel = 6;
+        o.confirm();
+        assert_eq!(o.page, Page::Main);
+        assert_eq!(o.rows()[o.sel], Row::SplitScreen);
     }
 
     /// The Switch 2 controllers row: reachable by navigation (it sits
@@ -3155,6 +3586,7 @@ mod tests {
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Reset(Kind::Gamepad));
         o.move_sel(1);
+        assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));
         let (name, value, hint) = o.row_text(Opt::Ble);
         assert_eq!(
             (name, value.as_str(), hint),
@@ -3169,6 +3601,263 @@ mod tests {
         // Unlocked (simulated): a toggle is saved, toggling back is not.
         o.ble = true;
         assert_eq!(changed_since(o.staged_settings(), &snap).ble, Some(true));
+    }
+
+    /// SS-UI: the Player-2 controller choices (all gamepads, one per pad,
+    /// keyboard, Switch 2) and their cycling; a configured pad that isn't
+    /// connected keeps its row so cycling doesn't lose it.
+    #[test]
+    fn p2_choices_list_and_cycle() {
+        let pads = vec!["Pad A".to_string(), "Pad B".to_string()];
+        let all = input::P2Input::Gamepad(None);
+        let choices = p2_choices(&pads, &all);
+        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "All gamepads",
+                "Pad A",
+                "Pad B",
+                "Keyboard",
+                "Switch 2 (Bluetooth)"
+            ]
+        );
+        // Cycling wraps: All gamepads → Pad A → Pad B → Keyboard → Switch 2
+        // → All gamepads.
+        let n = choices.len() as i32;
+        let step = |sel: usize, d: i32| (sel as i32 + d).rem_euclid(n) as usize;
+        let mut sel = p2_select(&choices, &pads, &all);
+        assert_eq!(sel, 0);
+        for want in ["Pad A", "Pad B", "Keyboard", "Switch 2 (Bluetooth)"] {
+            sel = step(sel, 1);
+            assert_eq!(choices[sel].label, want);
+        }
+        assert_eq!(step(sel, 1), 0, "wraps back to All gamepads");
+        // A saved substring picks the pad whose full name contains it.
+        let saved = input::P2Input::Gamepad(Some("pad b".into()));
+        let choices = p2_choices(&pads, &saved);
+        assert_eq!(p2_select(&choices, &pads, &saved), 2);
+        // A saved pad that isn't connected keeps its entry (after the
+        // connected pads), labelled.
+        let saved = input::P2Input::Gamepad(Some("Retro".into()));
+        let choices = p2_choices(&pads, &saved);
+        assert_eq!(choices[3].label, "Retro (not connected)");
+        assert_eq!(p2_select(&choices, &pads, &saved), 3);
+    }
+
+    /// A pad name contained in another ("Xbox Controller" in "Xbox
+    /// Controller (Elite)"): the exact name wins over the substring, so the
+    /// row selected is the pad routing gives player 2.
+    #[test]
+    fn p2_select_prefers_exact_name() {
+        let pads = vec![
+            "Xbox Controller (Elite)".to_string(),
+            "Xbox Controller".to_string(),
+        ];
+        let saved = input::P2Input::Gamepad(Some("Xbox Controller".into()));
+        let choices = p2_choices(&pads, &saved);
+        assert_eq!(choices.len(), 5, "connected: no extra row");
+        assert_eq!(p2_select(&choices, &pads, &saved), 2);
+    }
+
+    /// SS-UI: two connected pads sharing a name list as distinct choices —
+    /// the second is `name (2)` with the value `gamepad:name#2`; unique
+    /// names are unchanged.
+    #[test]
+    fn p2_choices_duplicate_pads() {
+        let pads = vec!["Xbox Controller".to_string(), "Xbox Controller".to_string()];
+        let all = input::P2Input::Gamepad(None);
+        let choices = p2_choices(&pads, &all);
+        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "All gamepads",
+                "Xbox Controller (1)",
+                "Xbox Controller (2)",
+                "Keyboard",
+                "Switch 2 (Bluetooth)"
+            ]
+        );
+        assert_eq!(choices[2].input.to_config(), "gamepad:Xbox Controller#2");
+        // The first is spelled as the capture spells it: the plain name.
+        assert_eq!(choices[1].input.to_config(), "gamepad:Xbox Controller");
+        assert_eq!(
+            choices[1].input,
+            input::P2Input::Gamepad(Some(input::pad_value("Xbox Controller", 1)))
+        );
+        // The saved `#2` value selects the second row and counts as
+        // connected (no extra "(not connected)" row is added).
+        let saved = input::P2Input::Gamepad(Some("Xbox Controller#2".into()));
+        let choices = p2_choices(&pads, &saved);
+        assert_eq!(choices.len(), 5, "no extra not-connected row");
+        assert_eq!(p2_select(&choices, &pads, &saved), 2);
+        // A saved `#1` (older captures) is the first pad, connected.
+        let saved = input::P2Input::parse("gamepad:Xbox Controller#1").unwrap();
+        let choices = p2_choices(&pads, &saved);
+        assert_eq!(choices.len(), 5, "#1 is not 'not connected'");
+        assert_eq!(p2_select(&choices, &pads, &saved), 1);
+    }
+
+    /// SS-UI: the Split row toggles (live, no restart) and saves;
+    /// the Player-2 controller row is disabled while split-screen is off
+    /// and cycles (and saves) once it is on. A live routing change is out
+    /// of scope here (`set_p2` needs a real boot with split-screen on).
+    #[test]
+    fn split_rows_stage_cycle_and_save() {
+        let mut o = Overlay::new();
+        o.page = Page::Split;
+        o.split = false;
+        let snap = o.staged_settings();
+        let pos = |o: &Overlay, r: Row| o.rows().iter().position(|&x| x == r).unwrap();
+        // The staged Split value is what saves; nothing yet.
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).splitscreen_enabled,
+            None
+        );
+        // Toggle the Split row on (confirm cycles it).
+        o.sel = pos(&o, Row::Opt(Opt::Split));
+        o.confirm();
+        assert!(o.split);
+        let d = changed_since(o.staged_settings(), &snap);
+        assert_eq!(d.splitscreen_enabled, Some(true));
+        assert!(o.pending_restart().is_empty(), "split-screen switches live");
+        // While split-screen is off the P2 row does nothing (disabled).
+        o.p2_choices = p2_choices(
+            &["Pad A".to_string(), "Pad B".to_string()],
+            &input::P2Input::Gamepad(None),
+        );
+        o.p2_sel = 0;
+        o.sel = pos(&o, Row::Opt(Opt::P2Input));
+        o.confirm();
+        o.change(-1, false);
+        assert_eq!(o.p2_sel, 0);
+        assert_eq!(changed_since(o.staged_settings(), &snap).p2_input, None);
+        // Split-screen on: the row cycles and saves its choice.
+        o.split = true;
+        o.confirm(); // wraps 0 → 1: Pad A
+        assert_eq!(o.p2_sel, 1);
+        let d = changed_since(o.staged_settings(), &snap);
+        assert_eq!(d.p2_input.as_deref(), Some("gamepad:Pad A"));
+        // Left stops at the start without wrapping (arrows clamp).
+        o.change(-1, false);
+        o.change(-1, false);
+        assert_eq!(o.p2_sel, 0);
+        // The Pilot-collisions row: disabled (and nothing saved) while the
+        // staged Split value is off.
+        o.split = false;
+        o.sel = pos(&o, Row::Opt(Opt::Collisions));
+        o.confirm();
+        o.change(1, false);
+        assert!(!o.collisions);
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).splitscreen_collisions,
+            None
+        );
+        // Split-screen on: the row toggles and saves (live: the change
+        // applies from the next test start; the setter itself needs a
+        // linked game module, out of scope in these tests).
+        o.split = true;
+        o.confirm();
+        assert!(o.collisions);
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).splitscreen_collisions,
+            Some(true)
+        );
+        o.confirm();
+        assert!(!o.collisions);
+        // Back to the snapshot value: nothing to save.
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).splitscreen_collisions,
+            None
+        );
+        // The Split-layout row: same greying, then toggles and saves.
+        o.split = false;
+        o.sel = pos(&o, Row::Opt(Opt::SplitLayout));
+        o.confirm();
+        assert_eq!(o.split_layout, input::SplitLayout::TopBottom);
+        o.split = true;
+        o.confirm();
+        assert_eq!(o.split_layout, input::SplitLayout::LeftRight);
+        assert_eq!(o.row_text(Opt::SplitLayout).1, "Side by side");
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap).split_layout,
+            Some("left_right")
+        );
+        o.confirm();
+        assert_eq!(changed_since(o.staged_settings(), &snap).split_layout, None);
+    }
+
+    /// SS-UI: the "Assign player 2" row. It sits directly under the
+    /// Player-2 controller row, is disabled while the staged Split value is
+    /// off (confirm arms nothing), confirming arms the source capture, any
+    /// key but Escape assigns the keyboard, a captured pad keeps its own
+    /// row, and a pad capture times out after 5 s.
+    #[test]
+    fn p2_assign_state_machine() {
+        let mut o = Overlay::new();
+        o.page = Page::Split;
+        let pos = |o: &Overlay, r: Row| o.rows().iter().position(|&x| x == r).unwrap();
+        assert_eq!(
+            pos(&o, Row::P2Assign),
+            pos(&o, Row::Opt(Opt::P2Input)) + 1,
+            "directly under the Player-2 controller row"
+        );
+        // Split-screen off: the row is disabled, confirming arms nothing.
+        o.split = false;
+        o.sel = pos(&o, Row::P2Assign);
+        o.confirm();
+        assert!(o.p2_capture.is_none());
+        assert!(input::take_captured_source().is_none());
+        // Split-screen on: confirm arms the source capture; Escape cancels.
+        o.split = true;
+        o.confirm();
+        assert!(o.p2_capture.is_some());
+        o.on_key(KeyCode::Escape, false, true);
+        assert!(o.p2_capture.is_none());
+        // Arm again: a key (not Escape) assigns the keyboard — the
+        // Player-2 controller row shows it and the staged value saves.
+        let snap = o.staged_settings();
+        o.confirm();
+        o.on_key(KeyCode::KeyK, false, true);
+        assert!(o.p2_capture.is_none());
+        assert_eq!(o.p2_choices[o.p2_sel].input, input::P2Input::Keyboard);
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap)
+                .p2_input
+                .as_deref(),
+            Some("keyboard")
+        );
+        // The Assign row confirms the new assignment ("Player 2 now uses:
+        // …") for a few seconds, then names the current controller.
+        let (_, label) = o
+            .p2_assigned
+            .as_ref()
+            .expect("keyboard assignment recorded")
+            .clone();
+        assert_eq!(label, "Keyboard");
+        assert_eq!(o.p2_assign_text(), "Player 2 now uses: Keyboard");
+        o.p2_assigned = Some((Instant::now() - Duration::from_secs(5), label));
+        assert_eq!(o.p2_assign_text(), "Assign player 2\u{2026} (Keyboard)");
+        // A captured pad whose name no pad matches (it dropped between the
+        // press and the apply) keeps its own row, like a saved one would.
+        let snap2 = o.staged_settings();
+        o.apply_p2(input::P2Input::Gamepad(Some("Pad B".into())));
+        assert_eq!(o.p2_choices[o.p2_sel].label, "Pad B (not connected)");
+        assert_eq!(
+            changed_since(o.staged_settings(), &snap2)
+                .p2_input
+                .as_deref(),
+            Some("gamepad:Pad B")
+        );
+        // A pad capture times out after 5 s, with the red line.
+        o.confirm();
+        o.p2_capture = Some(P2Capture {
+            started: Instant::now() - CAPTURE_TIMEOUT,
+        });
+        o.poll_p2_capture();
+        assert!(o.p2_capture.is_none());
+        assert!(o.capture_error.is_some());
     }
 
     /// The status lines under the BLE row.
@@ -3279,6 +3968,28 @@ mod tests {
         assert!(o.capture.is_none());
     }
 
+    /// A timed-out gamepad Bind capture ends with the red line still set:
+    /// `end_capture` clears the line, so the timeout message is set after
+    /// it (like in `poll_p2_capture`).
+    #[test]
+    fn gamepad_capture_timeout_keeps_red_line() {
+        let mut o = Overlay::new();
+        o.page = Page::Controls;
+        o.capture = Some(Capture {
+            kind: Kind::Gamepad,
+            slot: 3,
+            name: "A",
+            started: Instant::now() - CAPTURE_TIMEOUT,
+        });
+        o.poll_capture();
+        assert!(o.capture.is_none());
+        assert!(o.capture_error.is_some());
+        assert_eq!(
+            o.capture_error.as_deref(),
+            Some("No button pressed. Select the row to try again.")
+        );
+    }
+
     #[test]
     fn pad_nav_directions() {
         let p = |button, stick_x, stick_y| input::Pad {
@@ -3337,7 +4048,7 @@ mod tests {
     fn every_row_has_help() {
         let mut o = Overlay::new();
         o.msaa = 4;
-        for page in [Page::Main, Page::Graphics, Page::Controls] {
+        for page in [Page::Main, Page::Graphics, Page::Controls, Page::Split] {
             o.page = page;
             for row in o.rows() {
                 assert!(!help(row).is_empty(), "{row:?} on {page:?} has no help");
@@ -3381,12 +4092,6 @@ mod tests {
         let args: Vec<_> = cmd.get_args().collect();
         let expected: Vec<_> = std::env::args_os().skip(1).collect();
         assert_eq!(args, expected);
-        for name in ["PW64_INFINITE_LOD", "PW64_INFINITE_VIEW_DISTANCE"] {
-            assert!(
-                cmd.get_envs()
-                    .any(|(key, value)| key == name && value.is_none())
-            );
-        }
     }
 
     /// A failed "Restart now" (U16): the banner text stays and the status

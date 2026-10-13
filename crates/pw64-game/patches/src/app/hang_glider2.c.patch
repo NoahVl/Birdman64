@@ -11,7 +11,7 @@
  
  typedef struct {
      Vec2F unk0[23];
-@@ -354,7 +358,9 @@
+@@ -354,7 +358,9 @@ STATIC_FUNC void hangGlider_802F2804(HangGliderData* hgData) {
      if (hgData->unk18C.x < 0.0f) {
          var_fa1 = -var_fa1;
      }
@@ -22,7 +22,7 @@
  }
  
  STATIC_FUNC void hangGlider_802F2F94(HangGliderData* hgData) {
-@@ -709,7 +715,9 @@
+@@ -709,7 +715,9 @@ STATIC_FUNC void hangGlider_802F3A80(HangGliderData* hgData) {
                  func_802DC1DC(&hgData->unk1DC, &temp_s1->unk28, &sp24C, 4.0f * sp244, 1.2f * sp244, 2.0f * sp244);
                  func_802DC074(&hgData->unk14C, &hgData->unk18C, &hgData->unk1A4, &temp_s1->unk34, sp248);
                  if (D_8034F850 > 2.0f) {
@@ -33,3 +33,16 @@
                  }
                  if (hgData->unk90 >= 91) {
                      hgData->unk8C = 2;
+@@ -845,3 +853,12 @@ STATIC_FUNC void hangGlider_802F4370(HangGliderData* hgData) {
+     D_803680A0.unk4[3].unk1C.y = D_803682F0.y;
+     D_803680A0.unk4[3].unk1C.z = D_803682F0.z;
+ }
++
++// PW64 split-screen: per-player hang glider state (pw64_players.c).
++void pw64_reg_hang_glider2(void) {
++    PW64_REG(D_80368304);
++    PW64_REG(D_80368308);
++    PW64_REG(D_8034F1C0);
++    PW64_REG(D_8034F1C4);
++    PW64_REG(sPw64HgContactAcc);
++}

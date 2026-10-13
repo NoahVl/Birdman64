@@ -168,6 +168,11 @@ fn main() {
     #[cfg(not(feature = "first-run"))]
     let setup = false;
     input::load_script_from_env();
+    // Split-screen input (`[splitscreen]`): with it on, controller 2 is
+    // reported present and a second input method is routed to it. Must run
+    // before the game boots (`osContInit` reads the pattern once) and also
+    // without the input thread (a headless script can drive controller 2).
+    input::apply_splitscreen();
     // Gamepads → controller 1 (`PW64_NO_INPUT`: no gamepad thread); the BLE
     // thread (`ble.rs`) feeds its virtual pads through the same merge; it
     // starts once BLE is switched on (here or later in the settings).
@@ -354,6 +359,13 @@ pub fn run_game(
 ) -> os::Stop {
     // Single-threaded OS core: shared mutable HLE state behind a RefCell.
     let hle = std::rc::Rc::new(std::cell::RefCell::new(hle::Hle::new(gpu, sink)));
+    let throttle = std::env::var_os("PW64_NO_THROTTLE").is_none();
+    // Non-throttled runs (scripted checks) use the virtual clock: host speed
+    // must not reach game dt or retrace delivery (sweep.md "Determinism").
+    // `PW64_WALL_CLOCK=1` keeps the host clock (old behaviour).
+    if !throttle && std::env::var_os("PW64_WALL_CLOCK").is_none() {
+        os::set_virtual_clock();
+    }
     os::set_present_rate(rate);
     {
         let h = hle.clone();
@@ -369,6 +381,7 @@ pub fn run_game(
         os::set_retrace_hook(move |r| {
             park_if_quit();
             input::script_tick(r.number);
+            input::split_tick();
             // The window re-read the monitor's refresh rate (move to
             // another monitor, fullscreen): apply it here, on the game
             // thread — the kernel state is not shared with the window.
@@ -396,18 +409,23 @@ pub fn run_game(
     audio::install(); // audio tasks → pw64-audio HLE, AI → cpal (audio.rs)
     pw64_game::set_widescreen_aspect(opts::widescreen().unwrap_or(0.0));
     pw64_game::set_fill_screen(opts::fill_screen());
-    let infinite_lod = opts::infinite_lod();
-    let infinite_view_distance = opts::infinite_view_distance();
-    pw64_game::set_visibility(infinite_lod, infinite_view_distance);
-    eprintln!(
-        "[visibility] infinite LOD={infinite_lod}, whole-island distance={infinite_view_distance}"
-    );
+    pw64_game::set_visibility(opts::infinite_lod(), opts::infinite_view_distance());
+    // Split-screen spike: with it on the game draws a second camera on
+    // kernel channel 1 (splitscreen.md).
+    pw64_game::set_split(u8::from(input::splitscreen_enabled()));
+    // Pilot collisions (the game reads it at each test start; the settings
+    // row changes it live from there).
+    input::apply_split_collide(input::split_collisions());
+    // Share the best score (read when the results close; also live).
+    input::apply_split_share(input::split_share());
+    // View layout (latched at each test start; also live from settings).
+    input::apply_split_layout(input::split_layout());
     os::boot(pw64_game::bootproc, std::ptr::null_mut());
     let cfg = os::RunConfig {
         max_retraces: std::env::var("PW64_MAX_RETRACES")
             .ok()
             .and_then(|v| v.parse().ok()),
-        throttle: std::env::var_os("PW64_NO_THROTTLE").is_none(),
+        throttle,
     };
     let stop = os::run(&cfg);
     audio::finish();
