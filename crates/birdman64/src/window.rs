@@ -368,7 +368,12 @@ impl Gpu {
     /// skipped configure is retried by `surface_ready` before each redraw
     /// (Wayland never reports the old configuration as outdated).
     fn configure_surface(&mut self) {
-        if self.surface.get_capabilities(&self.adapter).formats.is_empty() {
+        if self
+            .surface
+            .get_capabilities(&self.adapter)
+            .formats
+            .is_empty()
+        {
             if !self.surface_unsupported {
                 eprintln!(
                     "[window] surface not presentable by {} right now; retrying",
