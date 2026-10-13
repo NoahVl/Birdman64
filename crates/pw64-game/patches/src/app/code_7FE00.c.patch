@@ -1,0 +1,53 @@
+--- a/src/app/code_7FE00.c
++++ b/src/app/code_7FE00.c
+@@ -26,6 +26,24 @@ f32 D_80368B18;
+ 
+ Unk8034F390* D_8034F390 = NULL;
+ 
++// PW64 split-screen: D_80368B10..18 = a camera's forward axis; impact
++// smoke/fire (here, func_802F9638, func_802F996C) is pushed back along it
++// toward the viewer so it isn't buried in the hit surface. game.c passed
++// camera 0 only: player 2's missile hits and crash fire sat behind the
++// target/ground in its own view. Each queued impact remembers the player
++// whose update queued it; pw64_fx_camera (game.c.patch, each player's
++// update) points the axis at that player's camera.
++static u8 sPw64FxOwner[20];
++
++void pw64_fx_camera(Camera* camera) {
++    D_80368B10 = camera->unk108.m[1][0];
++    D_80368B14 = camera->unk108.m[1][1];
++    D_80368B18 = camera->unk108.m[1][2];
++}
++
+ // forward declarations
+ void func_802F8C40(Unk8034F390*);
+ void func_802F9104(Unk8034F390*);
+@@ -55,6 +73,9 @@ void func_802F89A0(Camera* camera) {
+     D_8034F390 = D_803688E0;
+     for (i = 0; i < ARRAY_COUNT(D_803688E0); i++) {
+         if (D_8034F390->unk0 != -1) {
++            if (pw64_level_players > 1) { // camera = the player array
++                pw64_fx_camera(&camera[sPw64FxOwner[D_8034F390 - D_803688E0]]);
++            }
+             switch (D_8034F390->unk4) {
+             case 0:
+                 func_802F8C40(D_8034F390);
+@@ -76,6 +97,9 @@ void func_802F89A0(Camera* camera) {
+         }
+         D_8034F390 = D_8034F390->next;
+     }
++    if (pw64_level_players > 1) {
++        pw64_fx_camera(camera);
++    }
+ }
+ 
+ void func_802F8AB8(f32 arg0, f32 arg1, f32 arg2, f32 arg3, Vec3F* arg4) {
+@@ -113,7 +137,8 @@ void func_802F8BF8(s32 arg0, s32 arg1, s32 arg2, f32 arg3, f32 arg4, f32 arg5) {
+     D_8034F390->unk8 = arg2;
+     D_8034F390->unkC = arg3;
+     D_8034F390->unk10 = arg4;
+     D_8034F390->unk14 = arg5;
++    sPw64FxOwner[D_8034F390 - D_803688E0] = (u8)pw64_player_cur;
+ }
+ 
+ void func_802F8C40(Unk8034F390* arg0) {

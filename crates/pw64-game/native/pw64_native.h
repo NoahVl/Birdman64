@@ -194,6 +194,16 @@ extern unsigned char pw64_dobj_owner[100];
 extern unsigned char pw64_dobj_cockpit[100];
 #define PW64_DOBJ_COCKPIT_OTHER(id) \
     (pw64_dobj_cockpit[id] != 0 && pw64_dobj_cockpit[id] != pw64_player_cur + 1)
+/* First-person near draw (dobj.c.patch): player + 1 whose view set state
+ * bit 4 (near list) and hid pw64_dobj_near_parts; the other views draw it
+ * in the normal pass with those parts shown. Set by the vehicle each frame. */
+extern unsigned char pw64_dobj_near[100];
+extern unsigned PW64_LONG32 pw64_dobj_near_parts[100];
+#define PW64_DOBJ_NEAR_OTHER(id) \
+    (pw64_dobj_near[id] != 0 && pw64_dobj_near[id] != pw64_player_cur + 1)
+#define PW64_DOBJ_NEAR_PARTS_SHOWN(id) \
+    (PW64_DOBJ_NEAR_OTHER(id) ? pw64_dobj_near_parts[id] : 0u)
+void pw64_dobj_near_set(PW64_LONG32 objId, PW64_LONG32 on, unsigned PW64_LONG32 parts);
 void pw64_dobj_claim(PW64_LONG32 objId);          /* owned by the current player */
 PW64_LONG32 pw64_dobj_clone(PW64_LONG32 src);     /* copy for the current player */
 /* Kernel controller reads (controller.c.patch): with 2+ players, pad 0

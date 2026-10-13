@@ -27,6 +27,15 @@
          if (gameState == GAME_STATE_RESULTS) {
              fdr_802E65AC(&hgData->unk10, &D_80362690->terraId, &stickX, &stickY, &buttons);
          } else {
+@@ -391,5 +404,8 @@ void hangGliderMovementFrame(HangGliderData* hgData, u8 gameState) {
+                 }
+             }
+             uvDobjState(hgData->objId, hgData->unk2);
++            // PW64 split-screen: the first-person near draw applies to this
++            // player's view only (dobj.c.patch).
++            pw64_dobj_near_set(hgData->objId, hgData->unk54 == 1, 0);
+             hgData->camera->unk1A4 = hgData->unk18C.y;
+             hgData->camera->unk78 = hgData->unk68;
 @@ -828,3 +841,8 @@ void hangGliderLoadPilot(u8 pilot, HangGliderData* hgData) {
          break;
      }

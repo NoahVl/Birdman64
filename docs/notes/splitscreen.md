@@ -43,7 +43,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   (`birdLoadLevel` on `D_80367704`) — same `pw64_setup_players` treatment as jumble hopper. Statics registered per player: birdman0, bmsound (gyro-style local `uvEventRemoveCb` info), birdman1 (flutter; a 2nd BirdmanData hit `pw64_fatal` without it), birdman2.
 - **Frame** (gameUpdateStateTestUpdate): world once; per player: vehicle update + status +
   `pw64_task_player_update`; `pw64_task_world_update` once with P1 live (therm, wind, env,
-  balls, falco, fire/splash/smoke, env sound). Draw: `func_8034B624` per player under
+  fire/splash/smoke, env sound; each player's hawk under switch(i)). Draw: `func_8034B624` per player under
   switch(i). `taskFrameUpdate` = both parts, original order, when single-player.
 - **Viewports:** `pw64_split_viewport` (camera.c.patch) halves the subscreen top/bottom or
   left/right (`pw64_split_layout`, `[splitscreen] layout`/`PW64_SPLIT_LAYOUT=tb|lr`, latched
@@ -73,8 +73,25 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   free); `_uvDobjsDraw`, `uvDobj_8021771C` and both dobj collision loops (code_8170.c) skip
   another player's dobjs, so hits free/re-model only the player's own. Modules `pw64_dobj_claim`
   dobjs they allocate mid-test (child rings, split balls, next hover pad). Balls move per player.
-  `taskDeinitLevel` frees the other players' copies. P1-only: falcos, teleports, the
-  decomp's `unkC[0].veh = ROCKET_BELT` on a ring/ball goal; bonus stars don't warp in split.
+  `taskDeinitLevel` frees the other players' copies. P1-only: teleports, the
+  decomp's `unkC[0].veh = ROCKET_BELT` on a ring/ball goal (a no-op on rocket-belt goal
+  tests; P2's goal finish skips the land-OK jingle + mix on purpose: one shared music
+  sequence); bonus stars don't warp in split.
+- **Meca Hawk** (falco.c.patch, b:gc:3 + pilot:gc:3 only): per player like the objectives
+  (`pw64_reg_falco`: sFalcos, rocks, anim blend weights, hoisted attack cooldown;
+  `pw64_falco_clone` clones its 3 dobjs, rocks `pw64_dobj_claim`ed). Each hawk chases and
+  attacks its own player, only that player's missiles hit it, its "Destroyed" points are
+  that player's (before: shared, P1's kill scored 30 for both). Ticked in
+  `pw64_task_world_update` for every player (also when finished/results, as the original).
+  Not per view: its uvFx smoke and water ripples (other player's show in your view; minor).
+- **Impact fx axis** (code_7FE00.c.patch): `D_80368B10..18` = camera forward; impact/crash
+  smoke is pushed back along it toward the viewer. game.c set it from camera 0 only; now each
+  queued impact stores its player (`func_802F8BF8`) and `pw64_fx_camera` (game.c loop) sets the
+  live player's camera, so P2's missile hits/crash fire sit on P2's side as in single-player.
+- **Covered-spot cue** (env_sound.c.patch `pw64_env_sound_player`, from the player update for
+  P2..): APTS type-1 points (common: Little States 20+) probe up; leaving cover plays sfx
+  0x50. Was P1-only (P2 never heard it, P1's played for both). The type-0 ambience
+  crossfade is one mixer volume: stays P1's.
 - **Test end + results** (game.c.patch, results.c.patch): any per-player end (status 5,
   crash/landing flow, goal, fuel) only marks that player done (`pw64_player_finish`: landing
   pose + `func_8032B560` score *at the finish*, since a later time-up sets the global `unkA1`;
@@ -184,7 +201,6 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
 ## Remaining work (from the per-player statics audit)
 - **Dobj cap:** dobjs are capped at 100 (each player's objectives use their own; beginner gc 1 = 3 rings,
   b:rb:2 = 15 rings → up to id 75); a failed clone logs and leaves that object missing for P2.
-- Gyro `D_8034F380` keeps last frame's buttons (Z edge).
 - **Sky diving** (skydiving.c.patch `pw64_sky_*`): each player has its own formation: partners
   + slot shadow are owned dobjs (other view hides them), P2's whole formation 10 m right
   (`pw64_sky_offset`); scores, countdown, drift registered. Rate owner checks (birdman1,
@@ -205,9 +221,8 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   Finish/free-flight end: scoped 0x12 + `pw64_evt_mute` bit (blocks 1/0x13/0x16, not 0xD teardown); respawn re-arms crash latches, unmutes, 0x13; mute cleared at the tally.
   Engines are non-positional (always local). Positional emitters use the nearest player's listener (`pw64_listener_set`, P2's pose/camera).
   Hang glider/gyro crashes already self-muted per vehicle (P1 re-unmuted next 0x16), so the A/B WAVs barely differ; the leak hit env-sound fade and non-crash finishes. Open: one music sequence (P2's crash stinger replaces P1's music).
-- **Hard-wired player 0 in gameplay:** falco.c (bird targets P1), snap.c shutter,
-  env_sound.c:494, task.c:358-372, game.c:770 (splash billboards on camera 0).
-  Sky diving's pad-0 reads (code_B6580.c:24, code_BA190.c:235, skydiving.c:369) follow PW64_CONT.
+- **Hard-wired player 0 in gameplay:** audited (falco, snap shutter, env_sound, task.c goal,
+  game.c fx axis): see Objectives/Meca Hawk/Impact fx/Covered-spot. Sky diving's pad-0 reads (code_B6580.c:24, code_BA190.c:235, skydiving.c:369) follow PW64_CONT.
 - **Free flight:** respawn audio (unmute + 0x13, see Audio) not run-tested. pads.c.patch: no
   test landing pads/strips (plain level pads, no radar landing point).
 - Never run split-screen in attract/demo playback (single stream).
@@ -219,14 +234,21 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   with the other diver for the first of the diver's own half (both halves' models loaded).
 - Hopper hit (`pw64_jh_fall`): state 6 goes to `unk134` (last landing; origin before one → stuck in
   state 9 / fault), so it falls only on the ground at its own spot; hit in the air → on landing.
-- Widescreen/fill-screen + split
-  untested (the view scissor may fight the renderer's Hor+ extension).
+- Widescreen/fill-screen + split checked (2026-10-12, hg/gc beginner 1, tb/lr × 4:3/wide/wide+fill/fill):
+  both views drawn, one seam, HUD inside its own view. Wide with fill 0 looks the same as fill 1 in split.
 - Cockpit views: dobj state is global, so a vehicle hiding itself for its own first-person view
   vanished from the other view too. Gyro fixed: `pw64_dobj_cockpit[obj]` = hiding player + 1
   (set/cleared by the gyro each frame, cleared on its sinking crash), `_uvDobjsDraw` draws it in
   other channels. Draws run per channel with that player live. Not via `uvDobjState`: the camera's
-  collision probes (`func_802DB050/DB224`) set and restore the state every pass. Rocket belt
-  hides only pilot parts (`uvDobjProps` 4/5, part flags global): same issue, not fixed.
+  collision probes (`func_802DB050/DB224`) set and restore the state every pass.
+  Birdman/hang glider/rocket belt first person instead set state bit 4 (near list:
+  `uvDobj_8021771C`, own frustum after a full-screen z clear) and birdman/belt hide the pilot
+  parts (`uvDobjProps` 5, part flags global). `pw64_dobj_near_set(obj, on, parts)` (each frame
+  next to their `uvDobjState`) records player + 1 and the part mask: other views skip the near
+  list, draw it in `_uvDobjsDraw` and mask those parts back on (`uvDobj_80217B4C`). Verified on
+  birdman (P2 sees P1's pilot; P1's view and 1P frames byte-identical). The belt's first person
+  (`unk5C == 1`) is unreachable in vanilla (only ever set to 4); fixed anyway. Hopper/cannonball:
+  no first-person hide.
 
 ## Input (per-player controller assignment)
 - `headless.rs` `PADS[4]` + `set_controller(n, ..)` + `set_controllers_present(n)` (pad 2
@@ -239,7 +261,7 @@ Paths are under `decomp/src` unless noted; patches under `crates/pw64-game/patch
   from `input::live_split_*`, not the boot config. `split_tick` doesn't save `enabled` while
   `PW64_SPLITSCREEN` is set.
   settings.md.
-- Open: "press a button for player 2" capture; a single Joy-Con held sideways as its own pad.
+- Open: a single Joy-Con held sideways as its own pad.
 
 ## Decisions (2026-10-07)
 - **Modes:** both pilots on the same test, each scored on their own, results for both; and

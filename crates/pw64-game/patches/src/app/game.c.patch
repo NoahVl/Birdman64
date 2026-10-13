@@ -32,6 +32,7 @@
 +extern Unk80364210* D_8034FBD0; // code_B2900.c: current player's results
 +void pw64_task_world_update(Mtx4F* arg0, f32 arg1);  // task.c.patch
 +s32 pw64_task_player_update(Mtx4F* arg0, f32 arg1); // task.c.patch
++void pw64_fx_camera(Camera* camera);                // code_7FE00.c.patch
 +
 +// Per-player state owned by game.c (pw64_players.c). unkC[0] is the live
 +// player's Unk80362690_Unk0 (unk9C stays 0).
@@ -1304,6 +1305,9 @@
 +    for (pw64I = 0; pw64I < pw64_level_players; pw64I++) {
 +    pw64_player_switch(pw64I);
 +    pw64_evt_scope = (pw64_level_players > 1) ? pw64I : -1; // its sound events reach only its handlers
++    if (pw64_level_players > 1) {
++        pw64_fx_camera(&D_80362E88[pw64I]); // its impact fx face its own camera
++    }
 +    pw64Saved = gameState;
 +    if ((pw64_level_players > 1) && sPw64Done[pw64I]) {
 +        continue; // finished: frozen, waits for the others

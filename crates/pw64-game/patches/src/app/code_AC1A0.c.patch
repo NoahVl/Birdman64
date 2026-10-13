@@ -45,6 +45,11 @@
 @@ -851,3 +863,8 @@ void func_80326E40(RocketBeltData* rbData) {
      }
      uvDobjState(rbData->objId, rbData->unk2);
++    // PW64 split-screen: the first-person near draw and pilot hide apply to
++    // this player's view only (dobj.c.patch).
++    pw64_dobj_near_set(rbData->objId, rbData->unkEF == 0,
++                       (1u << rbData->unk2DE) |
++                           ((rbData->modelId == MODEL_RB_KIWI) ? ((1u << 0xD) | (1u << 0xE)) : 0u));
  }
 +
 +// PW64 split-screen: per-player rate state (pw64_players.c).

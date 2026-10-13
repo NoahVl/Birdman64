@@ -28,11 +28,22 @@
 +// run once per frame (else they'd advance twice and consume RNG twice);
 +// called with player 1 live, so effects, smoke and ambient sound follow
 +// player 1's pose. Balls are per player (pw64_task_player_update).
++// Each player's hawk (falco.c.patch) ticks here with that player live,
++// also while it is finished or on the results screen, like the original.
 +void pw64_task_world_update(Mtx4F* arg0, f32 arg1) {
++    s32 pw64Cur = pw64_player_cur;
++    s32 i;
++
 +    therm_8034695C();
 +    wind_8034D548();
 +    env_802E15F0();
-+    falcoFrameUpdate();
++    if (sFalcoCount > 0) { // this task has a hawk
++        for (i = 0; i < pw64_level_players; i++) {
++            pw64_player_switch(i);
++            falcoFrameUpdate();
++        }
++        pw64_player_switch(pw64Cur);
++    }
 +    func_802EB424(arg0, arg1);
 +    envSoundFrameUpdate(arg0);
 +}
@@ -42,9 +53,12 @@
 +// rings / pops balls / ... of their own copy; each copy has its own dobjs
 +// (pw64_task_setup_player), owned by that player: drawn only in that
 +// player's view and collided with only by that player (pw64_dobj_owner).
-+// Photos are per player too (snap.c.patch pw64_reg_snap). Not per player:
-+// falcos, teleports (task_803456D8 moves the shared terra: player 1 only).
++// Photos and hawks are per player too (snap.c.patch pw64_reg_snap, falco.c.patch).
++// Not per player: teleports (task_803456D8 moves the shared terra: player 1 only).
 +void pw64_rings_clone(void);
++void pw64_falco_clone(void);
++void pw64_reg_falco(void);
++void pw64_env_sound_player(Mtx4F* arg0);
 +void pw64_balls_clone(void);
 +void pw64_targets_clone(void);
 +void pw64_hover_pads_clone(void);
@@ -77,6 +91,7 @@
 +    pw64_reg_ball_target();
 +    pw64_reg_bonus();
 +    pw64_reg_hopper_goals();
++    pw64_reg_falco();
 +    if (sPw64TaskRegEnd == 0) { // first registration (later calls add none)
 +        sPw64TaskRegFirst = first;
 +        sPw64TaskRegEnd = pw64_region_count();
@@ -103,10 +118,11 @@
 +    pw64_ball_target_clone();
 +    pw64_bonus_clone();
 +    pw64_hopper_goals_clone();
++    pw64_falco_clone();
 +}
 +
 +// PW64 split-screen: taskDeinit for a player other than player 1: only the
-+// per-player modules (snap and falco state is shared, player 1's).
++// per-player modules (snap state is shared, player 1's).
 +void pw64_task_deinit_player(void) {
 +    u16 veh;
 +
@@ -117,6 +133,7 @@
 +        targetsDeinit();
 +        hoverPadDeinit();
 +        ballTgtDeinit();
++        falcoDeinit();
 +        func_802FB518();
 +        if ((veh != VEHICLE_CANNONBALL) && (veh != VEHICLE_SKY_DIVING)) {
 +            bonusDeinit();
@@ -139,6 +156,9 @@
 +    if ((pw64_player_cur != 0) && !sPw64OwnObjs) {
 +        pw64_task_setup_player();
 +        sPw64OwnObjs = TRUE;
++    }
++    if (pw64_player_cur != 0) {
++        pw64_env_sound_player(arg0); // player 1's: envSoundFrameUpdate
 +    }
 +    ballsFrameUpdate();
 +    padsFrameUpdate(arg0);
