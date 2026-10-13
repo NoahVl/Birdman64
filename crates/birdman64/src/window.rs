@@ -746,15 +746,7 @@ impl App {
                         adapter.get_info().name
                     ))
                 });
-        let mut caps = surface.get_capabilities(&adapter);
-        let wayland = {
-            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            window
-                .window_handle()
-                .is_ok_and(|h| matches!(h.as_raw(), RawWindowHandle::Wayland(_)))
-        };
-        caps.present_modes =
-            opts::usable_present_modes(caps.present_modes, wayland, adapter.get_info().vendor);
+        let caps = surface.get_capabilities(&adapter);
         // The N64 outputs gamma-space colors: prefer a non-sRGB format.
         let format = caps
             .formats

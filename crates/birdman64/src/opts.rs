@@ -478,26 +478,6 @@ pub fn present_mode(
     wgpu::PresentMode::AutoVsync
 }
 
-/// The surface's present modes minus the ones known to break here: on a
-/// Wayland window rendered by an NVIDIA GPU (`vendor` 0x10de), switching to
-/// Mailbox froze the picture (game and audio kept running) and a later
-/// resize failed `Surface::configure`; Fifo works there. `present_mode`
-/// then falls back as for any surface without Mailbox.
-pub fn usable_present_modes(
-    modes: Vec<wgpu::PresentMode>,
-    wayland: bool,
-    vendor: u32,
-) -> Vec<wgpu::PresentMode> {
-    if wayland && vendor == 0x10de {
-        eprintln!("[opts] Wayland + NVIDIA: Mailbox present mode not used");
-        return modes
-            .into_iter()
-            .filter(|&m| m != wgpu::PresentMode::Mailbox)
-            .collect();
-    }
-    modes
-}
-
 /// How the window shows fullscreen (`PW64_DISPLAY_MODE`, the settings
 /// screen's Display mode row). `PartialOrd`/`Ord` give the settings row its
 /// cycle order.
@@ -632,7 +612,6 @@ mod tests {
     use super::{
         Fps, fill_default, monitor_widescreen_default, parse_aspect, parse_filter, parse_fps,
         parse_tex_filter, parse_vsync, parse_widescreen, precedence, present_mode, present_rate,
-        usable_present_modes,
     };
     use pw64_platform::os::vi::PresentRate;
 
@@ -730,15 +709,6 @@ mod tests {
             present_mode(false, false, true, &all_modes),
             wgpu::PresentMode::AutoVsync
         );
-        // Wayland + NVIDIA: no Mailbox, so Fifo (or Immediate if allowed).
-        let nv_wl = usable_present_modes(all_modes.clone(), true, 0x10de);
-        assert_eq!(present_mode(false, true, false, &nv_wl), Pm::Fifo);
-        assert_eq!(present_mode(false, true, true, &nv_wl), Pm::Immediate);
-        // Other vendors on Wayland, or NVIDIA elsewhere, keep Mailbox.
-        for (wl, vendor) in [(true, 0x1002), (false, 0x10de)] {
-            let modes = usable_present_modes(all_modes.clone(), wl, vendor);
-            assert_eq!(present_mode(false, true, false, &modes), Pm::Mailbox);
-        }
     }
 
     /// Tearing is allowed only when the player asked for more than the
