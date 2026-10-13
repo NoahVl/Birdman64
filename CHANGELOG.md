@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The controller's D-pad now moves the stick, so it works in menus and can steer. Rebind any
+  D-pad direction to another button (C buttons, A, ...) under Settings > Controls.
+
 ## [1.1.0] - 2026-10-13
 
 ### Added

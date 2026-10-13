@@ -43,9 +43,9 @@ pub const CONT_C_DOWN: u16 = 0x0004;
 pub const CONT_C_LEFT: u16 = 0x0002;
 pub const CONT_C_RIGHT: u16 = 0x0001;
 
-/// Keyboard stick slots live above the CONT button bits (`1 << 16 .. 1 << 19`):
-/// `key_mapping` splits a key's OR of slot bits back into CONT buttons (low
-/// 16) and a stick direction (high).
+/// Stick slots (keyboard and gamepad) live above the CONT button bits
+/// (`1 << 16 .. 1 << 19`): `key_mapping` / `gamepad_pad` split an input's OR
+/// of slot bits back into CONT buttons (low 16) and a stick direction (high).
 const STICK_UP_BIT: u32 = 1 << 16;
 const STICK_DOWN_BIT: u32 = 1 << 17;
 const STICK_LEFT_BIT: u32 = 1 << 18;
@@ -184,8 +184,11 @@ pub(crate) const KEYBOARD_SLOTS: [(u32, &str, &[KeyCode]); 18] = [
 ];
 
 /// Same for `[input.gamepad]` (positional defaults, so Nintendo layouts
-/// match). CONT bits only: the gamepad stick is not rebindable.
-pub(crate) const GAMEPAD_SLOTS: [(u32, &str, &[Button]); 11] = [
+/// match). The analog stick itself is fixed; the `STICK_*` slots are digital
+/// directions on top of it, defaulting to the d-pad: the game never reads
+/// the N64 d-pad (input.md), while every menu moves with the stick. The N64
+/// d-pad slots start unbound.
+pub(crate) const GAMEPAD_SLOTS: [(u32, &str, &[Button]); 15] = [
     (CONT_A as u32, "A", &[Button::South]),
     (CONT_B as u32, "B", &[Button::West, Button::East]),
     (CONT_Z as u32, "Z", &[Button::LeftTrigger2]),
@@ -197,10 +200,14 @@ pub(crate) const GAMEPAD_SLOTS: [(u32, &str, &[Button]); 11] = [
     ),
     (CONT_START as u32, "START", &[Button::Start]),
     (CONT_C_UP as u32, "C_UP", &[Button::North]),
-    (CONT_UP as u32, "UP", &[Button::DPadUp]),
-    (CONT_DOWN as u32, "DOWN", &[Button::DPadDown]),
-    (CONT_LEFT as u32, "LEFT", &[Button::DPadLeft]),
-    (CONT_RIGHT as u32, "RIGHT", &[Button::DPadRight]),
+    (CONT_UP as u32, "UP", &[]),
+    (CONT_DOWN as u32, "DOWN", &[]),
+    (CONT_LEFT as u32, "LEFT", &[]),
+    (CONT_RIGHT as u32, "RIGHT", &[]),
+    (STICK_UP_BIT, "STICK_UP", &[Button::DPadUp]),
+    (STICK_DOWN_BIT, "STICK_DOWN", &[Button::DPadDown]),
+    (STICK_LEFT_BIT, "STICK_LEFT", &[Button::DPadLeft]),
+    (STICK_RIGHT_BIT, "STICK_RIGHT", &[Button::DPadRight]),
 ];
 
 /// One N64 slot's resolved host inputs (config override or defaults).
@@ -273,7 +280,7 @@ fn resolve<K: Copy + PartialEq + std::fmt::Debug>(
 }
 
 /// OR of every slot bit `input` is bound to (CONT bits below `1 << 16`,
-/// keyboard stick slots above).
+/// stick slots above).
 fn bits_for<K: PartialEq>(bindings: &[Binding<K>], input: K) -> u32 {
     bindings
         .iter()
@@ -798,30 +805,55 @@ fn gamepad_button(b: Button) -> u16 {
 /// lock for the whole scan: this runs every 4 ms per connected pad.
 fn gamepad_pad(g: &gilrs::Gamepad) -> Pad {
     let bindings = gamepad_bindings();
-    let mut button = 0;
+    // Some raw controllers report the d-pad as a hat axis pair: it counts as
+    // the d-pad buttons, so it follows their bindings.
+    let hat = hat_buttons(g.value(Axis::DPadX), g.value(Axis::DPadY));
+    let mut bits = 0u32;
     for binding in bindings.iter() {
-        let down = binding.inputs.iter().any(|&b| {
-            if matches!(b, Button::LeftTrigger2 | Button::RightTrigger2) {
-                g.button_data(b)
-                    .is_some_and(|d| d.value() >= TRIGGER_THRESHOLD)
-            } else {
-                g.is_pressed(b)
-            }
+        let down = binding.inputs.iter().any(|&b| match b {
+            Button::LeftTrigger2 | Button::RightTrigger2 => g
+                .button_data(b)
+                .is_some_and(|d| d.value() >= TRIGGER_THRESHOLD),
+            Button::DPadUp => g.is_pressed(b) || hat & CONT_UP != 0,
+            Button::DPadDown => g.is_pressed(b) || hat & CONT_DOWN != 0,
+            Button::DPadLeft => g.is_pressed(b) || hat & CONT_LEFT != 0,
+            Button::DPadRight => g.is_pressed(b) || hat & CONT_RIGHT != 0,
+            _ => g.is_pressed(b),
         });
         if down {
-            // All gamepad slots are CONT bits (the stick is not rebindable).
-            button |= binding.bit as u16;
+            bits |= binding.bit;
         }
     }
-    // Some raw controllers report the d-pad as a hat axis pair.
-    button |= hat_buttons(g.value(Axis::DPadX), g.value(Axis::DPadY));
-    button |= c_stick_buttons(g.value(Axis::RightStickX), g.value(Axis::RightStickY));
     let (stick_x, stick_y) = stick_to_n64(g.value(Axis::LeftStickX), g.value(Axis::LeftStickY));
+    slot_bits_pad(bits).merge(Pad {
+        button: c_stick_buttons(g.value(Axis::RightStickX), g.value(Axis::RightStickY)),
+        stick_x,
+        stick_y,
+    })
+}
+
+/// Slot bits (CONT buttons + `STICK_*` directions) → pad: the directions
+/// give a digital stick like the keyboard's (full deflection, diagonals at
+/// the gate corner). `Pad::merge` with an analog stick keeps the larger.
+fn slot_bits_pad(bits: u32) -> Pad {
+    let dir = |pos: u32, neg: u32| i32::from(bits & pos != 0) - i32::from(bits & neg != 0);
+    let (stick_x, stick_y) = digital_stick(
+        dir(STICK_RIGHT_BIT, STICK_LEFT_BIT),
+        dir(STICK_UP_BIT, STICK_DOWN_BIT),
+    );
     Pad {
-        button,
+        button: (bits & u32::from(u16::MAX)) as u16,
         stick_x,
         stick_y,
     }
+}
+
+/// Summed digital directions (x right, y up) → N64 stick at full deflection,
+/// diagonals at the N64 gate corner ~70,70 via `stick_to_n64`.
+pub(crate) fn digital_stick(x: i32, y: i32) -> (i8, i8) {
+    let (fx, fy) = (x.signum() as f32, y.signum() as f32);
+    let n = (fx * fx + fy * fy).sqrt().max(1.0);
+    stick_to_n64(fx / n, fy / n)
 }
 
 /// One pad's settings-overlay navigation state (W3), from fixed physical
@@ -910,9 +942,7 @@ pub fn keyboard_pad(held: &[KeyCode]) -> Pad {
             y += dy as i32;
         }
     }
-    let (fx, fy) = (x.signum() as f32, y.signum() as f32);
-    let n = (fx * fx + fy * fy).sqrt().max(1.0);
-    let (stick_x, stick_y) = stick_to_n64(fx / n, fy / n);
+    let (stick_x, stick_y) = digital_stick(x, y);
     Pad {
         button,
         stick_x,
@@ -2538,6 +2568,37 @@ mod tests {
         // The same input bound to two slots explicitly presses both.
         let b = resolve_pad(&[("A", "South"), ("B", "South")]);
         assert_eq!(bits(&b, Button::South), CONT_A | CONT_B);
+    }
+
+    /// The pad's d-pad drives the stick by default (menus follow the stick;
+    /// the game never reads the N64 d-pad), and rebinding a d-pad direction
+    /// takes it off the stick like any other default.
+    #[test]
+    fn dpad_moves_the_stick() {
+        let b = resolve_pad(&[]);
+        assert_eq!(bits_for(&b, Button::DPadUp), STICK_UP_BIT);
+        assert_eq!(bits_for(&b, Button::DPadLeft), STICK_LEFT_BIT);
+        assert!(binding_rows(&b).contains(&("UP", "(unbound)".to_string())));
+        let up = slot_bits_pad(STICK_UP_BIT | u32::from(CONT_A));
+        assert_eq!((up.button, up.stick_x, up.stick_y), (CONT_A, 0, 80));
+        let diag = slot_bits_pad(STICK_DOWN_BIT | STICK_RIGHT_BIT);
+        assert_eq!(
+            (diag.stick_x, diag.stick_y),
+            digital_stick(1, -1),
+            "keyboard diagonal"
+        );
+        // The d-pad's full push beats a small analog one (`Pad::merge`).
+        let analog = Pad {
+            button: 0,
+            stick_x: 20,
+            stick_y: 0,
+        };
+        assert_eq!(slot_bits_pad(STICK_LEFT_BIT).merge(analog).stick_x, -80);
+        // C_UP = DPadUp: off the stick, on C-up.
+        let b = resolve_pad(&[("C_UP", "DPadUp")]);
+        assert_eq!(bits_for(&b, Button::DPadUp), u32::from(CONT_C_UP));
+        assert_eq!(bits_for(&b, Button::North), 0, "C_UP's default replaced");
+        assert_eq!(bits_for(&b, Button::DPadDown), STICK_DOWN_BIT);
     }
 
     #[test]
