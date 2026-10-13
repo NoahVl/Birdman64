@@ -442,6 +442,14 @@ pub fn allows_tearing(fps: Fps, monitor_mhz: Option<u32>) -> bool {
 /// unavailable on this surface, and what took its place.
 static PRESENT_FALLBACK: std::sync::Once = std::sync::Once::new();
 
+/// Whether switching present mode `a` → `b` changes nothing on screen:
+/// AutoVsync is Fifo (always supported), so no reconfigure is needed.
+pub fn same_present_mode(a: wgpu::PresentMode, b: wgpu::PresentMode) -> bool {
+    use wgpu::PresentMode::{AutoVsync, Fifo};
+    let fifo = |m| if m == AutoVsync { Fifo } else { m };
+    fifo(a) == fifo(b)
+}
+
 /// The window's present mode for `vsync` / a present rate (matrix in
 /// framerate.md "Present tick"), given the surface's supported modes:
 /// V-Sync → Fifo (no tearing, blocks the window thread per present);
@@ -612,6 +620,7 @@ mod tests {
     use super::{
         Fps, fill_default, monitor_widescreen_default, parse_aspect, parse_filter, parse_fps,
         parse_tex_filter, parse_vsync, parse_widescreen, precedence, present_mode, present_rate,
+        same_present_mode,
     };
     use pw64_platform::os::vi::PresentRate;
 
@@ -709,6 +718,12 @@ mod tests {
             present_mode(false, false, true, &all_modes),
             wgpu::PresentMode::AutoVsync
         );
+        // AutoVsync is Fifo (no reconfigure between them); others differ.
+        assert!(same_present_mode(Pm::AutoVsync, Pm::Fifo));
+        assert!(same_present_mode(Pm::Fifo, Pm::AutoVsync));
+        assert!(same_present_mode(Pm::Mailbox, Pm::Mailbox));
+        assert!(!same_present_mode(Pm::AutoVsync, Pm::Mailbox));
+        assert!(!same_present_mode(Pm::Fifo, Pm::Immediate));
     }
 
     /// Tearing is allowed only when the player asked for more than the

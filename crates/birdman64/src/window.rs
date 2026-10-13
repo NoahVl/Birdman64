@@ -119,6 +119,8 @@ pub(crate) struct Gpu {
     adapter: wgpu::Adapter,
     /// The last reconfigure was skipped (`configure_surface`): log once.
     surface_unsupported: bool,
+    /// Failed `get_current_texture` calls so far (`log_surface_error`).
+    surface_errors: u32,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     pub(crate) config: wgpu::SurfaceConfiguration,
@@ -344,11 +346,14 @@ impl Gpu {
         let tearing = opts::allows_tearing(self.fps, mhz);
         let mode = opts::present_mode(self.vsync, rate.is_some(), tearing, &self.present_modes);
         if self.config.present_mode != mode {
-            eprintln!(
-                "[window] present mode {:?} → {mode:?}",
-                self.config.present_mode
-            );
-            self.config.present_mode = mode;
+            let was = std::mem::replace(&mut self.config.present_mode, mode);
+            eprintln!("[window] present mode {was:?} → {mode:?}");
+            // AutoVsync is Fifo: no reconfigure for a change that changes
+            // nothing. On Wayland + NVIDIA every reconfigure after the first
+            // one froze the picture (game and audio kept running).
+            if opts::same_present_mode(was, mode) {
+                return rate;
+            }
             // wgpu's `Surface::configure` waits for the GPU to come idle and
             // panics (fatal error sink) when submissions are still in flight,
             // which this frame's own just-queued work always is. Drain first
@@ -384,7 +389,21 @@ impl Gpu {
             return;
         }
         self.surface_unsupported = false;
+        eprintln!(
+            "[window] surface configure {}x{} {:?}",
+            self.config.width, self.config.height, self.config.present_mode
+        );
         self.surface.configure(&self.device, &self.config);
+    }
+
+    /// Logs a failed `get_current_texture` (the first few, then every 600th):
+    /// a stuck surface otherwise freezes the picture without a trace.
+    fn log_surface_error(&mut self, e: &wgpu::SurfaceError) {
+        self.surface_errors += 1;
+        let n = self.surface_errors;
+        if n <= 5 || n.is_multiple_of(600) {
+            eprintln!("[window] get_current_texture: {e:?} (#{n})");
+        }
     }
 
     /// Before a redraw: retries a skipped configure; false = skip this frame.
@@ -838,6 +857,7 @@ impl App {
             surface,
             adapter,
             surface_unsupported: false,
+            surface_errors: 0,
             device,
             queue,
             config,
@@ -1014,9 +1034,11 @@ impl App {
         }
         let tex = match g.surface.get_current_texture() {
             Ok(t) => t,
-            Err(wgpu::SurfaceError::Timeout) => return,
-            Err(_) => {
-                g.configure_surface();
+            Err(e) => {
+                g.log_surface_error(&e);
+                if !matches!(e, wgpu::SurfaceError::Timeout) {
+                    g.configure_surface();
+                }
                 return;
             }
         };
@@ -1054,9 +1076,11 @@ impl App {
         }
         let tex = match g.surface.get_current_texture() {
             Ok(t) => t,
-            Err(wgpu::SurfaceError::Timeout) => return true,
-            Err(_) => {
-                g.configure_surface();
+            Err(e) => {
+                g.log_surface_error(&e);
+                if !matches!(e, wgpu::SurfaceError::Timeout) {
+                    g.configure_surface();
+                }
                 return true;
             }
         };
@@ -1183,6 +1207,7 @@ impl App {
         let tex = match g.surface.get_current_texture() {
             Ok(t) => t,
             Err(e) => {
+                g.log_surface_error(&e);
                 if !matches!(e, wgpu::SurfaceError::Timeout) {
                     g.configure_surface();
                 }
@@ -1481,8 +1506,13 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Resized(s) => {
                 if let Some(g) = &mut self.gpu {
-                    g.config.width = s.width.max(1);
-                    g.config.height = s.height.max(1);
+                    let size = (s.width.max(1), s.height.max(1));
+                    // Wayland repeats Resized with an unchanged size; each
+                    // reconfigure risks the Wayland + NVIDIA freeze.
+                    if size == (g.config.width, g.config.height) {
+                        return;
+                    }
+                    (g.config.width, g.config.height) = size;
                     g.configure_surface();
                     g.window.request_redraw();
                 }
