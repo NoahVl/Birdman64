@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Linux: the game no longer crashes when the window is resized on some
-  hybrid-graphics laptops (for example right after choosing Start game).
+- Linux (Wayland) with an NVIDIA GPU: the picture no longer freezes on the
+  title screen, and the game no longer crashes when the window is resized
+  (for example right after choosing Start game).
 
 ## [1.1.0] - 2026-10-13
 
