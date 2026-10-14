@@ -6,9 +6,9 @@
  
 +#ifdef PW64_NATIVE
 +// PW64: linker symbols for fixed N64 RAM addresses (map: kernel_TEXT_START,
-+// app_BSS_END). They bound RDRAM-window regions, so they must stay constants.
-+#define kernel_TEXT_START (*(u8(*)[1])0x802000A0)
-+#define D_803805E0 (*(u8*)0x803805E0)
++// app_BSS_END). PW64_PTR resolves them at every use; runtime expressions.
++#define kernel_TEXT_START (*(u8(*)[1])PW64_PTR(0x802000A0))
++#define D_803805E0 (*(u8*)PW64_PTR(0x803805E0))
 +#else
  extern u8 kernel_TEXT_START[];
  
@@ -26,6 +26,26 @@
      D_802B8830[5].start = 0x80000000;
      D_802B8830[5].end = 0x80000400;
      D_802B8820 = 6;
+@@ -62,16 +69,16 @@ void uvMemInitBlocks(void) {
+ void uvMemClearRegions(void) {
+     u32* a;
+ 
+-    for (a = (u32*)0x800417DC; a < (u32*)0x800DA800; a++) {
++    for (a = (u32*)PW64_PTR(0x800417DC); a < (u32*)PW64_PTR(0x800DA800); a++) {
+         *a = 0;
+     }
+ 
+     // the end of this segment is 802000A0 which coincides with kernel_TEXT_START
+-    for (a = (u32*)0x80125800; a < (u32*)&kernel_TEXT_START; a++) {
++    for (a = (u32*)PW64_PTR(0x80125800); a < (u32*)&kernel_TEXT_START; a++) {
+         *a = 0;
+     }
+ 
+-    for (a = (u32*)&D_803805E0; a < (u32*)0x803DA800; a++) {
++    for (a = (u32*)&D_803805E0; a < (u32*)PW64_PTR(0x803DA800); a++) {
+         *a = 0;
+     }
+ }
 @@ -143,7 +150,7 @@ void _uvMediaCopy(void* vAddr, void* devAddr, u32 nbytes) {
  
      dst = vAddr;

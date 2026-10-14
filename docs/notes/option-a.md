@@ -52,14 +52,15 @@ audio_manager.c 3, toys.c 3, resample.c 2, env.c 2, R4300.h 2, pw64_arena.c 2,
 1 each: save.c heapinit.c cseq.c sched.c font.c debug.c snow.c game.c
 pw64_rom_structs.c pw64_audio_load.c. No per-site work unless strict mode trips.
 
-**Hidden sites** (int *constant* → pointer: clang doesn't flag these):
+**Hidden sites** (int *constant* → pointer: clang doesn't flag these; S2 done,
+line numbers = decomp source):
 - graphics.c 105-107 `gGfxFbPtrs`, `D_80299278` (3) — **done (S1 template)**.
-- user_file.c 33 (1), sched.c 232 `osViSwapBuffer((void*)0x80100000)` (1),
-  system.c 227/231 `bootproc` clear loops (4 literals).
+- user_file.c 33 (1), sched.c 219 `osViSwapBuffer((void*)0x80100000)` (1),
+  system.c 223/227 `bootproc` clear loops (4 literals).
 - memory.c 41-42 `D_803805E0` / `kernel_TEXT_START` defines, 72/77/81 clear loops.
   The `D_802B8830[]` / `D_802B892C` / `osMemSize + 0x80000000` u32 literals stay.
-- debug.c 634/654 (2); audio_manager.c 41 `gAudioHeapStart` (static initializer:
-  `PW64_PTR` is a call, so assign it in the init function before line 63).
+- debug.c 626/646 (2); audio_manager.c 41 `gAudioHeapStart` (static initializer:
+  `PW64_PTR` is a call, so it is assigned in `uvaManagerInit` before the first use).
 
 **Rust consumers** (take or produce C addresses):
 - pw64-platform: misc.rs 50 `osVirtualToPhysical` (`as u32`); pi.rs 265 truncates the
@@ -114,3 +115,10 @@ In the `.patch` file only the `+` line changes (same line count, hunk header sta
 - Not in static initializers (it is a call): assign at init instead.
 - Rust side: `pw64_platform::vaddr::{to_host, to_vaddr}`; never `as u32` a host
   address or `as usize` a C address.
+- Applier (pw64-cbuild `apply_unified_diff`): no fuzz — it skips to each hunk's
+  `-start`, then matches context 1:1; any empty line in the `.patch` file is an
+  empty context line, so never leave a trailing blank line (new hunks must end
+  at a real context line). Blank context lines are a single space.
+- Gate grep note: `rg` has no `-E`; use the plain pattern `rg -n "\)\s*\(?0x8[0-9A-Fa-f]{7}"`.
+- Identity runs: `bash` in PATH is WSL (paths are `/mnt/c/...`, run.sh needs
+  `/c/...` and zig.exe won't exec there) — use `C:\Program Files\Git\bin\bash.exe`.

@@ -20,6 +20,20 @@
  void func_8022E558(void);
  
  void func_8020F9F4(void);
+@@ -221,11 +225,11 @@
+     s32 i;
+ 
+-    for (var_v0 = (s32*)0x800DA800; var_v0 < (s32*)0x80100000; var_v0++) {
++    for (var_v0 = (s32*)PW64_PTR(0x800DA800); var_v0 < (s32*)PW64_PTR(0x80100000); var_v0++) {
+         *var_v0 = 0;
+     }
+ 
+-    for (var_v0 = (s32*)0x80100000; var_v0 != (s32*)0x80125800; var_v0++) {
++    for (var_v0 = (s32*)PW64_PTR(0x80100000); var_v0 != (s32*)PW64_PTR(0x80125800); var_v0++) {
+         *var_v0 = 0;
+     }
+ 
+     osInitialize();
 @@ -311,7 +315,7 @@ void Thread_Render(void* arg) {
  void Thread_App(void* arg) {
      _uvMediaCopy(app_TEXT_START, app_ROM_START, app_ROM_END - app_ROM_START);

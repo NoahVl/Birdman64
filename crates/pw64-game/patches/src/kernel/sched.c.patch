@@ -29,6 +29,14 @@
      if (gSchedRspStatus != 0) {
          osSendMesg(&gSchedInst.interruptQ, (OSMesg)RSP_DONE_MSG, OS_MESG_NOBLOCK);
      }
+@@ -216,6 +229,8 @@
+     osCreateMesgQueue(&sc->cmdQ, sc->cmdMsgBuf, OS_SC_MAX_MESGS);
+     osCreateViManager(OS_PRIORITY_VIMGR);
+     osViSetMode(&osViModeTable[mode]);
+-    osViSwapBuffer((void*)0x80100000);
++    osViSwapBuffer((void*)PW64_PTR(0x80100000));
+     osViBlack(TRUE);
+     osSetEventMesg(OS_EVENT_SP, &sc->interruptQ, (OSMesg)RSP_DONE_MSG);
 @@ -222,6 +235,8 @@
      osSetEventMesg(OS_EVENT_DP, &sc->interruptQ, (OSMesg)RDP_DONE_MSG);
      osSetEventMesg(OS_EVENT_PRENMI, &sc->interruptQ, (OSMesg)PRE_NMI_MSG);

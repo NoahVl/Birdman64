@@ -32,6 +32,35 @@
      gsSPEndDisplayList(),
  };
  
+@@ -624,26 +632,26 @@ void uvDbgCnt(u8 arg0, u8 arg1) {
+     f32 sp1C;
+ 
+-    sp2C = (u8*)0x80200000;
++    sp2C = (u8*)PW64_PTR(0x80200000);
+     sp20 = 0.0f;
+     sp1C = 0.0f;
+     while (uvIOUpdate() != 0) {
+         sp28 = uvControllerGetStick(0, 0);
+         sp24 = uvControllerGetStick(0, 1);
+         sp20 += sp28 * sp28 * sp28 * 8.0f;
+         sp1C += sp24 * sp24 * sp24 * 128.0f;
+         if (sp20 > 40.0f) {
+             sp20 = 0.0f, sp1C += 1.0f;
+         }
+         if (sp20 < 0.0f) {
+             sp20 = 40.0f, sp1C -= 1.0f;
+         }
+         if (sp1C < 0.0f) {
+             sp1C = 0.0f;
+         }
+         if (sp1C > 6553.6f) {
+             sp1C = 6553.6f;
+         }
+-        sp2C = ((u8*)0x80000000) + ((s32)sp20 * 0x10) + ((s32)sp1C * 0x140 * 2);
++        sp2C = (u8*)PW64_PTR(0x80000000) + ((s32)sp20 * 0x10) + ((s32)sp1C * 0x140 * 2);
+         uvGfxBegin();
+         uvGfxEnd();
+         osViSwapBuffer(sp2C);
 @@ -739,10 +747,24 @@ void uvDbg_80233A40(s32 arg0, u16 arg1) {
      D_802C8020 += D_802C802C * sp28;
  }

@@ -9,3 +9,12 @@
      sp2C = uvFileGetCurLength(sp30);
      if (uvFileGetCurTag(sp30) == 'UVRW') {                 // 0x55565257
          uvFile_80224170(sp30, &sp2C, &sp38, 'COMM', 0, 0); // 0x434F4D4DU
+@@ -30,7 +30,7 @@ void* uvUserFileRead(s32 userFileIdx, MemType request) {
+     if (request == MEM_ALLOCATE) {
+         sp34 = (void*)_uvMemAlloc(sp2C, 8);
+     } else {
+-        sp34 = (void*)0x803DA800;
++        sp34 = (void*)PW64_PTR(0x803DA800);
+     }
+     _uvMediaCopy(sp34, sp38, sp2C);
+     return sp34;
