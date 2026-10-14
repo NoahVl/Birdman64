@@ -43,6 +43,9 @@ already manages is too fragile to rely on across devices.
 
 ### Option A work list (from the §2 hazard inventory)
 
+Superseded by option-a.md (design chosen: 32-bit vaddrs + translation layer, `Gfx`
+stays 8 bytes; inventory and step plan there). Kept as the original problem list.
+
 1. ~160 compiler-flagged int↔pointer sites (now zero-extending `PW64_U32`/`PW64_PTR`)
    → real `uintptr_t`/pointers.
 2. 39 literal RDRAM addresses → `rdram_base + offset` (one host allocation, anywhere).

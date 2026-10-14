@@ -11,6 +11,7 @@
 //! - [`crt`]: CRT replacements bound into the dylib game module (first-run
 //!   build, docs/notes/first-run-build.md).
 //! - [`swap`]: BE→host swaps for ROM structs copied raw (`PW64_SWAP`).
+//! - [`vaddr`]: 32-bit C addresses ↔ host addresses (`PW64_U32`/`PW64_PTR`).
 
 // The `unsafe extern` fns are libultra entry points called from C: their
 // safety contract is libultra's (valid pointers of the documented types).
@@ -25,6 +26,7 @@ pub mod pi;
 pub mod start;
 pub mod stubs;
 pub mod swap;
+pub mod vaddr;
 
 /// Logs the first call of a placeholder implementation (once per name).
 pub(crate) fn first_call(name: &'static str) {

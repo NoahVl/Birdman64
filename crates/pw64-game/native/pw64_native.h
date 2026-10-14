@@ -27,15 +27,20 @@ typedef __SIZE_TYPE__ size_t;
 
 #define PW64_NATIVE 1
 
-/* Pointer-width helpers for the pointer patch set (native-build.md §2).
- * The exe, RDRAM window (0x80000000..) and every other address the C sees
- * lie below 4 GB (asserted by pw64_game::memmap), so a 32-bit int holds any
- * of them losslessly; the only hazard is sign extension of an s32 (`long`)
- * address >= 0x80000000 on its way back to a pointer.
- *   PW64_U32(p): pointer -> 32-bit N64-style address (lossless).
- *   PW64_PTR(a): 32-bit address (s32 or u32) -> pointer, zero-extended. */
-#define PW64_U32(p) ((unsigned int)(__UINTPTR_TYPE__)(p))
-#define PW64_PTR(a) ((void*)(__UINTPTR_TYPE__)(unsigned int)(a))
+/* Pointer-width helpers for the pointer patch set (native-build.md §2,
+ * option-a.md). The C keeps addresses in 32-bit slots ("vaddr": display-list
+ * words, allocator, filesystem, 0x80xxxxxx literals); every conversion goes
+ * through these, which map registered host blocks to their vaddr range
+ * (pw64-platform vaddr.rs). Values in no region (ROM offsets, physical
+ * addresses, small ints in OSMesg) pass through; with no regions registered
+ * (fixed low-4 GB window) both are the identity.
+ *   PW64_U32(p): pointer (or 32-bit int) -> 32-bit vaddr.
+ *   PW64_PTR(a): 32-bit vaddr (s32 or u32) -> host pointer; also for literal
+ *                RDRAM addresses: (u8*)PW64_PTR(0x800DA800). */
+unsigned int pw64_to_vaddr(const void* p);
+void* pw64_to_host(unsigned int a);
+#define PW64_U32(p) pw64_to_vaddr((const void*)(__UINTPTR_TYPE__)(p))
+#define PW64_PTR(a) pw64_to_host((unsigned int)(a))
 
 /* Endianness (native-build.md §3, task 6). ROM data is big-endian; scalars
  * read through uvMemRead/uvConsumeBytes(1/2/4) are already converted. Structs

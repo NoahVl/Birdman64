@@ -15,9 +15,9 @@
 -    gGfxFbPtrs[0] = 0x800DA800;
 -    gGfxFbPtrs[1] = 0x80100000;
 -    D_80299278 = 0x803DA800;
-+    gGfxFbPtrs[0] = (u8*)0x800DA800;
-+    gGfxFbPtrs[1] = (u8*)0x80100000;
-+    D_80299278 = (u8*)0x803DA800;
++    gGfxFbPtrs[0] = (u8*)PW64_PTR(0x800DA800);
++    gGfxFbPtrs[1] = (u8*)PW64_PTR(0x80100000);
++    D_80299278 = (u8*)PW64_PTR(0x803DA800);
      gGfxFbIndex = 0;
      gGfxDisplayListHead = gGfxDisplayListBase[gGfxFbIndex];
      gGfxFbCurrPtr = gGfxFbPtrs[gGfxFbIndex];
