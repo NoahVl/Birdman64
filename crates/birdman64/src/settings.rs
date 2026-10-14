@@ -3521,13 +3521,13 @@ mod tests {
         assert_eq!(o.rows()[o.sel], Row::Graphics);
         // Confirm on Controls opens the Controls page with the two binding
         // grids in the U9 order (game controls first, unused slots last:
-        // 18 keyboard + reset, 11 gamepad + reset), the Switch 2 (BLE) row
+        // 18 keyboard + reset, 15 gamepad + reset), the Switch 2 (BLE) row
         // and Back.
         o.sel = 1;
         o.confirm();
         assert_eq!(o.page, Page::Controls);
         let rows = o.rows();
-        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 1 + 1);
+        assert_eq!(rows.len(), 18 + 1 + 15 + 1 + 1 + 1);
         assert_eq!(rows[0], Row::Bind(Kind::Keyboard, 0));
         // The unused keyboard slots (L, the D-pad) moved last, after the
         // stick rows.
@@ -3536,12 +3536,15 @@ mod tests {
         assert_eq!(rows[17], Row::Bind(Kind::Keyboard, 13));
         assert_eq!(rows[18], Row::Reset(Kind::Keyboard));
         assert_eq!(rows[19], Row::Bind(Kind::Gamepad, 0));
-        assert_eq!(rows[25], Row::Bind(Kind::Gamepad, 3));
-        assert_eq!(rows[29], Row::Bind(Kind::Gamepad, 10));
-        assert_eq!(rows[30], Row::Reset(Kind::Gamepad));
-        assert_eq!(rows[31], Row::Opt(Opt::Ble));
-        assert_eq!(rows[32], Row::Back);
-        o.sel = 32;
+        // Gamepad: the stick rows (d-pad by default) after the game's
+        // buttons, then L and the N64 d-pad.
+        assert_eq!(rows[25], Row::Bind(Kind::Gamepad, 11));
+        assert_eq!(rows[29], Row::Bind(Kind::Gamepad, 3));
+        assert_eq!(rows[33], Row::Bind(Kind::Gamepad, 10));
+        assert_eq!(rows[34], Row::Reset(Kind::Gamepad));
+        assert_eq!(rows[35], Row::Opt(Opt::Ble));
+        assert_eq!(rows[36], Row::Back);
+        o.sel = 36;
         o.confirm();
         assert_eq!(o.page, Page::Main);
         assert_eq!(o.rows()[o.sel], Row::Controls);

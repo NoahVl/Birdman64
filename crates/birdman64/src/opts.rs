@@ -462,6 +462,76 @@ pub fn allows_tearing(fps: Fps, monitor_mhz: Option<u32>) -> bool {
 /// unavailable on this surface, and what took its place.
 static PRESENT_FALLBACK: std::sync::Once = std::sync::Once::new();
 
+/// Linux: which window system the game window uses (`PW64_LINUX_WINDOW`,
+/// `[graphics] linux_window`): "auto" (default), "wayland" or "x11".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinuxWindow {
+    Auto,
+    Wayland,
+    X11,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) const LINUX_WINDOW_DEFAULT: &str = "auto";
+
+pub(crate) fn parse_linux_window(v: &str) -> Option<LinuxWindow> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(LinuxWindow::Auto),
+        "wayland" => Some(LinuxWindow::Wayland),
+        "x11" => Some(LinuxWindow::X11),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn linux_window() -> LinuxWindow {
+    let env = env_opt(
+        "PW64_LINUX_WINDOW",
+        "use auto, wayland or x11",
+        parse_linux_window,
+    );
+    // Config values were validated at load.
+    let cfg = crate::config::get()
+        .graphics
+        .linux_window
+        .as_deref()
+        .and_then(parse_linux_window);
+    precedence(env, cfg, parse_linux_window(LINUX_WINDOW_DEFAULT).unwrap())
+}
+
+/// A hybrid-graphics machine with an NVIDIA GPU: the DRM devices' PCI
+/// `vendors` hold NVIDIA (0x10de) and at least one other vendor.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn hybrid_nvidia(vendors: &[u32]) -> bool {
+    vendors.contains(&0x10de) && vendors.iter().any(|&v| v != 0x10de)
+}
+
+/// Open the window through X11 (XWayland) instead of native Wayland? Only
+/// on a Wayland session with an X server (`DISPLAY`). `Auto`: on a hybrid
+/// NVIDIA laptop, where the native Wayland window froze before the main
+/// menu (KWin, NVIDIA renders, AMD drives the panel; game and audio kept
+/// running) in every present setup but V-Sync / a fixed 60 fps, while the
+/// same build under XWayland worked.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn prefer_x11(wayland: bool, x11: bool, hybrid_nvidia: bool, mode: LinuxWindow) -> bool {
+    if !wayland || !x11 {
+        return false;
+    }
+    match mode {
+        LinuxWindow::Auto => hybrid_nvidia,
+        LinuxWindow::Wayland => false,
+        LinuxWindow::X11 => true,
+    }
+}
+
+/// Whether switching present mode `a` → `b` changes nothing on screen:
+/// AutoVsync is Fifo (always supported), so no reconfigure is needed.
+pub fn same_present_mode(a: wgpu::PresentMode, b: wgpu::PresentMode) -> bool {
+    use wgpu::PresentMode::{AutoVsync, Fifo};
+    let fifo = |m| if m == AutoVsync { Fifo } else { m };
+    fifo(a) == fifo(b)
+}
+
 /// The window's present mode for `vsync` / a present rate (matrix in
 /// framerate.md "Present tick"), given the surface's supported modes:
 /// V-Sync → Fifo (no tearing, blocks the window thread per present);
@@ -496,6 +566,29 @@ pub fn present_mode(
         };
     }
     wgpu::PresentMode::AutoVsync
+}
+
+/// The surface's present modes minus the ones known to break here: on a
+/// Wayland window rendered by an NVIDIA GPU (`vendor` 0x10de, seen on a
+/// hybrid laptop under KWin), switching the present mode after the first
+/// configure froze the picture (game and audio kept running), and resizing
+/// while in Mailbox failed `Surface::configure`. Fifo only there:
+/// `present_mode` then always lands on Fifo, which the startup AutoVsync
+/// already is (`same_present_mode`), so the mode never changes; resizes in
+/// Fifo work.
+pub fn usable_present_modes(
+    modes: Vec<wgpu::PresentMode>,
+    wayland: bool,
+    vendor: u32,
+) -> Vec<wgpu::PresentMode> {
+    if wayland && vendor == 0x10de {
+        eprintln!("[opts] Wayland + NVIDIA: Fifo present mode only");
+        return modes
+            .into_iter()
+            .filter(|&m| m == wgpu::PresentMode::Fifo)
+            .collect();
+    }
+    modes
 }
 
 /// How the window shows fullscreen (`PW64_DISPLAY_MODE`, the settings
@@ -632,6 +725,7 @@ mod tests {
     use super::{
         Fps, fill_default, monitor_widescreen_default, parse_aspect, parse_filter, parse_fps,
         parse_tex_filter, parse_vsync, parse_widescreen, precedence, present_mode, present_rate,
+        same_present_mode, usable_present_modes,
     };
     use pw64_platform::os::vi::PresentRate;
 
@@ -729,6 +823,55 @@ mod tests {
             present_mode(false, false, true, &all_modes),
             wgpu::PresentMode::AutoVsync
         );
+        // AutoVsync is Fifo (no reconfigure between them); others differ.
+        assert!(same_present_mode(Pm::AutoVsync, Pm::Fifo));
+        assert!(same_present_mode(Pm::Fifo, Pm::AutoVsync));
+        assert!(same_present_mode(Pm::Mailbox, Pm::Mailbox));
+        assert!(!same_present_mode(Pm::AutoVsync, Pm::Mailbox));
+        assert!(!same_present_mode(Pm::Fifo, Pm::Immediate));
+        // Wayland + NVIDIA: Fifo only, even when tearing is allowed, so the
+        // present mode never needs a reconfigure there.
+        let nv_wl = usable_present_modes(all_modes.clone(), true, 0x10de);
+        assert_eq!(present_mode(false, true, false, &nv_wl), Pm::Fifo);
+        assert_eq!(present_mode(false, true, true, &nv_wl), Pm::Fifo);
+        assert!(same_present_mode(
+            present_mode(false, false, false, &nv_wl),
+            present_mode(false, true, true, &nv_wl)
+        ));
+        // Other vendors on Wayland, or NVIDIA elsewhere, keep Mailbox.
+        for (wl, vendor) in [(true, 0x1002), (false, 0x10de)] {
+            let modes = usable_present_modes(all_modes.clone(), wl, vendor);
+            assert_eq!(present_mode(false, true, false, &modes), Pm::Mailbox);
+        }
+    }
+
+    /// `auto` picks X11 only on Wayland + X server + hybrid NVIDIA; the
+    /// explicit modes override, but never pick a backend that isn't there.
+    #[test]
+    fn linux_window_choice() {
+        use super::{LinuxWindow as Lw, hybrid_nvidia, parse_linux_window, prefer_x11};
+        assert_eq!(parse_linux_window(" X11"), Some(Lw::X11));
+        assert_eq!(parse_linux_window("wayland"), Some(Lw::Wayland));
+        assert_eq!(
+            parse_linux_window(super::LINUX_WINDOW_DEFAULT),
+            Some(Lw::Auto)
+        );
+        assert_eq!(parse_linux_window("yes"), None);
+        assert!(hybrid_nvidia(&[0x1002, 0x10de]));
+        assert!(hybrid_nvidia(&[0x10de, 0x8086]));
+        assert!(!hybrid_nvidia(&[0x10de]), "desktop NVIDIA keeps Wayland");
+        assert!(!hybrid_nvidia(&[0x10de, 0x10de]));
+        assert!(!hybrid_nvidia(&[0x1002, 0x8086]));
+        assert!(prefer_x11(true, true, true, Lw::Auto));
+        assert!(!prefer_x11(true, true, false, Lw::Auto));
+        assert!(
+            !prefer_x11(false, true, true, Lw::Auto),
+            "plain X11 session"
+        );
+        assert!(!prefer_x11(true, false, true, Lw::Auto), "no XWayland");
+        assert!(!prefer_x11(true, true, true, Lw::Wayland));
+        assert!(prefer_x11(true, true, false, Lw::X11));
+        assert!(!prefer_x11(true, false, false, Lw::X11));
     }
 
     /// Tearing is allowed only when the player asked for more than the

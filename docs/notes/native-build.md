@@ -258,6 +258,13 @@ run on Linux is not covered there). Build deps: zig 0.16.0 (get_zig example, nee
 (cpal), `libudev-dev` (gilrs), `libdbus-1-dev` (btleplug/BlueZ; BLE stays off by
 default), `pkg-config`. Windows is unchanged (same C types, flags, link args).
 
+- **Wayland + hybrid NVIDIA** (KWin, RTX laptop GPU renders, AMD iGPU drives the panel):
+  the native Wayland window froze before the main menu (game + audio kept running) and a
+  resize in Mailbox failed `Surface::configure` ("does not support the adapter's queue
+  family"). Fifo-only + no present-mode change still froze; only V-Sync, a fixed 60 fps or
+  XWayland worked. So `linux_window = "auto"` opens through XWayland when the DRM vendors
+  (`/sys/class/drm/cardN/device/vendor`) are NVIDIA + another (`opts::prefer_x11`); Wayland
+  + NVIDIA also stays Fifo-only (`usable_present_modes`) for a forced `wayland`.
 - **Address space** (§2 option C, same map as Windows): RDRAM window and the
   coroutine stacks are `mmap(MAP_FIXED_NOREPLACE)` (+ address check: pre-4.17
   kernels take it as a hint); `pw64_game::memmap::image_range` = linker symbols

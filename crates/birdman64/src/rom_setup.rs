@@ -259,6 +259,14 @@ fn welcome_to_birdman64(stale_rom: bool) -> bool {
     } else {
         ""
     };
+    // What the player started, as they see it in their file manager.
+    let program = if cfg!(windows) {
+        "Birdman64.exe"
+    } else if std::env::var_os("APPIMAGE").is_some() {
+        "the Birdman64 AppImage"
+    } else {
+        "the birdman64 program"
+    };
     let ok = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Info)
         .set_buttons(rfd::MessageButtons::OkCancel)
@@ -267,7 +275,7 @@ fn welcome_to_birdman64(stale_rom: bool) -> bool {
             "{stale_note}Birdman64 plays your own copy of Pilotwings 64. Choose the game file \
              (the ROM) you made from your cartridge: a .z64, .n64 or .v64 file, or a .zip \
              containing one. Only the US version works.\n\nTip: put the file next to \
-             Birdman64.exe and it is found automatically."
+             {program} and it is found automatically."
         ))
         .show()
         == rfd::MessageDialogResult::Ok;
