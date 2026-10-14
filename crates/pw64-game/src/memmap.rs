@@ -12,6 +12,7 @@
 //! - [`check_low_4gb`] asserts all of this at startup.
 
 use core::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// N64 KSEG0 RDRAM window the C code addresses with literals.
 pub const RDRAM_BASE: usize = 0x8000_0000;
@@ -20,15 +21,81 @@ pub const RDRAM_SIZE: usize = 0x80_0000;
 /// Everything the C code can see must lie below this.
 pub const LIMIT_4GB: usize = 1 << 32;
 
+/// Relocation mode, `PW64_RELOC` (docs/notes/option-a.md).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reloc {
+    /// Unset / `off`: the fixed low window, no vaddr regions (identity).
+    Off,
+    /// `alias`: RDRAM is one shared-memory block seen twice, at
+    /// [`RDRAM_BASE`] (for C sites that still use the window directly) and
+    /// above 4 GB, registered as the vaddr region the C translates to.
+    Alias,
+}
+
+impl Reloc {
+    /// Parses a `PW64_RELOC` value. Pure.
+    pub fn parse(v: Option<&str>) -> Result<Reloc, String> {
+        match v.map(str::trim) {
+            None | Some("" | "0" | "off") => Ok(Reloc::Off),
+            Some("alias") => Ok(Reloc::Alias),
+            Some(o) => Err(format!("PW64_RELOC={o}: expected off or alias")),
+        }
+    }
+
+    /// The process's mode (`PW64_RELOC`, read once). Panics on a bad value.
+    pub fn get() -> Reloc {
+        static MODE: std::sync::OnceLock<Reloc> = std::sync::OnceLock::new();
+        *MODE.get_or_init(|| {
+            let v = std::env::var("PW64_RELOC").ok();
+            Reloc::parse(v.as_deref()).unwrap_or_else(|e| panic!("{e}"))
+        })
+    }
+}
+
+/// Host address of RDRAM as the C and the HLE address it (vaddr
+/// 0x80000000): [`RDRAM_BASE`], or the high view in [`Reloc::Alias`].
+static RDRAM_HOST: AtomicUsize = AtomicUsize::new(RDRAM_BASE);
+
+/// Host address of RDRAM's vaddr 0x80000000 (see [`RDRAM_HOST`]).
+pub fn rdram_host() -> usize {
+    RDRAM_HOST.load(Ordering::Relaxed)
+}
+
+/// High-view candidates for [`Reloc::Alias`]: above 4 GB, 64 KB aligned,
+/// and with low 32 bits (0x2000_0000) far from 0x80000000, so a pointer
+/// that some straggler truncates to 32 bits reads as a ROM offset (bit 31
+/// clear) instead of silently hitting the low view.
+fn alias_candidates() -> impl Iterator<Item = usize> {
+    (0..16).map(|k| 0x7_2000_0000 + k * 0x1_0000_0000)
+}
+
 #[cfg(windows)]
 mod sys {
     use core::ffi::c_void;
     unsafe extern "system" {
         pub fn VirtualAlloc(addr: *mut c_void, size: usize, ty: u32, prot: u32) -> *mut c_void;
+        pub fn CreateFileMappingW(
+            file: *mut c_void,
+            attrs: *mut c_void,
+            prot: u32,
+            size_high: u32,
+            size_low: u32,
+            name: *const u16,
+        ) -> *mut c_void;
+        pub fn MapViewOfFileEx(
+            mapping: *mut c_void,
+            access: u32,
+            off_high: u32,
+            off_low: u32,
+            size: usize,
+            base: *mut c_void,
+        ) -> *mut c_void;
     }
     pub const MEM_COMMIT: u32 = 0x1000;
     pub const MEM_RESERVE: u32 = 0x2000;
     pub const PAGE_READWRITE: u32 = 0x04;
+    pub const FILE_MAP_WRITE: u32 = 0x02;
+    pub const INVALID_HANDLE_VALUE: *mut c_void = usize::MAX as *mut c_void;
 
     unsafe extern "C" {
         /// Provided by the MSVC linker: the DOS header of this image.
@@ -38,7 +105,19 @@ mod sys {
 
 /// Maps the zeroed RDRAM window at exactly [`RDRAM_BASE`]. Panics if the
 /// range is taken (e.g. the exe was relocated over it). Call once, first.
+/// [`Reloc::Alias`]: maps the shared block twice and registers the high
+/// view as the RDRAM vaddr region ([`map_rdram_alias`]).
 pub fn map_rdram_window() {
+    if Reloc::get() == Reloc::Alias {
+        let high = map_rdram_alias();
+        pw64_platform::vaddr::set_regions(vec![pw64_platform::vaddr::Region {
+            vbase: RDRAM_BASE as u32,
+            size: RDRAM_SIZE as u32,
+            host: high,
+        }]);
+        RDRAM_HOST.store(high, Ordering::Relaxed);
+        return;
+    }
     #[cfg(windows)]
     {
         // SAFETY: plain Win32 allocation at a fixed address; failure is checked.
@@ -80,6 +159,85 @@ pub fn map_rdram_window() {
     // macOS/arm64 forbids low mappings (`__PAGEZERO`): native-build.md §10.
     #[cfg(not(any(windows, target_os = "linux")))]
     compile_error!("RDRAM window mapping is implemented for Windows and Linux only");
+}
+
+/// [`Reloc::Alias`]: one zeroed shared-memory block of [`RDRAM_SIZE`],
+/// mapped at [`RDRAM_BASE`] and at the first free [`alias_candidates`]
+/// address; returns the high view. Both views are the same pages, so C
+/// sites that still use a window literal see what the translated sites
+/// wrote. Panics if either view can't be mapped.
+fn map_rdram_alias() -> usize {
+    #[cfg(windows)]
+    let high = {
+        // SAFETY: pagefile-backed section (zero-filled) and views at fixed
+        // addresses; every result is checked. The handle stays open for the
+        // process lifetime (the views keep the section alive anyway).
+        unsafe {
+            let h = sys::CreateFileMappingW(
+                sys::INVALID_HANDLE_VALUE,
+                core::ptr::null_mut(),
+                sys::PAGE_READWRITE,
+                0,
+                RDRAM_SIZE as u32,
+                core::ptr::null(),
+            );
+            assert!(
+                !h.is_null(),
+                "RDRAM alias: CreateFileMapping failed: {}",
+                std::io::Error::last_os_error()
+            );
+            let view = |base: usize| {
+                let p = base as *mut c_void;
+                sys::MapViewOfFileEx(h, sys::FILE_MAP_WRITE, 0, 0, RDRAM_SIZE, p) as usize
+            };
+            let low = view(RDRAM_BASE);
+            assert_eq!(
+                low,
+                RDRAM_BASE,
+                "could not map the RDRAM window at {RDRAM_BASE:#x}: {}",
+                std::io::Error::last_os_error()
+            );
+            alias_candidates().find(|&a| view(a) == a)
+        }
+    };
+    #[cfg(target_os = "linux")]
+    let high = {
+        // SAFETY: memfd (zero-filled) mapped shared at fixed addresses with
+        // MAP_FIXED_NOREPLACE (never clobbers; pre-4.17 kernels take it as
+        // a hint, hence the address checks); every result is checked. The
+        // fd stays open (the mappings keep the file alive anyway).
+        unsafe {
+            let fd = libc::memfd_create(c"pw64-rdram".as_ptr(), libc::MFD_CLOEXEC);
+            assert!(
+                fd >= 0 && libc::ftruncate(fd, RDRAM_SIZE as libc::off_t) == 0,
+                "RDRAM alias: memfd: {}",
+                std::io::Error::last_os_error()
+            );
+            let view = |base: usize| {
+                let p = libc::mmap(
+                    base as *mut c_void,
+                    RDRAM_SIZE,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED | libc::MAP_FIXED_NOREPLACE,
+                    fd,
+                    0,
+                );
+                if p != libc::MAP_FAILED && p as usize != base {
+                    libc::munmap(p, RDRAM_SIZE);
+                }
+                p as usize
+            };
+            let low = view(RDRAM_BASE);
+            assert_eq!(
+                low,
+                RDRAM_BASE,
+                "could not map the RDRAM window at {RDRAM_BASE:#x}: {}",
+                std::io::Error::last_os_error()
+            );
+            alias_candidates().find(|&a| view(a) == a)
+        }
+    };
+    high.expect("RDRAM alias: no free high address for the second view")
 }
 
 /// `(start, end)` of this exe's loaded image (code, data, BSS).
@@ -175,7 +333,10 @@ pub fn hle_readable(addr: usize, len: usize) -> bool {
 /// The RSP HLE may write `[addr, addr + len)`: only the RDRAM window and live
 /// thread stacks, never code or the images (audio HLE DMA writes).
 pub fn hle_writable(addr: usize, len: usize) -> bool {
-    range_holds((RDRAM_BASE, RDRAM_BASE + RDRAM_SIZE), addr, len)
+    // The RDRAM view the vaddr layer translates to (alias mode: the high
+    // one only; the HLE never sees low-view addresses there).
+    let rdram = rdram_host();
+    range_holds((rdram, rdram + RDRAM_SIZE), addr, len)
         || pw64_platform::os::stack::in_live_stack(addr, len)
 }
 
@@ -258,7 +419,10 @@ pub fn init() -> String {
     let module = crate::dylib::reserve_module_range();
     #[cfg(not(feature = "dylib"))]
     let module = false;
-    let reserved = format!("reserved: stacks {stacks}, module {module}");
+    let mut reserved = format!("reserved: stacks {stacks}, module {module}");
+    if Reloc::get() == Reloc::Alias {
+        reserved += &format!(", RDRAM alias: vaddr region at host {:#x}", rdram_host());
+    }
     #[cfg(feature = "static")]
     {
         format!("{}, {reserved}", check_low_4gb())
@@ -277,6 +441,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reloc_parse() {
+        assert_eq!(Reloc::parse(None), Ok(Reloc::Off));
+        assert_eq!(Reloc::parse(Some("off")), Ok(Reloc::Off));
+        assert_eq!(Reloc::parse(Some(" alias ")), Ok(Reloc::Alias));
+        assert!(Reloc::parse(Some("strict")).is_err());
+        // A truncated high view must not land in the low window.
+        assert!(alias_candidates().all(|a| a >> 32 != 0 && (a as u32) & 0x8000_0000 == 0));
+    }
+
+    #[test]
     fn range_holds_bounds() {
         let r = (0x1000, 0x2000);
         assert!(range_holds(r, 0x1000, 0x1000));
@@ -289,8 +463,8 @@ mod tests {
     /// Reads cover the exe image; writes never do (no code patching).
     #[test]
     fn hle_ranges() {
-        assert!(hle_writable(RDRAM_BASE, RDRAM_SIZE));
-        assert!(!hle_writable(RDRAM_BASE + RDRAM_SIZE - 4, 8));
+        assert!(hle_writable(rdram_host(), RDRAM_SIZE));
+        assert!(!hle_writable(rdram_host() + RDRAM_SIZE - 4, 8));
         let (e0, e1) = exe_range();
         // black_box: in release LLVM folds `fn address - RDRAM_BASE` into a
         // rip-relative addend that overflows 32 bits ("value of -2147483712 is

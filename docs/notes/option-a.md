@@ -96,15 +96,73 @@ pattern has zero hits left in its files.
   1/3-region lists — `set_regions` is once-only); `data_ptr`/`framebuffer` via
   `to_vaddr`; audio.rs `AudioMem::host` = `to_host(addr + K0)`. Bit-identical; perf
   unchanged (gfx HLE 0.48–0.50 ms/task both builds, whole-run avg within spread).
-- S4: `PW64_RELOC=alias`: one shared-memory RDRAM block mapped twice (low at
-  0x80000000 for unconverted sites, high above 4 GB registered as the region;
-  Windows `CreateFileMapping` + 2 views, Linux `memfd_create` + 2 `mmap`);
-  `hle_writable` uses the registered range. Gate: identity in alias mode too.
-- S5: `PW64_RELOC=strict`: low view reserved no-access; every straggler faults
-  (crash handler symbolises it). Gate: identity + all sweep scripts.
-- S6: stacks block anywhere above 4 GB, region 0x80800000. S7: image regions;
-  drop `/BASE`, fixed module base and their checks. S8: make relocation the default,
-  delete the window/reservation code.
+- S4 **done**: `PW64_RELOC=alias` (memmap.rs `Reloc`; unset/`off` = old path, byte-
+  identical). `map_rdram_window` maps one zeroed shared block twice (Windows
+  `CreateFileMappingW` + `MapViewOfFileEx`, Linux `memfd_create` + `mmap MAP_SHARED|
+  MAP_FIXED_NOREPLACE`): at 0x80000000 and at the first free `0x7_2000_0000 + k·4 GB`,
+  then `set_regions([RDRAM → high])` there (before `dylib::load`: `set_module_vmap`
+  copies it). Low 32 bits of the high view are 0x20xxxxxx, so a straggler that
+  truncates a pointer gets a bit-31-clear "ROM offset", not the window.
+  `memmap::rdram_host()` = the translated view; `hle_writable` uses it (high only).
+  Stacks, exe/module image and any Rust heap pointer stay low and unregistered: the
+  "no region" passthrough round-trips them; `to_vaddr_in`'s assert only fires above
+  4 GB, so the rule is unchanged. Test: pw64-game `tests/rdram_alias.rs`.
+- S4 gate result: default 7/7; alias 6/7 (static and first-run module alike).
+  Frame 1800 differs in 2 HUD pixels: the red altitude digits' texrect (`G_SETTIMG
+  0x800D16F0`, IA16, 822-byte LOADBLOCK) samples one row past its glyph data into a
+  heap block that holds native pointers, whose bytes differ per mode. Pre-existing
+  over-read, not a translation bug. `PW64_DUMP_RDRAM=1` writes `tmp/frame_<n>.rdram`
+  (8 MB, vaddr order) next to each dumped frame; diffing off vs alias at all 6 frames:
+  every differing word is a stored 8-byte host pointer, except ≤ 6 words in the audio
+  heap (0x80034xxx): csplayer.c 569 reuses `evt` for `AL_CSP_NOTEOFF_EVT` after
+  `evt.msg.vol.voice`, so the unread `midi.ticks` keeps the pointer's low half
+  (harmless). Translation-layer bugs found: none. Logs: hle.rs fb lines now print vaddrs.
+- S4 perf (6 interleaved runs, medians, ms/retrace avg | p99 | "rest"): pre-S4 0.592 |
+  1.17 | 0.0345; S4 off 0.601 | 1.21 | 0.0350 (in spread); alias 0.613 | 1.23 | 0.0385:
+  every `PW64_U32`/`PW64_PTR` of a stack/image address now misses the fast path.
+
+## Next steps (specs)
+
+Gate for S5-S7: release build; identity run in default mode 7/7; in the relocated mode
+every PNG but frame 1800 matches and `PW64_DUMP_RDRAM` diffs show only pointer words;
+all sweep scripts (sweep.md) run to the end with no panic and no crash.log; test +
+clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs).
+
+- **S5 `PW64_RELOC=strict`** (memmap.rs, vaddr.rs, main.rs/firstrun.rs):
+  1. No low view: map the block once, high; reserve 0x80000000+8 MB no-access
+     (Windows `VirtualAlloc(MEM_RESERVE, PAGE_NOACCESS)`, Linux `mmap PROT_NONE
+     MAP_FIXED_NOREPLACE`), so a window literal faults and crash.rs names the site.
+  2. Identity regions: `set_regions` accepts `host == vbase` (< 4 GB) besides high
+     hosts; register the stack window (0x80800000..0xA0000000) and the image
+     (`image_range()`: exe, plus module in dylib) that way. Needs the module range, so
+     move registration out of `map_rdram_window` into `memmap::register_regions()`,
+     called after `dylib::load` (firstrun.rs) / after `init` (static), before `os::boot`.
+  3. `vaddr::set_strict()`: `to_vaddr_in` panics on a host address in no region
+     unless it is < 0x80000000 (ROM offset / physical value cast to a pointer);
+     `to_host_in` panics on a vaddr ≥ 0x80000000 in no region. Sign-extended
+     (0xFFFFFFFF_8xxxxxxx) inputs panic: fix each such C site with `PW64_U32`.
+  4. List every straggler fixed in this file (patch file + line).
+- **S6 stacks + Rust data anywhere** (pw64-platform stack.rs, memmap.rs):
+  1. Reserve the whole stack window (`SEARCH_END − SEARCH_START`) as one block at a high
+     address (same candidate scheme as RDRAM, distinct low 32 bits); stack.rs keeps a
+     `BASE` (default `SEARCH_START`) and every slot/`stack_slot_of`/`in_live_stack`/
+     `map_fixed` computation goes through it; register `Region { vbase: 0x8080_0000,
+     size: SEARCH_END − SEARCH_START, host: BASE }` instead of the identity one.
+  2. Audit Rust-owned memory the C stores as 32 bits (grep pw64-platform for pointers
+     returned to C: `Box::into_raw`, `as *mut c_void`, `OSMesg` payloads, eep/pi
+     buffers). Each one moves into a registered region (statics in the image are
+     covered by S7) or the C keeps it as a full pointer; document the list here.
+  3. Tests: stack.rs unit tests take a base; os/tests.rs range check uses the region.
+- **S7 image anywhere** (build.rs, dylib.rs, memmap.rs, crash.rs):
+  1. Register the exe image as `Region { vbase: 0xC000_0000, host: exe start }` and
+     the module as `vbase: 0xB000_0000`; then drop `/BASE` + `/DYNAMICBASE:NO` (Windows),
+     `--no-pie --image-base` (Linux: C objects need `-fPIC`), `DLL_BASE`,
+     `reserve_module_range` and the module `/FIXED`, and `check_low_4gb`'s image asserts.
+  2. Check function pointers and `&global` stored in u32 slots go through the macros
+     (display lists already do); crash.rs symbolises by real ranges, not constants.
+  3. The fast path then misses for image addresses (static dlists, globals): measure;
+     if "rest" grows > 0.005 ms, add a second inline region to `pw64_vmap`.
+- S8: make relocation the default, delete the window/reservation code.
 
 ## Performance (inline fast path, measured after S2)
 

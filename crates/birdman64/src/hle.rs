@@ -424,7 +424,7 @@ impl Hle {
                 frame.draws.len(),
                 frame.triangle_count(),
                 frame.textures.len(),
-                info.framebuffer,
+                vaddr::to_vaddr(info.framebuffer),
                 if unknown.is_empty() {
                     String::new()
                 } else {
@@ -554,7 +554,9 @@ impl Hle {
             self.first_present = true;
             eprintln!(
                 "[hle] first VI present: retrace {} latches fb {:#x} (black={})",
-                r.number, r.framebuffer, r.black
+                r.number,
+                vaddr::to_vaddr(r.framebuffer),
+                r.black
             );
         }
         if r.black {
@@ -570,6 +572,18 @@ impl Hle {
                 self.dump_size.0,
                 self.dump_size.1,
             );
+            // `PW64_DUMP_RDRAM=1`: the 8 MB of RDRAM in vaddr order next to
+            // the frame (`frame_<n>.rdram`), to diff relocation modes
+            // (option-a.md: the only allowed differences are stored host
+            // pointers).
+            if std::env::var_os("PW64_DUMP_RDRAM").is_some() {
+                let host = vaddr::to_host(0x8000_0000) as *const u8;
+                // SAFETY: RDRAM (vaddr 0x80000000 + 8 MB) is mapped for the
+                // process lifetime; plain bytes, so a concurrent C write can
+                // only make the debug dump inconsistent.
+                let ram = unsafe { std::slice::from_raw_parts(host, 0x80_0000) };
+                let _ = std::fs::write(format!("tmp/frame_{:05}.rdram", r.number), ram);
+            }
             // The draw list of the last task into the shown fb (earlier
             // tasks' pixels may still show: the target persists).
             if let Some((_, frame, trace)) = self.last.iter().find(|(f, ..)| *f == shown)
@@ -651,7 +665,8 @@ impl Hle {
             self.first_real_present = true;
             eprintln!(
                 "[milestone] first framebuffer present at retrace {}: fb {:#x} is not black",
-                r.number, r.framebuffer
+                r.number,
+                vaddr::to_vaddr(r.framebuffer)
             );
             self.last_fb = rgba.clone();
             if self.fb_shots > 0 {
