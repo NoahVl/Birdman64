@@ -147,9 +147,9 @@ clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs
     bug: values < 4 GB are never host pointers, so `PW64_U32` stays idempotent on vaddrs.
   - Nothing else: no C or Rust straggler, no low-window fault, no sign-extended
     pointer. S2/S3 covered everything these flows reach.
-  - Not detectable by strict mode on Windows: a Rust heap pointer handed to the C
-    (the heap sits below 0x80000000 there, e.g. 0x46f530, the same range as ROM
-    offsets). For the S6 audit, run strict mode on Linux, where the heap is above 4 GB.
+  - Not detectable by S5 strict mode on Windows: a Rust heap pointer handed to the C
+    (the heap sits below 0x80000000 there, the same range as ROM offsets). S6's
+    high heap closes this.
 - S5 gate: default 7/7 (static). Strict, static and first-run module: 6/7 (frame 1800
   = the known glyph over-read), RDRAM diffs = pointer words + the ≤ 6 csplayer
   words. All 9 sweep scripts + `PW64_START` a:hg:2, a:rb:1, a:gc:1, b:jh:1,
@@ -158,18 +158,40 @@ clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs
   (`G_SETTIMG 0x800D16F0`, same over-read). Perf (6 runs, medians, avg | p99 |
   rest): pre-S1 0.593 | 1.20 | 0.0333; off 0.609 | 1.21 | 0.0350; strict 0.602 |
   1.21 | 0.0380 (image/stack conversions miss the fast path, as in alias).
-- **S6 stacks + Rust data anywhere** (pw64-platform stack.rs, memmap.rs):
-  1. Reserve the whole stack window (`SEARCH_END − SEARCH_START`) as one block at a high
-     address (same candidate scheme as RDRAM, distinct low 32 bits); stack.rs keeps a
-     `BASE` (default `SEARCH_START`) and every slot/`stack_slot_of`/`in_live_stack`/
-     `map_fixed` computation goes through it; `register_regions` then registers
-     `Region { vbase: 0x8080_0000, size: SEARCH_END − SEARCH_START, host: BASE }`
-     instead of the identity one.
-  2. Audit Rust-owned memory the C stores as 32 bits (grep pw64-platform for pointers
-     returned to C: `Box::into_raw`, `as *mut c_void`, `OSMesg` payloads, eep/pi
-     buffers). Each one moves into a registered region (statics in the image are
-     covered by S7) or the C keeps it as a full pointer; document the list here.
-  3. Tests: stack.rs unit tests take a base; os/tests.rs range check uses the region.
+- S6 **done** (stacks + Rust heap high in strict mode):
+  - stack.rs: window `BASE` (default `SEARCH_START`), `CURSOR` is an offset from it,
+    `stack_slot_in(base, ..)` pure, `window()`; `reserve_region_at(base)` reserves the
+    whole window (Linux: PROT_NONE `MAP_NORESERVE`; slots `MAP_FIXED` over it, drop
+    re-reserves). Strict `map_rdram_window` → `relocate_stacks`: window at the first
+    free `0x7_4000_0000 + k·4 GB` (low bits bit-31-clear, apart from RDRAM's), old
+    window 0x80800000..0xA0000000 reserved no-access; `register_regions` maps vaddrs
+    0x80800000.. there. crash.rs filter uses `window()`. Offsets inside 64 KB, and
+    the order RDRAM < stacks, match the vaddrs (alignment-dependent C unchanged).
+  - high_heap.rs: `#[global_allocator] HighHeap` (birdman64 + rdram_strict test) =
+    `System` until `enable()` (strict `memmap::init`), then a 64 GB arena at 1 TB+
+    (power-of-two classes, free lists, one lock, never unmapped; blocks from before
+    `enable` are freed to `System`, realloc moves them high). So on Windows too, a
+    Rust heap pointer reaching `PW64_U32` panics. Strict perf: faster than System
+    (avg 0.519 vs 0.610 ms/retrace) — audit tool, not a production allocator.
+- S6 audit (Rust memory → C): no Rust heap or Rust-owned pointer reaches the C.
+  - The C has no malloc; it allocates only from RDRAM/arena (pw64_players.c "no malloc").
+  - Thunk pointer args all come from the C; Rust writes only scalars through them
+    (osContGetReadData, osEepromLongRead, osPiReadIo, osRecvMesg, pw64_direct_start).
+  - Pointer returns: `osVi{Current,Next}Framebuffer` (the C's own fb value),
+    `__osGetCurrFaultedThread` (null), crt memset/memcpy (dest), `pw64_to_host`.
+  - Every `OSMesg` Rust posts (events, timers, VI, PI `mb`) is a C-registered value.
+  - Rust data the C reads by address: pw64-platform statics (`osTvType`,
+    `osMemSize`, `osViModeTable`, ucode symbols) live in the image (S7; the
+    dylib shim defines its own); pw64-game writes C globals by value only.
+  - Finding, fixed: `pw64_rsp()` returned `rsp as u32`; now `to_vaddr(rsp)`.
+  - C side: no raw `(uintptr_t)` of a pointer kept as an address (only differences
+    and the `ALIGNED_BUFFER` low-bit test, graphics.c 95).
+- S6 gate: default 7/7. Strict, static and first-run module: 6/7 (frame 1800, same
+  hash as S4/S5); RDRAM diffs vs off (same exe) = pointer words + ≤ 6 csplayer words,
+  no stack word. 16 sweep flows: no panic, no crash.log, frames = S5 strict. Perf
+  (6 interleaved, medians, avg | p99 | rest): pre-S6 0.587 | 1.19 | 0.0342; default
+  0.610 | 1.24 | 0.0345; strict 0.519 | 0.99 | 0.0367 (+0.002 rest: no second inline
+  region needed).
 - **S7 image anywhere** (build.rs, dylib.rs, memmap.rs, crash.rs):
   1. In `register_regions`, turn the identity image regions into `Region { vbase:
      0xC000_0000, host: exe start }` and module `vbase: 0xB000_0000`; then drop `/BASE` + `/DYNAMICBASE:NO` (Windows),
@@ -178,8 +200,13 @@ clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs
   2. Check function pointers and `&global` stored in u32 slots go through the macros
      (display lists already do); crash.rs symbolises by real ranges, not constants.
   3. Image and stack addresses already miss the fast path in strict mode: "rest"
-     +0.003 ms over off (S5), under the 0.005 ms bar for a second inline region
-     in `pw64_vmap`; re-measure once both are relocated.
+     +0.002 ms over off with stacks relocated (S6), under the 0.005 ms bar for a
+     second inline region in `pw64_vmap`; re-measure with the image relocated.
+  4. Ordering: today the image (0xC0000000 host, low) sorts below RDRAM/stacks
+     (high), unlike its vaddrs; relocated above them it matches again. Keep the
+     image's 64 KB alignment (true for PE/ELF loads), like S6 did for stacks.
+  5. Strict + high heap stay the audit tool; the image's Rust statics (`osTvType`,
+     `osViModeTable`, ucode symbols) become C-visible through the exe region.
 - S8: make relocation the default, delete the window/reservation code.
 
 ## Performance (inline fast path, measured after S2)

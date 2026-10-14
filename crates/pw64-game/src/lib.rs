@@ -16,6 +16,7 @@ use pw64_kernel as _;
 
 #[cfg(feature = "dylib")]
 pub mod dylib;
+pub mod high_heap;
 pub mod memmap;
 
 #[cfg(feature = "dylib")]

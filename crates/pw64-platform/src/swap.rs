@@ -89,8 +89,8 @@ pub unsafe extern "C-unwind" fn pw64_swap(
 }
 
 /// `pw64_rsp()`: the caller's approximate RSP (at entry, the value is a few
-/// words into the call). Diagnostics use it to pin which coroutine stack slot
-/// a patched C frame is running on.
+/// words into the call) as a vaddr. Diagnostics use it to pin which
+/// coroutine stack slot a patched C frame is running on.
 #[unsafe(no_mangle)]
 pub extern "C-unwind" fn pw64_rsp() -> u32 {
     #[cfg(target_arch = "x86_64")]
@@ -98,7 +98,8 @@ pub extern "C-unwind" fn pw64_rsp() -> u32 {
     unsafe {
         let rsp: u64;
         core::arch::asm!("mov {rsp}, rsp", rsp = out(reg) rsp, options(nomem));
-        rsp as u32
+        // Through the vaddr layer: the stacks may be relocated (option-a.md S6).
+        crate::vaddr::to_vaddr(rsp as usize)
     }
     #[cfg(not(target_arch = "x86_64"))]
     0

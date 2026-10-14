@@ -45,6 +45,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub static QUIT: AtomicBool = AtomicBool::new(false);
 pub static PARKED: AtomicBool = AtomicBool::new(false);
 
+/// The system allocator, except under `PW64_RELOC=strict`: Rust heap blocks
+/// then lie above 4 GB, so one that reaches the C's 32-bit conversions
+/// panics (pw64-game high_heap.rs).
+#[global_allocator]
+static HEAP: pw64_game::high_heap::HighHeap = pw64_game::high_heap::HighHeap;
+
 /// "Birdman64 <version> (<commit>)": what `--version`, the settings screen
 /// and the crash log show. The commit comes from pw64's build script
 /// (`PW64_GIT_HASH`); "unknown" when git was unavailable at build time.

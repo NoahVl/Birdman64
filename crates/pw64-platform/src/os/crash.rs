@@ -142,7 +142,7 @@ fn is_our_crash(
         return false;
     }
     let inside = |r: (usize, usize), a: u64| (r.0 as u64..r.1 as u64).contains(&a);
-    let stacks = (super::stack::SEARCH_START, super::stack::SEARCH_END);
+    let stacks = super::stack::window();
     inside(exe, rip) || inside(module, rip) || inside(stacks, rsp)
 }
 

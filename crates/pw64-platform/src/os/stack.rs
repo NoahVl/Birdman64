@@ -11,6 +11,11 @@
 //! host code (Rust frames, debug builds, panics), so they are ignored and
 //! every thread gets one of these instead.
 //!
+//! Relocated builds (`PW64_RELOC=strict`, option-a.md S6): the same window
+//! is reserved at a high host address ([`reserve_region_at`]) and the C sees
+//! it through the vaddr region `SEARCH_START → `[`window`]: every slot
+//! computation is relative to the window base, never to `SEARCH_START`.
+//!
 //! Windows: [`reserve_region`] (called by `pw64_game::memmap::init`, before
 //! the window and the GPU driver exist) reserves the whole search window, so
 //! a driver allocation can't land in it later; stacks are then committed out
@@ -39,42 +44,61 @@ const _: () = assert!(SLOT_SIZE.is_multiple_of(0x1_0000));
 /// looking like hardware registers.
 pub const SEARCH_START: usize = 0x8080_0000;
 pub const SEARCH_END: usize = 0xA000_0000;
+/// Size of the stack window (the C sees it at vaddrs `SEARCH_START..SEARCH_END`).
+pub const WINDOW_SIZE: usize = SEARCH_END - SEARCH_START;
 
-/// Next address to try; shared by all host threads (tests run in parallel).
-static CURSOR: AtomicUsize = AtomicUsize::new(SEARCH_START);
+/// Host address of the stack window: [`SEARCH_START`] (vaddr == host), or a
+/// high block from [`reserve_region_at`] (relocated builds, option-a.md S6;
+/// the C then sees the stacks through a vaddr region).
+static BASE: AtomicUsize = AtomicUsize::new(SEARCH_START);
+/// Offset of the next slot to try from [`BASE`]; shared by all host threads
+/// (tests run in parallel).
+static CURSOR: AtomicUsize = AtomicUsize::new(0);
 /// [`reserve_region`] succeeded: slots are committed out of the reservation.
 static RESERVED: AtomicBool = AtomicBool::new(false);
 
 /// Number of slots that fit the search window (slots start at
-/// `SEARCH_START + k * SLOT_SIZE`: [`CURSOR`] only steps by `SLOT_SIZE`).
-const SLOTS: usize = (SEARCH_END - SEARCH_START) / SLOT_SIZE;
+/// `base + k * SLOT_SIZE`: [`CURSOR`] only steps by `SLOT_SIZE`).
+const SLOTS: usize = WINDOW_SIZE / SLOT_SIZE;
 /// One bit per slot: set while a [`LowStack`] owns it (mapped + committed).
 /// Lets the RSP HLE check a pointer without a lock or allocation.
 static LIVE: [AtomicU64; SLOTS.div_ceil(64)] = [const { AtomicU64::new(0) }; SLOTS.div_ceil(64)];
 
-/// Slot index whose usable stack range (`[bottom, top)`, not the no-access,
-/// headroom or guard pages) contains all of `[addr, addr + len)`. Pure.
-pub fn stack_slot_of(addr: usize, len: usize) -> Option<usize> {
-    let end = addr.checked_add(len)?;
-    if addr < SEARCH_START || end > SEARCH_START + SLOTS * SLOT_SIZE {
-        return None;
-    }
-    let slot = (addr - SEARCH_START) / SLOT_SIZE;
-    let base = SEARCH_START + slot * SLOT_SIZE;
-    let bottom = base + PAGE + HEADROOM + PAGE;
-    (addr >= bottom && end <= base + SLOT_SIZE).then_some(slot)
+/// `[start, end)` host range of the stack window.
+pub fn window() -> (usize, usize) {
+    let base = BASE.load(Ordering::Relaxed);
+    (base, base + WINDOW_SIZE)
 }
 
-/// True if `[addr, addr + len)` lies in the usable range of one live thread
-/// stack. For the RSP HLE (display / audio command lists may point at C
-/// locals); O(1), one atomic load.
+/// Slot index whose usable stack range (`[bottom, top)`, not the no-access,
+/// headroom or guard pages) contains all of `[addr, addr + len)`, for a
+/// window at `base`. Pure.
+pub fn stack_slot_in(base: usize, addr: usize, len: usize) -> Option<usize> {
+    let end = addr.checked_add(len)?;
+    if addr < base || end > base + SLOTS * SLOT_SIZE {
+        return None;
+    }
+    let slot = (addr - base) / SLOT_SIZE;
+    let start = base + slot * SLOT_SIZE;
+    let bottom = start + PAGE + HEADROOM + PAGE;
+    (addr >= bottom && end <= start + SLOT_SIZE).then_some(slot)
+}
+
+/// [`stack_slot_in`] the current window.
+pub fn stack_slot_of(addr: usize, len: usize) -> Option<usize> {
+    stack_slot_in(window().0, addr, len)
+}
+
+/// True if `[addr, addr + len)` (host addresses) lies in the usable range
+/// of one live thread stack. For the RSP HLE (display / audio command lists
+/// may point at C locals); O(1), one atomic load.
 pub fn in_live_stack(addr: usize, len: usize) -> bool {
     stack_slot_of(addr, len)
         .is_some_and(|s| LIVE[s / 64].load(Ordering::Acquire) & (1 << (s % 64)) != 0)
 }
 
 fn set_live(slot_addr: usize, live: bool) {
-    let s = (slot_addr - SEARCH_START) / SLOT_SIZE;
+    let s = (slot_addr - window().0) / SLOT_SIZE;
     let bit = 1u64 << (s % 64);
     if live {
         LIVE[s / 64].fetch_or(bit, Ordering::AcqRel);
@@ -141,6 +165,56 @@ pub fn reserve_region() -> bool {
     }
 }
 
+/// Relocated builds (option-a.md S6): reserves the whole stack window at
+/// `base` (no access, no commit) and makes it the window every later
+/// [`LowStack`] is carved from; the C sees it through the vaddr region
+/// `SEARCH_START → base`. Call once, before the first stack exists. False
+/// (nothing changed) if the range is taken.
+pub fn reserve_region_at(base: usize) -> bool {
+    assert_eq!(
+        CURSOR.load(Ordering::Relaxed),
+        0,
+        "stack window relocated after a stack was created"
+    );
+    assert!(base.is_multiple_of(0x1_0000), "stack window base {base:#x}");
+    #[cfg(windows)]
+    // SAFETY: plain Win32 reservation at a fixed address; failure is checked.
+    let ok = unsafe {
+        sys::VirtualAlloc(base as *mut _, WINDOW_SIZE, sys::MEM_RESERVE, sys::PAGE_NOACCESS) as usize
+            == base
+    };
+    #[cfg(target_os = "linux")]
+    let ok = linux_reserve(base, WINDOW_SIZE, libc::MAP_FIXED_NOREPLACE);
+    if ok {
+        BASE.store(base, Ordering::Relaxed);
+        RESERVED.store(true, Ordering::Release);
+    }
+    ok
+}
+
+/// Linux: a PROT_NONE, uncommitted mapping of `[base, base + len)` (`flag`:
+/// MAP_FIXED_NOREPLACE for a fresh reservation, MAP_FIXED to return a slot
+/// to it). True if it landed at `base`.
+#[cfg(target_os = "linux")]
+fn linux_reserve(base: usize, len: usize, flag: i32) -> bool {
+    // SAFETY: anonymous mapping; NOREPLACE never clobbers (old kernels take
+    // it as a hint, hence the check), MAP_FIXED only over our own reservation.
+    unsafe {
+        let p = libc::mmap(
+            base as *mut libc::c_void,
+            len,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | flag,
+            -1,
+            0,
+        );
+        if p != libc::MAP_FAILED && p as usize != base {
+            libc::munmap(p, len);
+        }
+        p as usize == base
+    }
+}
+
 /// A fully committed stack at a fixed address in the range above (slot
 /// layout in the module docs). Fully committing it (instead of Windows'
 /// guard page growth scheme) keeps the TEB bookkeeping trivial.
@@ -154,11 +228,12 @@ pub struct LowStack {
 impl LowStack {
     pub fn new() -> Self {
         loop {
-            let slot = CURSOR.fetch_add(SLOT_SIZE, Ordering::Relaxed);
+            let off = CURSOR.fetch_add(SLOT_SIZE, Ordering::Relaxed);
             assert!(
-                slot + SLOT_SIZE <= SEARCH_END,
-                "no free address range in 0x80800000..0xA0000000 for a thread stack"
+                off + SLOT_SIZE <= WINDOW_SIZE,
+                "no free address range in the stack window for a thread stack"
             );
+            let slot = window().0 + off;
             let in_reservation = RESERVED.load(Ordering::Acquire);
             // A slot already in use just moves on to the next one.
             if map_fixed(slot, in_reservation) {
@@ -255,21 +330,26 @@ fn set_teb_stack_limit(v: usize) {
 }
 
 #[cfg(target_os = "linux")]
-fn map_fixed(slot: usize, _in_reservation: bool) -> bool {
+fn map_fixed(slot: usize, in_reservation: bool) -> bool {
     // MAP_FIXED_NOREPLACE (Linux 4.17+) fails with EEXIST instead of
     // clobbering an existing mapping; older kernels treat it as a hint, so
-    // the address is checked too. MAP_NORESERVE: commit lazily like any
-    // Linux stack (no TEB-style bookkeeping to keep consistent here).
-    // SAFETY: anonymous mapping at a free fixed address; failure is checked.
+    // the address is checked too. Inside our own reservation
+    // ([`reserve_region_at`]) MAP_FIXED replaces it. MAP_NORESERVE: commit
+    // lazily like any Linux stack (no TEB-style bookkeeping to keep
+    // consistent here).
+    let fixed = if in_reservation {
+        libc::MAP_FIXED
+    } else {
+        libc::MAP_FIXED_NOREPLACE
+    };
+    // SAFETY: anonymous mapping at a free fixed address (or over our own
+    // reservation; CURSOR hands each slot out once); failure is checked.
     let p = unsafe {
         libc::mmap(
             slot as *mut libc::c_void,
             SLOT_SIZE,
             libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE
-                | libc::MAP_ANONYMOUS
-                | libc::MAP_FIXED_NOREPLACE
-                | libc::MAP_NORESERVE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | fixed | libc::MAP_NORESERVE,
             -1,
             0,
         )
@@ -304,11 +384,13 @@ impl Drop for LowStack {
                 sys::VirtualFree(self.slot as *mut _, 0, sys::MEM_RELEASE);
             }
         }
-        // SAFETY: as above.
         #[cfg(target_os = "linux")]
-        unsafe {
-            let _ = self.in_reservation;
-            libc::munmap(self.slot as *mut libc::c_void, SLOT_SIZE);
+        if self.in_reservation {
+            // Back to PROT_NONE: the window stays reserved.
+            assert!(linux_reserve(self.slot, SLOT_SIZE, libc::MAP_FIXED));
+        } else {
+            // SAFETY: as above.
+            unsafe { libc::munmap(self.slot as *mut libc::c_void, SLOT_SIZE) };
         }
     }
 }
@@ -356,7 +438,8 @@ mod tests {
         assert_eq!(hi - lo, STACK_SIZE);
         assert_eq!(lo % PAGE, 0);
         assert_eq!(lo - s.slot, PAGE + HEADROOM + PAGE);
-        assert!((SEARCH_START..=SEARCH_END).contains(&hi));
+        let (w0, w1) = window();
+        assert!((w0..=w1).contains(&hi));
         // The top of the stack is writable.
         // SAFETY: committed read/write memory we own.
         unsafe { ((hi - 8) as *mut u64).write_volatile(1) };
@@ -367,24 +450,30 @@ mod tests {
         assert!(!in_live_stack(slot + SLOT_SIZE - 8, 8), "freed slot");
     }
 
-    /// Pure slot arithmetic: only the usable stack part of one slot.
+    /// Pure slot arithmetic: only the usable stack part of one slot, for
+    /// the default window and a relocated (high) one.
     #[test]
     fn stack_slot_ranges() {
-        let bottom = |k: usize| SEARCH_START + k * SLOT_SIZE + 2 * PAGE + HEADROOM;
-        let top = |k: usize| SEARCH_START + (k + 1) * SLOT_SIZE;
-        assert_eq!(stack_slot_of(bottom(0), STACK_SIZE), Some(0));
-        assert_eq!(stack_slot_of(bottom(3) + 16, 4), Some(3));
-        assert_eq!(stack_slot_of(top(3) - 4, 4), Some(3));
-        // Straddles into the next slot's no-access page.
-        assert_eq!(stack_slot_of(top(3) - 4, 8), None);
-        // No-access page, headroom, guard page.
-        assert_eq!(stack_slot_of(SEARCH_START, 4), None);
-        assert_eq!(stack_slot_of(bottom(0) - PAGE, 4), None);
-        assert_eq!(stack_slot_of(bottom(0) - 2, 4), None);
-        // Outside the window, past the last whole slot, overflow.
-        assert_eq!(stack_slot_of(SEARCH_START - 4, 4), None);
-        assert_eq!(stack_slot_of(SEARCH_END - 4, 4), None);
-        assert_eq!(stack_slot_of(usize::MAX - 2, 4), None);
+        for base in [SEARCH_START, 0x7_4000_0000] {
+            let of = |a, n| stack_slot_in(base, a, n);
+            let bottom = |k: usize| base + k * SLOT_SIZE + 2 * PAGE + HEADROOM;
+            let top = |k: usize| base + (k + 1) * SLOT_SIZE;
+            assert_eq!(of(bottom(0), STACK_SIZE), Some(0));
+            assert_eq!(of(bottom(3) + 16, 4), Some(3));
+            assert_eq!(of(top(3) - 4, 4), Some(3));
+            // Straddles into the next slot's no-access page.
+            assert_eq!(of(top(3) - 4, 8), None);
+            // No-access page, headroom, guard page.
+            assert_eq!(of(base, 4), None);
+            assert_eq!(of(bottom(0) - PAGE, 4), None);
+            assert_eq!(of(bottom(0) - 2, 4), None);
+            // Outside the window, past the last whole slot, overflow.
+            assert_eq!(of(base - 4, 4), None);
+            assert_eq!(of(base + WINDOW_SIZE - 4, 4), None);
+            assert_eq!(of(usize::MAX - 2, 4), None);
+        }
+        // The default window's vaddrs are not slots of a relocated one.
+        assert_eq!(stack_slot_in(0x7_4000_0000, SEARCH_START + 0x2_0000, 4), None);
     }
 
     /// Creating a stack (PAGE_GUARD) must not move the caller's TEB

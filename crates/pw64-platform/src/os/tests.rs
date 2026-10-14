@@ -267,12 +267,13 @@ fn event_mesg_posts_from_host() {
 }
 
 #[test]
-fn stacks_are_above_the_window_below_4gb() {
+fn stacks_are_in_the_stack_window() {
     reset();
     spawn(100, 10, || {
         let local = 0u8;
         let a = &raw const local as usize;
-        assert!((0x8080_0000..0xA000_0000).contains(&a), "{a:#x}");
+        let (w0, w1) = super::stack::window();
+        assert!((w0..w1).contains(&a), "{a:#x}");
     });
     assert_eq!(run_ready(), 1);
 }

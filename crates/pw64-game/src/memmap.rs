@@ -31,8 +31,9 @@ pub enum Reloc {
     /// above 4 GB, registered as the vaddr region the C translates to.
     Alias,
     /// `strict`: RDRAM mapped once, above 4 GB; the low window is reserved
-    /// no-access (an untranslated literal faults at its C site). Stacks and
-    /// the image are identity regions; any other value with bit 31 set that
+    /// no-access (an untranslated literal faults at its C site), the same for
+    /// the stack window and the Rust heap (`high_heap`). The image is an
+    /// identity region; any other value with bit 31 set that
     /// reaches `PW64_U32`/`PW64_PTR` panics (`vaddr::set_strict`).
     Strict,
 }
@@ -124,6 +125,7 @@ pub fn map_rdram_window() {
         }
         Reloc::Strict => {
             RDRAM_HOST.store(map_rdram_strict(), Ordering::Relaxed);
+            relocate_stacks();
             return;
         }
     }
@@ -249,6 +251,58 @@ fn map_rdram_alias() -> usize {
     high.expect("RDRAM alias: no free high address for the second view")
 }
 
+/// High candidates for the stack window in [`Reloc::Strict`]: like
+/// [`alias_candidates`], with low 32 bits 0x4000_0000.. (bit 31 clear, apart
+/// from RDRAM's; the 504 MB window ends below 0x6000_0000).
+fn stack_candidates() -> impl Iterator<Item = usize> {
+    (0..16).map(|k| 0x7_4000_0000 + k * 0x1_0000_0000)
+}
+
+/// Reserves `[base, base + len)` with no access and no commit. True if it
+/// landed exactly there (false: the range is taken).
+fn reserve_noaccess(base: usize, len: usize) -> bool {
+    #[cfg(windows)]
+    {
+        // SAFETY: plain Win32 reservation at a fixed address; checked.
+        let p = unsafe { sys::VirtualAlloc(base as *mut c_void, len, sys::MEM_RESERVE, sys::PAGE_NOACCESS) };
+        p as usize == base
+    }
+    #[cfg(target_os = "linux")]
+    // SAFETY: anonymous PROT_NONE mapping, MAP_FIXED_NOREPLACE (never
+    // clobbers; old kernels take it as a hint, hence the check).
+    unsafe {
+        let p = libc::mmap(
+            base as *mut c_void,
+            len,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | libc::MAP_FIXED_NOREPLACE,
+            -1,
+            0,
+        );
+        if p != libc::MAP_FAILED && p as usize != base {
+            libc::munmap(p, len);
+        }
+        p as usize == base
+    }
+}
+
+/// [`Reloc::Strict`] (option-a.md S6): the coroutine stack window moves to
+/// the first free [`stack_candidates`] address (`register_regions` maps
+/// vaddrs 0x80800000.. there) and the old window is reserved no-access, so
+/// a stack address that skipped the vaddr layer faults. Before any stack
+/// exists. Panics if either fails.
+fn relocate_stacks() {
+    use pw64_platform::os::stack::{self, SEARCH_START, WINDOW_SIZE};
+    stack_candidates()
+        .find(|&a| stack::reserve_region_at(a))
+        .expect("stack window: no free high address");
+    assert!(
+        reserve_noaccess(SEARCH_START, WINDOW_SIZE),
+        "could not reserve the old stack window at {SEARCH_START:#x}: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
 /// [`Reloc::Strict`]: zeroed RDRAM at the first free [`alias_candidates`]
 /// address (the only view), and the old window at [`RDRAM_BASE`] reserved
 /// no-access, so a C site that still uses a window literal faults there
@@ -263,8 +317,7 @@ fn map_rdram_strict() -> usize {
         };
         let rw = sys::MEM_RESERVE | sys::MEM_COMMIT;
         let high = alias_candidates().find(|&a| alloc(a, rw, sys::PAGE_READWRITE) == a);
-        let low = alloc(RDRAM_BASE, sys::MEM_RESERVE, sys::PAGE_NOACCESS);
-        (high, low)
+        (high, reserve_noaccess(RDRAM_BASE, RDRAM_SIZE))
     };
     #[cfg(target_os = "linux")]
     let (high, low) = {
@@ -287,11 +340,10 @@ fn map_rdram_strict() -> usize {
             }
         };
         let high = alias_candidates().find(|&a| map(a, libc::PROT_READ | libc::PROT_WRITE) == a);
-        (high, map(RDRAM_BASE, libc::PROT_NONE))
+        (high, reserve_noaccess(RDRAM_BASE, RDRAM_SIZE))
     };
-    assert_eq!(
+    assert!(
         low,
-        RDRAM_BASE,
         "could not reserve the old RDRAM window at {RDRAM_BASE:#x}: {}",
         std::io::Error::last_os_error()
     );
@@ -302,10 +354,11 @@ fn map_rdram_strict() -> usize {
 /// (no-op for [`Reloc::Off`]). Call once, after the game module is loaded
 /// (`dylib`: strict mode needs its range) and before `os::boot`.
 /// Alias: RDRAM only (stacks and the image pass through unregistered).
-/// Strict: RDRAM, plus identity regions (`host == vbase`) for the coroutine
-/// stack window and the image(s), then `vaddr::set_strict`.
+/// Strict: RDRAM, the coroutine stack window (high, [`init`]), plus
+/// identity regions (`host == vbase`) for the image(s), then
+/// `vaddr::set_strict`.
 pub fn register_regions() {
-    use pw64_platform::os::stack::{SEARCH_END, SEARCH_START};
+    use pw64_platform::os::stack::{self, SEARCH_START, WINDOW_SIZE};
     use pw64_platform::vaddr::{self, Region};
     let mode = Reloc::get();
     if mode == Reloc::Off {
@@ -325,7 +378,12 @@ pub fn register_regions() {
                 host: start,
             }
         };
-        regions.push(ident((SEARCH_START, SEARCH_END)));
+        // Stacks: the high window `init` reserved (S6).
+        regions.push(Region {
+            vbase: SEARCH_START as u32,
+            size: WINDOW_SIZE as u32,
+            host: stack::window().0,
+        });
         #[cfg(feature = "dylib")]
         regions.push(ident(
             module_range().expect("strict mode: register regions after dylib::load"),
@@ -489,9 +547,12 @@ pub fn check_low_4gb() -> String {
     // `osTvType` live in the image), and it runs on the pw64-platform
     // coroutine stacks (0x80800000..). On Linux both are high (glibc brk is
     // randomised up to 1 GB past the image; stacks at 0x7ff…), so only report.
+    // Strict mode moves the heap above 4 GB on purpose (high_heap.rs).
     #[cfg(windows)]
     {
-        assert_low("host heap", heap, 8);
+        if Reloc::get() != Reloc::Strict {
+            assert_low("host heap", heap, 8);
+        }
         assert_low("stack", stack, 1);
     }
     format!(
@@ -522,8 +583,17 @@ pub fn init() -> String {
         Reloc::Off => {}
         Reloc::Alias => reserved += &format!(", RDRAM alias: high view at {:#x}", rdram_host()),
         Reloc::Strict => {
+            // S6 audit: Rust heap blocks from now on lie above 4 GB, so one
+            // that reaches PW64_U32 panics (high_heap.rs).
+            match crate::high_heap::enable() {
+                Some(a) => reserved += &format!(", Rust heap at {a:#x}"),
+                None => reserved += ", Rust heap: no free high range",
+            }
             let host = rdram_host();
-            reserved += &format!(", RDRAM strict: at {host:#x}, low window no-access")
+            let stacks = pw64_platform::os::stack::window().0;
+            reserved += &format!(
+                ", RDRAM strict: at {host:#x}, stacks at {stacks:#x}, low windows no-access"
+            )
         }
     }
     #[cfg(feature = "static")]
