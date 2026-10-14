@@ -227,7 +227,7 @@ mod tests {
     }
 
     /// `memmap::init` maps the window at a fixed address: once per process.
-    /// Regions too (no-op without `PW64_RELOC`; the `reloc` build's strict
+    /// Regions too (no-op without `PW64_RELOC`; the `reloc` build's relocated
     /// default needs them before the C runs).
     fn init_once() {
         static INIT: std::sync::Once = std::sync::Once::new();

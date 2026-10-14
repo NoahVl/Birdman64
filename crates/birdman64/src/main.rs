@@ -312,11 +312,15 @@ fn install_panic_hook() {
         if let Some(dir) = dir.filter(|d| !d.as_os_str().is_empty()) {
             // Timestamp as seconds since the UNIX epoch (locale-free, easy
             // to compare); version so a report says which build crashed.
+            // The frame addresses come image-relative (`exe+0x…`,
+            // `pw64game+0x…`): image bases move per run under ASLR, and
+            // std's backtrace has no addresses (nor names in the module).
+            let frames = os::crash::panic_frames(0);
             let report = format!(
-                "-----\nunix {} {}\n{info}\n{:?}\n\n",
+                "-----\nunix {} {}\n{info}\n{:?}\n{frames}\n\n",
                 unix_secs(),
                 version_line(),
-                std::backtrace::Backtrace::force_capture()
+                std::backtrace::Backtrace::force_capture(),
             );
             if let Ok(mut f) = std::fs::OpenOptions::new()
                 .create(true)
@@ -326,6 +330,7 @@ fn install_panic_hook() {
                 let _ = std::io::Write::write_all(&mut f, report.as_bytes());
             }
             previous(info);
+            eprintln!("{frames}");
             report_dialog("Birdman64 crashed.", &dir.join("crash.log"));
             return;
         }

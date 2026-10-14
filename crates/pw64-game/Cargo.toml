@@ -18,7 +18,7 @@ static = ["dep:pw64-kernel"]
 dylib = []
 # Image anywhere (docs/notes/option-a.md S7): no fixed exe base (Windows
 # ASLR, Linux PIE), no fixed module base; the images are vaddr regions.
-# Such a build has no fixed-window mode (PW64_RELOC defaults to strict).
+# Such a build has no fixed-window mode (PW64_RELOC defaults to on).
 reloc = []
 
 [[test]]

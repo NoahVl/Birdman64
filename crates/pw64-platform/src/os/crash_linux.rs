@@ -4,8 +4,9 @@
 //! handler back and returns, so the fault re-raises into it (Rust's
 //! stack-overflow reporter, or the default core dump). RIPs in the game
 //! module print as `pw64game+0x<off>` and the module's `.map` path is
-//! logged (T14); the exe's own RIPs: symbolize with `PW64_MAP` (pw64-game
-//! build.rs writes an lld `-Map`). No `PW64_WATCH`.
+//! logged (T14); the exe's own RIPs print as `exe+0x<off>` (a PIE moves per
+//! run): symbolize with `PW64_MAP` (pw64-game build.rs writes an lld `-Map`).
+//! No `PW64_WATCH`.
 
 use core::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt as _;
@@ -48,19 +49,71 @@ fn module_range() -> (usize, usize) {
     )
 }
 
-/// Pure RIP formatting for the crash lines (mirror: crash.rs): inside the
-/// module image `pw64game+0x<off>`, otherwise the raw address. The handler
+/// `(start, end)` of this exe's loaded image (mirror of pw64-game memmap):
+/// linker-defined symbols, so async-signal-safe.
+fn exe_image_range() -> (usize, usize) {
+    unsafe extern "C" {
+        // Defined by the linker (lld and GNU ld): first byte of the first
+        // PT_LOAD and the end of .bss.
+        static __executable_start: u8;
+        static _end: u8;
+    }
+    (
+        (&raw const __executable_start) as usize,
+        (&raw const _end) as usize,
+    )
+}
+
+/// Pure code-address formatting for the crash lines (mirror: crash.rs):
+/// inside the game module image `pw64game+0x<off>`, inside the exe image
+/// `exe+0x<off>` (offsets from the image base: a PIE moves per run), each
+/// followed by the absolute address; otherwise the raw address. The handler
 /// passes its fixed buffer; the test passes a String.
 fn write_rip(
     out: &mut impl core::fmt::Write,
     rip: u64,
-    range: (usize, usize),
+    exe: (usize, usize),
+    module: (usize, usize),
 ) -> core::fmt::Result {
-    if (range.0 as u64..range.1 as u64).contains(&rip) {
-        write!(out, "pw64game+0x{:x}", rip - range.0 as u64)
+    let inside = |r: (usize, usize)| (r.0 as u64..r.1 as u64).contains(&rip);
+    if inside(module) {
+        write!(out, "pw64game+0x{:x} (0x{rip:x})", rip - module.0 as u64)
+    } else if inside(exe) {
+        write!(out, "exe+0x{:x} (0x{rip:x})", rip - exe.0 as u64)
     } else {
         write!(out, "0x{rip:x}")
     }
+}
+
+/// The image bases line of a report (pure; mirror: crash.rs).
+fn write_images(
+    out: &mut impl core::fmt::Write,
+    exe: (usize, usize),
+    module: (usize, usize),
+) -> core::fmt::Result {
+    write!(out, "images: exe 0x{:x}-0x{:x}", exe.0, exe.1)?;
+    if module.1 > module.0 {
+        write!(out, ", pw64game 0x{:x}-0x{:x}", module.0, module.1)?;
+    }
+    Ok(())
+}
+
+/// For the panic report (mirror: crash.rs): the image bases and the current
+/// thread's return addresses in the [`write_rip`] form, skipping `skip`
+/// frames (std's backtrace prints names only, no addresses).
+pub fn panic_frames(skip: u32) -> String {
+    let (exe, module) = (exe_image_range(), module_range());
+    let mut ips = [core::ptr::null_mut::<libc::c_void>(); 48];
+    // SAFETY: glibc backtrace(3) into a 48-slot buffer.
+    let n = unsafe { libc::backtrace(ips.as_mut_ptr(), ips.len() as libc::c_int) }.max(0) as usize;
+    let mut s = String::new();
+    let _ = write_images(&mut s, exe, module);
+    s.push_str("\nframes:");
+    for ip in ips[..n].iter().skip(skip as usize + 1) {
+        s.push_str("\n  ");
+        let _ = write_rip(&mut s, *ip as u64, exe, module);
+    }
+    s
 }
 
 /// The handlers we replaced, restored on the first fault.
@@ -68,7 +121,7 @@ static PREVIOUS: Mutex<Vec<(libc::c_int, libc::sigaction)>> = Mutex::new(Vec::ne
 
 /// Formats into a fixed buffer: no allocation inside the signal handler.
 struct Buf {
-    b: [u8; 320],
+    b: [u8; 512],
     n: usize,
 }
 
@@ -98,10 +151,12 @@ extern "C" fn handler(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
             uc.uc_mcontext.gregs[libc::REG_RSP as usize] as u64,
         )
     };
-    let mut buf = Buf { b: [0; 320], n: 0 };
+    let mut buf = Buf { b: [0; 512], n: 0 };
+    let (exe, module) = (exe_image_range(), module_range());
     let _ = write!(buf, "[crash] signal {sig} at RIP ");
-    let _ = write_rip(&mut buf, rip, module_range());
-    let _ = write!(buf, " RSP 0x{rsp:x}, fault address 0x{addr:x}");
+    let _ = write_rip(&mut buf, rip, exe, module);
+    let _ = write!(buf, " RSP 0x{rsp:x}, fault address 0x{addr:x}\n[crash] ");
+    let _ = write_images(&mut buf, exe, module);
     // Where the module's `.map` is (cache layout: next to the module): with
     // the `pw64game+0x<off>` form above, the faulting function is a lookup.
     // Raw path bytes: no allocation (async-signal-safety).
@@ -154,22 +209,30 @@ mod tests {
 
     /// T14 mirror of crash.rs `rip_in_module_range_formats_as_offset`: the
     /// pure formatting the handler writes into its fixed buffer (a RIP in
-    /// the module image becomes `pw64game+0x<off>`, the `.map` lookup).
+    /// the module image becomes `pw64game+0x<off>`, in the exe `exe+0x<off>`,
+    /// the `.map` lookups, with the absolute RIP after them).
     #[test]
     fn rip_in_module_range_formats_as_offset() {
-        let range = (0xB000_0000, 0xB010_0000);
+        let module = (0x7F00_0000_0000, 0x7F00_0010_0000);
+        let exe = (0x5555_0000_0000, 0x5555_0300_0000);
         let fmt = |rip: u64| {
             let mut s = String::new();
-            let _ = write_rip(&mut s, rip, range);
+            let _ = write_rip(&mut s, rip, exe, module);
             s
         };
-        assert_eq!(fmt(0xB000_0000), "pw64game+0x0");
-        assert_eq!(fmt(0xB000_1234), "pw64game+0x1234");
-        assert_eq!(fmt(0xB00F_FFFF), "pw64game+0xfffff");
+        assert_eq!(fmt(0x7F00_0000_1234), "pw64game+0x1234 (0x7f0000001234)");
+        assert_eq!(fmt(0x5555_0000_5678), "exe+0x5678 (0x555500005678)");
         assert_eq!(fmt(0xC000_1234), "0xc0001234");
-        // Empty range (module not loaded): always raw.
+        // Empty ranges (module not loaded): always raw.
         let mut s = String::new();
-        let _ = write_rip(&mut s, 0xB000_1234, (0, 0));
+        let _ = write_rip(&mut s, 0xB000_1234, (0, 0), (0, 0));
         assert_eq!(s, "0xb0001234");
+    }
+
+    #[test]
+    fn panic_frames_are_image_relative() {
+        let s = super::panic_frames(0);
+        assert!(s.starts_with("images: exe 0x"), "{s}");
+        assert!(s.contains("\n  exe+0x"), "{s}");
     }
 }

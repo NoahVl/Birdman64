@@ -199,7 +199,8 @@ pub fn to_host_in(regions: &[Region], vaddr: u32) -> usize {
     vaddr as usize
 }
 
-/// Strict mode (`PW64_RELOC=strict`, option-a.md S5): see [`set_strict`].
+/// Strict translation (`PW64_RELOC=on|strict`, option-a.md S5/S8): see
+/// [`set_strict`]. Only the miss path reads it.
 static STRICT: AtomicBool = AtomicBool::new(false);
 
 /// Strict mode: from now on [`to_vaddr`] / [`to_host`] (and so `PW64_U32` /

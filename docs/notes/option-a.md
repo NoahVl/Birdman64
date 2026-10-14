@@ -41,7 +41,7 @@ Android). Game output must stay bit-identical to the fixed-window build at every
   vaddrs (exe 0xC0000000, dylib module 0xB0000000) wherever they load (S7).
   `set_regions` is once-only: register after `dylib::load`, before `bootproc`.
 - **Co-existence:** the switch is runtime, in the same binary: no regions = old
-  model. `PW64_RELOC=alias|strict` (S4/S5) selects relocation. Images anywhere
+  model. `PW64_RELOC=on|alias|strict` (S8/S4/S5) selects relocation. Images anywhere
   needs the `reloc` cargo feature (S7): a separate build with no fixed-window mode.
   Remove the fixed window/base code once strict mode passes the full sweep
   (sweep.md) on Windows + Linux and has shipped in one release.
@@ -222,20 +222,50 @@ clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs
   `reloc` strict 0.512 | 0.98 | 0.0357. Rest +0.0001 ms: no second inline region.
   Host order now matches vaddr order for RDRAM < stacks < images; exe vs module
   order is whatever the loader picks.
+- S8 **done** (production mode, over-read, crash offsets):
+  - `PW64_RELOC=on` (`Reloc::On`, the `reloc` build's default; `strict` stays the
+    audit mode): RDRAM + stack window high, images as regions, `set_strict` (a miss
+    still panics naming the value), but no no-access low reservations and no
+    `high_heap` arena. `Reloc::relocated()` = on|strict. Test: `tests/rdram_on.rs`
+    (also checks the old windows stay free).
+  - HUD over-read root cause (game behaviour, also on hardware): UVBT blits
+    (texture.c `_uvParseUVBT`) store `height` rows, split in strips of
+    `texelHeight`; the last strip has only `height % texelHeight` rows, but libultra
+    sprite.c `drawbitmap` loads and clamps the tile to `bmHreal` = `texelHeight`
+    (libultra assumes padded bitmaps). Altitude digits: 80×9 IA4 (360 bytes),
+    `texelHeight` 128 → `LOADBLOCK` lrs 2047 (4096 bytes; the S4 "822 bytes" was dxt
+    misread), tile lrt 127; the rect rounds up to 14 rows at dt 0.667, so the bottom
+    row bilerps row 9 = the next heap block (host pointers). Not reproducible
+    exactly (on hardware those are N64-layout BE structs). Fix: sprite.c.patch
+    loads/clamps `tex_height` to `actualHeight` when smaller (whole strips unchanged).
+  - Default output changed (new gate `tmp/optA/b2.sum`): frames 1800/2400/2690, all
+    inside the digit rect: the garbage dots under the digits are gone (max Δ 182),
+    plus ≤ 9/765 Δ inside the glyphs (sampler precision: texture now 9 rows, not
+    128). Sweep (default, pre vs post): 22/48 frames, all altitude digits except the
+    medal icons on the cannonball/skydiving/jungle results screen (same last-row
+    blend, ≤ 45 Δ).
+  - Gate: default 7/7 b2; default exe with `on`/`strict` 7/7; `reloc` static (`on`,
+    `strict`) and first-run module 7/7 — every mode now hashes the same. 16 sweep
+    flows: default off, `reloc` on (static, first-run): no panic/crash.log, all 48
+    frames identical across the three.
+  - Crash reports: crash.rs/crash_linux.rs print `exe+0x…`/`pw64game+0x…` (absolute
+    in brackets) and an `images:` line; the panic hook appends `panic_frames()`
+    (`RtlCaptureStackBackTrace` / glibc `backtrace`) in the same form.
+  - Perf (8 interleaved, pinned, medians, avg | p99 | rest): main 0.660 | 1.89 |
+    0.040; default 0.661–0.672 | 1.92 | 0.041; default + `on` 0.677 | 1.95 | 0.044;
+    `reloc` on 0.675 | 1.92 | 0.044 (= default within noise); `reloc` strict 0.549 |
+    1.55 | 0.041: the gfx HLE is allocation-heavy, and the audit arena beats the
+    Windows heap by ~18% (a faster production allocator is a separate win).
 
-## Flipping the default (S8, after a release with `reloc`) and port prerequisites
+## Flipping the default (after a release with `reloc`) and port prerequisites
 
-- Needs first: a production relocated mode = strict minus the audits: `System`
-  allocator (high_heap is an audit arena), no no-access reservation of the old
-  windows (macOS can't map below 4 GB at all), panics on a miss kept (cold path).
-  Fix the frame-1800 glyph over-read (it samples host-pointer bytes, which ASLR
-  makes differ per run: exact-hash dumps would flake). crash.rs should print
-  `exe+0x…` like `pw64game+0x…`, since the exe base changes per run.
-- Then make `reloc` the only build and delete: pw64-game build.rs
+- Left: the decision (ship `reloc` with `PW64_RELOC=on` in one release first), then
+  make `reloc` the only build and delete: pw64-game build.rs
   `LOW_BASE_LINK_ARGS(_LINUX)` and the `low_base_link_args` export (birdman64
   build.rs keeps only `PW64_MAP`); pw64-cbuild's fixed module link args; dylib.rs
   `DLL_BASE`, `reserve_module_range`, `sys::reserve/release`; firstrun.rs
-  `RangeTaken` (its "close overlays" message and test); memmap `Reloc::Off`/`Alias`,
+  `RangeTaken` (its "close overlays" message and test); memmap `Reloc::Off`/`Alias`
+  (`On` default, `Strict` kept as the audit mode with `high_heap`),
   the fixed window and alias mappings, `check_low_4gb`/`assert_low`/`image_range`,
   `RELOC_BUILD`; stack.rs's fixed-window default (`SEARCH_START` stays a vaddr);
   vaddr.rs identity-region acceptance and `VMap::IDENTITY` as the live default;
@@ -251,8 +281,9 @@ clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs
   sets in pw64-cbuild, crash handlers (x86 register names), stack.rs's x86_64
   TEB asm is Windows-only; corosensei already supports arm64. The high
   candidates (0x7_2000_0000 + k·4 GB) fit a 39-bit VA.
-- macOS arm64: memmap mapping paths (no `MAP_FIXED_NOREPLACE`: hint + check),
-  no low reservations, ad-hoc code signing of the on-device module.
+- macOS arm64: memmap/stack/high_heap mapping paths (no `MAP_FIXED_NOREPLACE`:
+  hint + check; `on` already needs no low reservation), crash_linux.rs's glibc
+  `backtrace`/`__executable_start` equivalents, ad-hoc code signing of the module.
 - Android: as aarch64 Linux, plus loading the module from app storage
   (android.md "Building the game module"); no low-4 GB range is needed any more.
 

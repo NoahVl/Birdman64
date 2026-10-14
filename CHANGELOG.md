@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   through X11 (XWayland) on these laptops.
 - Linux: the first-start ROM tip now names the AppImage (or the birdman64
   program) instead of Birdman64.exe.
+- Stray red dots under the altitude readout and slight edge smudges on the medal icons
+  on the results screens are gone.
 
 ## [1.1.0] - 2026-10-13
 

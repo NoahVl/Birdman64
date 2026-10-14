@@ -1,0 +1,16 @@
+--- a/src/libultra/sp/sprite.c
++++ b/src/libultra/sp/sprite.c
+@@ -99,4 +99,13 @@
+ 
+     tex_width = b->width_img;
+     tex_height= s->bmHreal;
++    /* PW64: libultra expects every bitmap padded to bmHreal rows, but a UVBT
++     * blit (texture.c _uvParseUVBT) stores only actualHeight rows in its
++     * last strip, so the load read past the pixel data into the next heap
++     * block and the bilinear filter blended those bytes (native pointers,
++     * different per run) into the strip's bottom row (e.g. the HUD digits).
++     * Load and clamp to the rows that exist. */
++    if (b->actualHeight != 0 && b->actualHeight < tex_height) {
++        tex_height = b->actualHeight;
++    }
+     

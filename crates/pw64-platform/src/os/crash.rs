@@ -3,9 +3,11 @@
 //! RIPs in the game module print as `pw64game+0x<off>` and the module's
 //! `.map` path is logged (T14: the offsets are the map's linked addresses,
 //! so a dev can rebuild the deterministic module and read the function off
-//! the map). The exe itself has no symbols at crash time: link it with
-//! `PW64_MAP=<path>` (pw64-game build.rs adds `/MAP`) and read its RIPs off
-//! the map.
+//! the map). The exe itself has no symbols at crash time: its RIPs print as
+//! `exe+0x<off>` (offset from the image base, which ASLR moves per run in a
+//! `reloc` build); link it with `PW64_MAP=<path>` (pw64-game build.rs adds
+//! `/MAP`) and read them off the map. Absolute addresses follow in brackets,
+//! and an `images:` line gives both bases.
 //!
 //! Only real crashes are reported (a vectored handler sees every
 //! first-chance exception of every thread, including ones a GPU driver,
@@ -63,6 +65,12 @@ mod sys {
             overlapped: *mut c_void,
         ) -> i32;
         pub fn CloseHandle(h: *mut c_void) -> i32;
+        pub fn RtlCaptureStackBackTrace(
+            skip: u32,
+            count: u32,
+            frames: *mut *mut c_void,
+            hash: *mut u32,
+        ) -> u16;
     }
     pub const STD_ERROR_HANDLE: u32 = -12i32 as u32;
     pub const FILE_APPEND_DATA: u32 = 0x4;
@@ -112,18 +120,62 @@ fn module_range() -> (usize, usize) {
     load_range(&MODULE_RANGE)
 }
 
-/// Pure RIP formatting for the crash lines (mirror: crash_linux.rs): inside
-/// the module image `pw64game+0x<off>`, otherwise the raw address.
+/// Pure code-address formatting for the crash lines (mirror:
+/// crash_linux.rs): inside the game module image `pw64game+0x<off>`, inside
+/// the exe image `exe+0x<off>` (offsets from the image base: the base moves
+/// per run under ASLR, the offset is what to look up in the `.map`), each
+/// followed by the absolute address; otherwise the raw address.
 fn write_rip(
     out: &mut impl core::fmt::Write,
     rip: u64,
-    range: (usize, usize),
+    exe: (usize, usize),
+    module: (usize, usize),
 ) -> core::fmt::Result {
-    if (range.0 as u64..range.1 as u64).contains(&rip) {
-        write!(out, "pw64game+0x{:x}", rip - range.0 as u64)
+    let inside = |r: (usize, usize)| (r.0 as u64..r.1 as u64).contains(&rip);
+    if inside(module) {
+        write!(out, "pw64game+0x{:x} (0x{rip:x})", rip - module.0 as u64)
+    } else if inside(exe) {
+        write!(out, "exe+0x{:x} (0x{rip:x})", rip - exe.0 as u64)
     } else {
         write!(out, "0x{rip:x}")
     }
+}
+
+/// The image bases line of a report (pure): `[crash] images: exe 0x…-0x…,
+/// pw64game 0x…-0x…` (the module part only once it is loaded).
+fn write_images(
+    out: &mut impl core::fmt::Write,
+    exe: (usize, usize),
+    module: (usize, usize),
+) -> core::fmt::Result {
+    write!(out, "images: exe 0x{:x}-0x{:x}", exe.0, exe.1)?;
+    if module.1 > module.0 {
+        write!(out, ", pw64game 0x{:x}-0x{:x}", module.0, module.1)?;
+    }
+    Ok(())
+}
+
+/// For the panic report (`pw64` main.rs, not a signal/exception context):
+/// the image bases and the current thread's return addresses, each in the
+/// [`write_rip`] form (`exe+0x…` / `pw64game+0x…`), skipping `skip` frames.
+/// Std's backtrace prints no addresses, and none at all for frames it
+/// can't name (the zig-built game module has no PDB).
+pub fn panic_frames(skip: u32) -> String {
+    // Not `EXE_RANGE`: a panic may come before `install`.
+    let (exe, module) = (exe_image_range(), module_range());
+    let mut ips = [core::ptr::null_mut::<c_void>(); 48];
+    // SAFETY: a buffer of 48 slots for at most 48 frames; no hash wanted.
+    let n = unsafe {
+        sys::RtlCaptureStackBackTrace(skip + 1, ips.len() as u32, ips.as_mut_ptr(), core::ptr::null_mut())
+    };
+    let mut s = String::new();
+    let _ = write_images(&mut s, exe, module);
+    s.push_str("\nframes:");
+    for ip in &ips[..n as usize] {
+        s.push_str("\n  ");
+        let _ = write_rip(&mut s, *ip as u64, exe, module);
+    }
+    s
 }
 
 /// First-chance filter for the vectored handler (pure; see the module
@@ -206,9 +258,13 @@ fn report(info: &EXCEPTION_POINTERS) {
     let code = rec.ExceptionCode as u32;
     let (rip, rsp) = ctx.map_or((0, 0), |c| (c.Rip, c.Rsp));
     let mut buf = Buf { b: [0; 768], n: 0 };
+    let (exe, module) = (load_range(&EXE_RANGE), module_range());
     let _ = write!(buf, "[crash] exception 0x{code:08x} at RIP ");
-    let _ = write_rip(&mut buf, rip, module_range());
+    let _ = write_rip(&mut buf, rip, exe, module);
     let _ = writeln!(buf, " RSP 0x{rsp:x}");
+    let _ = write!(buf, "[crash] ");
+    let _ = write_images(&mut buf, exe, module);
+    let _ = writeln!(buf);
     if code == EXCEPTION_ACCESS_VIOLATION as u32 && rec.NumberParameters >= 2 {
         let kind = rec.ExceptionInformation[0];
         let _ = writeln!(
@@ -367,30 +423,46 @@ pub fn install() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_our_crash, write_rip};
+    use super::{is_our_crash, write_images, write_rip};
 
     /// T14: a RIP inside the module image formats as `pw64game+0x<off>`,
-    /// where the offset is the address to look up in the module's `.map`
-    /// (the module is linked at 0xB0000000, so map address = offset).
+    /// inside the exe as `exe+0x<off>` (offsets from the image base, which
+    /// ASLR moves per run; the `.map` lookup), each with the absolute RIP.
     #[test]
     fn rip_in_module_range_formats_as_offset() {
-        let range = (0xB000_0000, 0xB010_0000);
+        let module = (0x7FFD_0000_0000, 0x7FFD_0010_0000);
+        let exe = (0x7FF6_1234_0000, 0x7FF6_1534_0000);
         let fmt = |rip: u64| {
             let mut s = String::new();
-            let _ = write_rip(&mut s, rip, range);
+            let _ = write_rip(&mut s, rip, exe, module);
             s
         };
-        assert_eq!(fmt(0xB000_0000), "pw64game+0x0");
-        assert_eq!(fmt(0xB000_0001), "pw64game+0x1");
-        assert_eq!(fmt(0xB000_1234), "pw64game+0x1234");
-        assert_eq!(fmt(0xB00F_FFFF), "pw64game+0xfffff");
-        // Outside the module (e.g. the exe at 0xC0000000): raw address.
-        assert_eq!(fmt(0xC000_1234), "0xc0001234");
+        assert_eq!(fmt(0x7FFD_0000_0000), "pw64game+0x0 (0x7ffd00000000)");
+        assert_eq!(fmt(0x7FFD_0000_1234), "pw64game+0x1234 (0x7ffd00001234)");
+        assert_eq!(fmt(0x7FFD_000F_FFFF), "pw64game+0xfffff (0x7ffd000fffff)");
+        assert_eq!(fmt(0x7FF6_1234_5678), "exe+0x5678 (0x7ff612345678)");
+        // Outside both (a system DLL): raw address.
+        assert_eq!(fmt(0x7FFE_0000_1234), "0x7ffe00001234");
         assert_eq!(fmt(0), "0x0");
-        // Empty range (module not loaded): always raw.
+        // Empty ranges (module not loaded): always raw.
         let mut s = String::new();
-        let _ = write_rip(&mut s, 0xB000_1234, (0, 0));
+        let _ = write_rip(&mut s, 0xB000_1234, (0, 0), (0, 0));
         assert_eq!(s, "0xb0001234");
+        let mut s = String::new();
+        let _ = write_images(&mut s, exe, (0, 0));
+        assert_eq!(s, "images: exe 0x7ff612340000-0x7ff615340000");
+        s.clear();
+        let _ = write_images(&mut s, exe, module);
+        assert!(s.ends_with(", pw64game 0x7ffd00000000-0x7ffd00100000"), "{s}");
+    }
+
+    /// The panic report's frame list: this test function's own frame is an
+    /// `exe+0x…` return address.
+    #[test]
+    fn panic_frames_are_image_relative() {
+        let s = super::panic_frames(0);
+        assert!(s.starts_with("images: exe 0x"), "{s}");
+        assert!(s.contains("\n  exe+0x"), "{s}");
     }
 
     /// P2: first-chance exceptions in a driver/overlay on a normal stack
@@ -496,6 +568,11 @@ mod tests {
         assert!(
             stderr.contains("[crash] exception 0xc00000fd"),
             "no report on stderr: {stderr}"
+        );
+        // The overflow is in `recurse`, in this exe: image-relative RIP.
+        assert!(
+            stderr.contains("at RIP exe+0x") && stderr.contains("[crash] images: exe 0x"),
+            "no exe-relative RIP: {stderr}"
         );
         assert!(
             logged.contains("Birdman64 native crash") && logged.contains("stack overflow"),
