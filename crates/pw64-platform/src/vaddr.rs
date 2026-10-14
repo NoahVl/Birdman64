@@ -92,6 +92,16 @@ pub struct VMapCell(UnsafeCell<VMap>);
 // SAFETY: written once before the C starts (set_regions), read-only after.
 unsafe impl Sync for VMapCell {}
 
+impl VMapCell {
+    /// The current fast-path region, for Rust consumers' per-word inline
+    /// translation (the C reads this cell directly as its `pw64_vmap`).
+    pub fn load(&self) -> &VMap {
+        // SAFETY: written once before the C runs (set_regions's contract),
+        // read-only after — the C reads the same cell non-atomically too.
+        unsafe { &*self.0.get() }
+    }
+}
+
 /// The static build's fast-path region (read by the C as `pw64_vmap`).
 #[allow(non_upper_case_globals)]
 #[unsafe(no_mangle)]

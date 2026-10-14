@@ -11,7 +11,7 @@
 
 use pw64_audio::{AudioHle, Output, Rdram, WavWriter};
 use pw64_game::memmap::{hle_readable, hle_writable};
-use pw64_platform::{ai, headless, pi};
+use pw64_platform::{ai, headless, pi, vaddr};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -37,7 +37,7 @@ pub fn volume() -> f32 {
 }
 
 /// Command-list addresses are `osVirtualToPhysical`/`K0_TO_PHYS` values
-/// (host address − 0x80000000 mod 2^32, native-build.md §7): add it back.
+/// (see [`AudioMem::host`]).
 #[derive(Default)]
 struct AudioMem {
     /// First unmapped access of the current command.
@@ -48,8 +48,11 @@ impl AudioMem {
     /// Host address of `[addr, addr + len)` if the HLE may access it: reads
     /// the RDRAM window, live thread stacks and the exe / module image;
     /// writes only the window and live stacks (`memmap::hle_writable`).
+    /// Acmd/ABI addresses are `osVirtualToPhysical`/`K0_TO_PHYS` values
+    /// (host address − 0x80000000 mod 2^32, native-build.md §7): add it back
+    /// to the vaddr, then translate (option-a.md S3b).
     fn host(addr: u32, len: usize, write: bool) -> Option<usize> {
-        let h = addr.wrapping_add(0x8000_0000) as usize;
+        let h = vaddr::to_host(addr.wrapping_add(0x8000_0000));
         let ok = if write {
             hle_writable(h, len)
         } else {

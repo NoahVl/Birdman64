@@ -9,6 +9,7 @@
 //! they funnel into these functions, and `uvMemRead` already assembles values
 //! big-endian byte by byte (memory.c:185).
 
+use crate::vaddr;
 use crate::os::mesg::{OSMesg, OSMesgQueue};
 use crate::os::{reschedule, with};
 use anyhow::Result;
@@ -259,10 +260,11 @@ pub unsafe extern "C-unwind" fn osPiStartDma(
         direction, OS_READ,
         "osPiStartDma: only ROM reads are supported"
     );
-    // N64 virtual addresses are 32-bit. C code that round-trips an address
-    // through `s32` (e.g. `_uvDMA`'s `s32 dest`, system.c:419) sign-extends
-    // 0x80xxxxxx; take the low 32 bits like the hardware would.
-    let vaddr = (vaddr as usize as u32 as usize) as *mut c_void;
+    // N64 virtual addresses are 32-bit, so the destination is translated
+    // through the vaddr layer (option-a.md S3a): `to_vaddr` normalises a
+    // sign-extended s32 (e.g. `_uvDMA`'s `s32 dest`, system.c:419) and a
+    // host pointer alike to the 32-bit vaddr, `to_host` maps it back.
+    let vaddr = vaddr::to_host(vaddr::to_vaddr(vaddr as usize)) as *mut c_void;
     assert!(
         !vaddr.is_null(),
         "osPiStartDma: null RAM address (ROM {dev_addr:#x}+{nbytes:#x})"
@@ -318,10 +320,12 @@ pub unsafe extern "C-unwind" fn mio0_decompress(src: *const u8, dst: *mut u8) {
     // Upper bound of the stream: every output byte comes from at most one
     // raw byte or one 2-byte backref (which yields >= 3 bytes).
     let mut len = raw.max(comp) + out_len;
-    // Don't let the bound run past the end of the RDRAM window.
-    const WINDOW: std::ops::Range<usize> = 0x8000_0000..0x8080_0000;
-    if WINDOW.contains(&(src as usize)) {
-        len = len.min(WINDOW.end - src as usize);
+    // Don't let the bound run past the end of the RDRAM region (libultra's
+    // K0 window, vaddrs 0x80000000..0x80800000; option-a.md S3a). `src` is a
+    // host pointer: translate once, then bound within the region.
+    const RDRAM: std::ops::Range<u32> = 0x8000_0000..0x8080_0000;
+    if RDRAM.contains(&vaddr::to_vaddr(src as usize)) {
+        len = len.min((vaddr::to_host(RDRAM.end - 1) + 1) - src as usize);
     }
     // SAFETY: bytes are only read within the stream, which the bound covers.
     let stream = unsafe { std::slice::from_raw_parts(src, len) };

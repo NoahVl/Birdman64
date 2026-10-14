@@ -86,14 +86,16 @@ pattern has zero hits left in its files.
 - S2a: user_file.c, sched.c, system.c literals → `PW64_PTR`. S2b: memory.c.
   S2c: debug.c, audio_manager.c. Gate: `grep -nE '\)\s*\(?0x8[0-9A-Fa-f]{7}'` on the
   patched file (`target/release/build/pw64-game-*/out/patched/src/...`) = 0 hits.
-- S3a: pw64-platform consumers: `osVirtualToPhysical` = `to_vaddr(p) - K0`;
-  pi.rs 265 = `to_host(to_vaddr(p))` (normalises sign-extended s32 and host);
-  mio0 bound via `to_vaddr(src)`; vi fb → keep host, convert at the consumer.
-- S3b: hle.rs/audio.rs: `map()` returns the vaddr (`raw | K0` if bit 31 clear), reads
-  call `to_host`; `data_ptr`/`framebuffer` via `to_vaddr`; audio `to_host(addr + K0)`.
-  `to_host` walks a `OnceLock` Vec: call it once per `read_bytes`/`read_raw` range
-  (regions never span a read), and give `read_u32` (per DL word) a `VMap::to_host`
-  fast path like the C. Gfx HLE is ~80% of a retrace, so this is where cost would show.
+- S3a **done**: misc.rs `osVirtualToPhysical` = `to_vaddr(p) − K0`; pi.rs DMA dest =
+  `to_host(to_vaddr(p))`; mio0 bound = `to_vaddr(src)` in the vaddr RDRAM range
+  0x80000000..0x80800000 (`to_host(end−1)+1` bounds within the region); vi.rs keeps
+  the host fb pointer, the consumers (hle.rs `latch`/`retrace`) convert via `to_vaddr`.
+- S3b **done**: hle.rs `GfxMemory::map` returns the vaddr (`raw | K0` if bit 31 clear);
+  reads translate once per range through `VMapCell::load()`'s one-region fast path,
+  `to_host` on miss (pure `GfxMemory::host(vm, regions, addr)`, unit-tested with local
+  1/3-region lists — `set_regions` is once-only); `data_ptr`/`framebuffer` via
+  `to_vaddr`; audio.rs `AudioMem::host` = `to_host(addr + K0)`. Bit-identical; perf
+  unchanged (gfx HLE 0.48–0.50 ms/task both builds, whole-run avg within spread).
 - S4: `PW64_RELOC=alias`: one shared-memory RDRAM block mapped twice (low at
   0x80000000 for unconverted sites, high above 4 GB registered as the region;
   Windows `CreateFileMapping` + 2 views, Linux `memfd_create` + 2 `mmap`);

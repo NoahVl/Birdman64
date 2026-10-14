@@ -42,10 +42,11 @@ pub extern "C-unwind" fn osWritebackDCacheAll() {}
 #[unsafe(no_mangle)]
 pub extern "C-unwind" fn osInvalICache(_p: *mut c_void, _n: i32) {}
 
-/// Mirrors `osVirtualToPhysical` for KSEG0: `addr - 0x80000000` mod 2^32.
-/// Host addresses outside the window (exe image, stacks) wrap too, and the
-/// renderer maps back with `+0x80000000` (native-build.md §2, option C).
+/// Mirrors `osVirtualToPhysical` for KSEG0: `to_vaddr(addr) - 0x80000000`
+/// mod 2^32 (option-a.md S3a; with no regions the conversion is the
+/// identity, i.e. the old truncation of the host pointer). The renderer
+/// maps back with `+0x80000000` (native-build.md §2, option C).
 #[unsafe(no_mangle)]
 pub extern "C-unwind" fn osVirtualToPhysical(p: *mut c_void) -> u32 {
-    (p as usize as u32).wrapping_sub(0x8000_0000)
+    crate::vaddr::to_vaddr(p as usize).wrapping_sub(0x8000_0000)
 }

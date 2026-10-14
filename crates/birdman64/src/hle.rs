@@ -36,7 +36,8 @@
 use crate::opts;
 use pw64_game::memmap::hle_readable;
 use pw64_gfx::{FbOp, Frame, Interpreter, Memory, RenderOptions, Renderer, VecMemory, Widescreen};
-use pw64_platform::headless::GfxTaskInfo;
+use pw64_platform::vaddr::{self, Region, VMap};
+use pw64_platform::{headless::GfxTaskInfo, vaddr::pw64_vmap};
 use pw64_platform::os::vi::Retrace;
 use std::path::Path;
 use std::sync::Arc;
@@ -102,23 +103,26 @@ pub fn profile_stats() -> String {
 }
 
 /// The C address space as display-list words see it (native-build.md §7):
-/// words hold full host pointers (window / stacks / image) or `K0` /
-/// `osVirtualToPhysical` values, which must stay distinguishable — the
-/// classic 29-bit segment resolution would alias the image onto the window.
+/// words hold 32-bit vaddrs — K0 forms, or `osVirtualToPhysical` values,
+/// which [`GfxMemory::map`] normalises to K0 by setting bit 31 — and every
+/// read translates its vaddr to the host address (`vaddr.rs`, option-a.md
+/// S3b: once per read range, with the one-region fast path for the
+/// per-word display-list reads).
 struct GfxMemory;
 
 impl GfxMemory {
-    /// Maps a raw Gfx word to its host address: host pointers pass through,
-    /// everything else (physical / K0) gets bit 31 back. A host-looking word
-    /// that points at nothing readable (dead stack slot, guard page, the
-    /// module/exe gap) also gets bit 31 added, which lands below the RDRAM
-    /// window, so [`Self::mapped`] rejects it either way.
-    fn host(raw: u32) -> usize {
-        let h = raw as usize;
-        if hle_readable(h, 1) {
-            return h;
-        }
-        raw.wrapping_add(0x8000_0000) as usize
+    /// Host address of the vaddr `addr`: the one-region inline fast path
+    /// (the C's `pw64_ptr_fast`) first, the full lookup on a miss.
+    /// `vm`/`regions` are the production globals; the tests pass local ones
+    /// (`set_regions` is once-only).
+    fn host(vm: &VMap, regions: &[Region], addr: u32) -> usize {
+        vm.to_host(addr).unwrap_or_else(|| vaddr::to_host_in(regions, addr))
+    }
+
+    /// The host address for one read range.
+    fn read_addr(addr: u32) -> usize {
+        let vm = pw64_vmap.load();
+        Self::host(vm, vaddr::regions(), addr)
     }
 
     /// Only committed, readable C memory (`memmap::hle_readable`): the RDRAM
@@ -129,15 +133,17 @@ impl GfxMemory {
 }
 
 impl Memory for GfxMemory {
-    /// Words are host pointers or physical/K0 forms — resolve to host.
+    /// Raw words become vaddrs: bit 31 set stays (a K0-form vaddr), clear
+    /// gets it (a physical / `osVirtualToPhysical` value). Reads translate
+    /// the vaddr to its host address.
     fn map(&self, raw: u32) -> Option<u32> {
-        Some(Self::host(raw) as u32)
+        Some(if raw & 0x8000_0000 == 0 { raw | 0x8000_0000 } else { raw })
     }
 
-    /// Display-list words are host u32s written by the C macros.
+    /// Per display-list word: the vaddr translates through the fast path.
     fn read_u32(&self, addr: u32) -> u32 {
         let mut b = [0u8; 4];
-        Self::copy(addr as usize, &mut b);
+        Self::copy(Self::read_addr(addr), &mut b);
         u32::from_le_bytes(b)
     }
 
@@ -145,7 +151,7 @@ impl Memory for GfxMemory {
     /// the interpreter consumes the RSP's big-endian byte stream, so every
     /// u16 is swapped back (`PW64_SWAP` did the same in reverse).
     fn read_bytes(&self, addr: u32, out: &mut [u8]) {
-        Self::copy(addr as usize, out);
+        Self::copy(Self::read_addr(addr), out);
         for pair in out.as_chunks_mut::<2>().0 {
             pair.swap(0, 1);
         }
@@ -153,7 +159,7 @@ impl Memory for GfxMemory {
 
     /// Texel data was copied raw (BE) from the ROM; no swap.
     fn read_raw(&self, addr: u32, out: &mut [u8]) {
-        Self::copy(addr as usize, out);
+        Self::copy(Self::read_addr(addr), out);
     }
 }
 
@@ -258,6 +264,7 @@ pub struct Hle {
 }
 
 /// Physical form of a framebuffer address (gfx task `cimg` vs VI origin).
+/// Host-pointer consumers translate through `to_vaddr` first.
 fn fb_key(addr: usize) -> u32 {
     (addr & 0x1FFF_FFFF) as u32
 }
@@ -393,7 +400,9 @@ impl Hle {
     /// The gfx-task handler: interpret (and optionally render) one task.
     pub fn on_gfx_task(&mut self, info: &GfxTaskInfo) {
         self.gfx_tasks += 1;
-        let dl = info.data_ptr as u32;
+        // `data_ptr` holds a vaddr (or, in the fixed-window build, a host
+        // pointer with the same low 32 bits): translate to the vaddr.
+        let dl = vaddr::to_vaddr(info.data_ptr);
         // `capture::run` = `interp.run` unless PW64_CAPTURE_DL lists this task.
         let frame = INTERP.time(|| pw64_gfx::capture::run(&mut self.interp, &self.mem, dl));
         if self.gfx_tasks.is_power_of_two() {
@@ -435,7 +444,7 @@ impl Hle {
         }
         // Drawn over the framebuffer's current contents (several tasks per
         // swap accumulate, as on the N64).
-        let fb = fb_key(info.framebuffer);
+        let fb = fb_key(vaddr::to_vaddr(info.framebuffer) as usize);
         let frame = Arc::new(frame);
         self.submit(fb, frame.clone());
         let trace = self.interp.trace.clone().unwrap_or_default();
@@ -520,7 +529,7 @@ impl Hle {
         // A latched fb that was drawn (or copied into) since it was last
         // shown becomes the shown one; a re-latched fb without changes, or
         // one never drawn, keeps showing the old picture.
-        let fb = fb_key(framebuffer);
+        let fb = fb_key(vaddr::to_vaddr(framebuffer) as usize);
         let newly = self.dirty.iter().position(|&f| f == fb).map(|i| {
             self.dirty.swap_remove(i);
             fb
@@ -622,9 +631,10 @@ impl Hle {
         if self.first_real_present && self.fb_shots == 0 {
             return;
         }
-        // Read the fb as the game writes it: RGBA5551, 320×240.
+        // Read the fb as the game writes it: RGBA5551, 320×240. The VI
+        // framebuffer is a host pointer; the read takes the vaddr.
         let mut bytes = vec![0u8; FB_W * FB_H * 2];
-        self.mem.read_bytes(r.framebuffer as u32, &mut bytes);
+        self.mem.read_bytes(vaddr::to_vaddr(r.framebuffer), &mut bytes);
         let mut rgba = vec![0u8; FB_W * FB_H * 4];
         for (i, px) in bytes.as_chunks::<2>().0.iter().enumerate() {
             let px = u16::from_be_bytes(*px);
@@ -766,5 +776,65 @@ fn write_png(path: &str, rgba: &[u8], w: u32, h: u32) {
     match res {
         Ok(()) => eprintln!("[hle] wrote {path}"),
         Err(e) => eprintln!("[hle] PNG {path}: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Local regions (not the once-only global): RDRAM + the stacks and
+    /// image regions planned in option-a.md.
+    const RDRAM: Region = Region {
+        vbase: 0x8000_0000,
+        size: 0x80_0000,
+        host: 0x7_1234_0000,
+    };
+    const ONE: [Region; 1] = [RDRAM];
+    const THREE: [Region; 3] = [
+        Region {
+            vbase: 0x8080_0000,
+            size: 0x100_0000,
+            host: 0x9_0000_0000,
+        },
+        RDRAM,
+        Region {
+            vbase: 0xB000_0000,
+            size: 0x1000_0000,
+            host: 0x8_0000_0000,
+        },
+    ];
+
+    #[test]
+    fn map_normalises_to_the_vaddr() {
+        // Physical / `osVirtualToPhysical` values get bit 31; K0 forms stay.
+        assert_eq!(Memory::map(&GfxMemory, 0x003D_A800), Some(0x803D_A800));
+        assert_eq!(Memory::map(&GfxMemory, 0x803D_A800), Some(0x803D_A800));
+    }
+
+    #[test]
+    fn vaddr_translation_with_regions() {
+        // The fast path (one region) and the miss fallback must agree with
+        // the full lookup, with one and with three regions.
+        for regions in [&ONE[..], &THREE[..]] {
+            let vm = VMap::for_regions(regions);
+            for &a in &[
+                0x8000_0000u32, // fast-path hit
+                0x803D_A800,
+                0x807F_FFFF,
+                0x8080_0010, // fast-path miss, in the second region
+                0xB000_0010,
+                0x1050, // in no region: passthrough
+            ] {
+                assert_eq!(
+                    GfxMemory::host(&vm, regions, a),
+                    vaddr::to_host_in(regions, a),
+                    "{a:#x}"
+                );
+            }
+        }
+        // No regions: the identity (today's build).
+        assert_eq!(GfxMemory::host(&VMap::IDENTITY, &[], 0x803D_A800), 0x803D_A800);
+        assert_eq!(GfxMemory::host(&VMap::IDENTITY, &[], 0x1050), 0x1050);
     }
 }
