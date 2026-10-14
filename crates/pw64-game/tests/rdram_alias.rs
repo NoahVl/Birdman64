@@ -10,6 +10,7 @@ fn alias_views_share_rdram() {
     unsafe { std::env::set_var("PW64_RELOC", "alias") };
     assert_eq!(Reloc::get(), Reloc::Alias);
     memmap::map_rdram_window();
+    memmap::register_regions();
     let high = memmap::rdram_host();
     assert!(high >> 32 != 0, "high view {high:#x}");
     assert_eq!(vaddr::to_host(0x803D_A800), high + 0x3D_A800);

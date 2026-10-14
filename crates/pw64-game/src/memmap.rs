@@ -30,6 +30,11 @@ pub enum Reloc {
     /// [`RDRAM_BASE`] (for C sites that still use the window directly) and
     /// above 4 GB, registered as the vaddr region the C translates to.
     Alias,
+    /// `strict`: RDRAM mapped once, above 4 GB; the low window is reserved
+    /// no-access (an untranslated literal faults at its C site). Stacks and
+    /// the image are identity regions; any other value with bit 31 set that
+    /// reaches `PW64_U32`/`PW64_PTR` panics (`vaddr::set_strict`).
+    Strict,
 }
 
 impl Reloc {
@@ -38,7 +43,8 @@ impl Reloc {
         match v.map(str::trim) {
             None | Some("" | "0" | "off") => Ok(Reloc::Off),
             Some("alias") => Ok(Reloc::Alias),
-            Some(o) => Err(format!("PW64_RELOC={o}: expected off or alias")),
+            Some("strict") => Ok(Reloc::Strict),
+            Some(o) => Err(format!("PW64_RELOC={o}: expected off, alias or strict")),
         }
     }
 
@@ -94,6 +100,7 @@ mod sys {
     pub const MEM_COMMIT: u32 = 0x1000;
     pub const MEM_RESERVE: u32 = 0x2000;
     pub const PAGE_READWRITE: u32 = 0x04;
+    pub const PAGE_NOACCESS: u32 = 0x01;
     pub const FILE_MAP_WRITE: u32 = 0x02;
     pub const INVALID_HANDLE_VALUE: *mut c_void = usize::MAX as *mut c_void;
 
@@ -105,18 +112,20 @@ mod sys {
 
 /// Maps the zeroed RDRAM window at exactly [`RDRAM_BASE`]. Panics if the
 /// range is taken (e.g. the exe was relocated over it). Call once, first.
-/// [`Reloc::Alias`]: maps the shared block twice and registers the high
-/// view as the RDRAM vaddr region ([`map_rdram_alias`]).
+/// [`Reloc::Alias`]: maps the shared block twice ([`map_rdram_alias`]);
+/// [`Reloc::Strict`]: once, high ([`map_rdram_strict`]). Either way the
+/// vaddr regions are registered later, by [`register_regions`].
 pub fn map_rdram_window() {
-    if Reloc::get() == Reloc::Alias {
-        let high = map_rdram_alias();
-        pw64_platform::vaddr::set_regions(vec![pw64_platform::vaddr::Region {
-            vbase: RDRAM_BASE as u32,
-            size: RDRAM_SIZE as u32,
-            host: high,
-        }]);
-        RDRAM_HOST.store(high, Ordering::Relaxed);
-        return;
+    match Reloc::get() {
+        Reloc::Off => {}
+        Reloc::Alias => {
+            RDRAM_HOST.store(map_rdram_alias(), Ordering::Relaxed);
+            return;
+        }
+        Reloc::Strict => {
+            RDRAM_HOST.store(map_rdram_strict(), Ordering::Relaxed);
+            return;
+        }
     }
     #[cfg(windows)]
     {
@@ -238,6 +247,95 @@ fn map_rdram_alias() -> usize {
         }
     };
     high.expect("RDRAM alias: no free high address for the second view")
+}
+
+/// [`Reloc::Strict`]: zeroed RDRAM at the first free [`alias_candidates`]
+/// address (the only view), and the old window at [`RDRAM_BASE`] reserved
+/// no-access, so a C site that still uses a window literal faults there
+/// (the crash handler names it) instead of reading other memory. Returns
+/// the RDRAM block. Panics if either mapping fails.
+fn map_rdram_strict() -> usize {
+    #[cfg(windows)]
+    let (high, low) = {
+        let alloc = |base: usize, ty: u32, prot: u32| {
+            // SAFETY: plain Win32 allocation at a fixed address; checked.
+            unsafe { sys::VirtualAlloc(base as *mut c_void, RDRAM_SIZE, ty, prot) as usize }
+        };
+        let rw = sys::MEM_RESERVE | sys::MEM_COMMIT;
+        let high = alias_candidates().find(|&a| alloc(a, rw, sys::PAGE_READWRITE) == a);
+        let low = alloc(RDRAM_BASE, sys::MEM_RESERVE, sys::PAGE_NOACCESS);
+        (high, low)
+    };
+    #[cfg(target_os = "linux")]
+    let (high, low) = {
+        let map = |base: usize, prot: i32| {
+            // SAFETY: anonymous mapping, MAP_FIXED_NOREPLACE (never
+            // clobbers; old kernels take it as a hint, hence the check).
+            unsafe {
+                let p = libc::mmap(
+                    base as *mut c_void,
+                    RDRAM_SIZE,
+                    prot,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
+                    -1,
+                    0,
+                );
+                if p != libc::MAP_FAILED && p as usize != base {
+                    libc::munmap(p, RDRAM_SIZE);
+                }
+                p as usize
+            }
+        };
+        let high = alias_candidates().find(|&a| map(a, libc::PROT_READ | libc::PROT_WRITE) == a);
+        (high, map(RDRAM_BASE, libc::PROT_NONE))
+    };
+    assert_eq!(
+        low,
+        RDRAM_BASE,
+        "could not reserve the old RDRAM window at {RDRAM_BASE:#x}: {}",
+        std::io::Error::last_os_error()
+    );
+    high.expect("RDRAM: no free high address")
+}
+
+/// Registers the vaddr regions for [`Reloc::Alias`] / [`Reloc::Strict`]
+/// (no-op for [`Reloc::Off`]). Call once, after the game module is loaded
+/// (`dylib`: strict mode needs its range) and before `os::boot`.
+/// Alias: RDRAM only (stacks and the image pass through unregistered).
+/// Strict: RDRAM, plus identity regions (`host == vbase`) for the coroutine
+/// stack window and the image(s), then `vaddr::set_strict`.
+pub fn register_regions() {
+    use pw64_platform::os::stack::{SEARCH_END, SEARCH_START};
+    use pw64_platform::vaddr::{self, Region};
+    let mode = Reloc::get();
+    if mode == Reloc::Off {
+        return;
+    }
+    let mut regions = vec![Region {
+        vbase: RDRAM_BASE as u32,
+        size: RDRAM_SIZE as u32,
+        host: rdram_host(),
+    }];
+    if mode == Reloc::Strict {
+        let ident = |(start, end): (usize, usize)| {
+            assert_low("identity vaddr region", start, end - start);
+            Region {
+                vbase: start as u32,
+                size: (end - start) as u32,
+                host: start,
+            }
+        };
+        regions.push(ident((SEARCH_START, SEARCH_END)));
+        #[cfg(feature = "dylib")]
+        regions.push(ident(
+            module_range().expect("strict mode: register regions after dylib::load"),
+        ));
+        regions.push(ident(exe_range()));
+    }
+    vaddr::set_regions(regions);
+    if mode == Reloc::Strict {
+        vaddr::set_strict();
+    }
 }
 
 /// `(start, end)` of this exe's loaded image (code, data, BSS).
@@ -420,8 +518,13 @@ pub fn init() -> String {
     #[cfg(not(feature = "dylib"))]
     let module = false;
     let mut reserved = format!("reserved: stacks {stacks}, module {module}");
-    if Reloc::get() == Reloc::Alias {
-        reserved += &format!(", RDRAM alias: vaddr region at host {:#x}", rdram_host());
+    match Reloc::get() {
+        Reloc::Off => {}
+        Reloc::Alias => reserved += &format!(", RDRAM alias: high view at {:#x}", rdram_host()),
+        Reloc::Strict => {
+            let host = rdram_host();
+            reserved += &format!(", RDRAM strict: at {host:#x}, low window no-access")
+        }
     }
     #[cfg(feature = "static")]
     {
@@ -445,7 +548,8 @@ mod tests {
         assert_eq!(Reloc::parse(None), Ok(Reloc::Off));
         assert_eq!(Reloc::parse(Some("off")), Ok(Reloc::Off));
         assert_eq!(Reloc::parse(Some(" alias ")), Ok(Reloc::Alias));
-        assert!(Reloc::parse(Some("strict")).is_err());
+        assert_eq!(Reloc::parse(Some("strict")), Ok(Reloc::Strict));
+        assert!(Reloc::parse(Some("on")).is_err());
         // A truncated high view must not land in the low window.
         assert!(alias_candidates().all(|a| a >> 32 != 0 && (a as u32) & 0x8000_0000 == 0));
     }

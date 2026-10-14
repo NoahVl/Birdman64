@@ -18,7 +18,7 @@
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 /// One C-visible host block and the vaddr range the C sees it at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,15 +127,20 @@ pub unsafe fn set_module_vmap(p: *mut VMap) {
 /// Registers the C-visible regions, once, before the C runs. Panics on a
 /// second call, a vaddr range below 0x80000000 or past 4 GB, a host block
 /// below 4 GB (a host address that fits 32 bits could not be told apart from
-/// a vaddr), or overlapping regions (the inline fast path tries one region
-/// before the rest). Without this call both conversions are the identity.
+/// a vaddr) unless it is an identity region (`host == vbase`: a block that
+/// still sits at its vaddr, e.g. the stacks or the image in strict mode), or
+/// overlapping regions (the inline fast path tries one region before the
+/// rest). Without this call both conversions are the identity.
 pub fn set_regions(regions: Vec<Region>) {
     for (i, r) in regions.iter().enumerate() {
         assert!(
             r.vbase & 0x8000_0000 != 0 && r.vbase.checked_add(r.size).is_some(),
             "vaddr region {r:?}: must lie in 0x80000000..4 GB"
         );
-        assert!(r.host >> 32 != 0, "vaddr region {r:?}: host block must lie above 4 GB");
+        assert!(
+            r.host >> 32 != 0 || r.host == r.vbase as usize,
+            "vaddr region {r:?}: host block must lie above 4 GB (or at its vaddr)"
+        );
         for o in &regions[..i] {
             let v = r.vbase < o.vbase + o.size && o.vbase < r.vbase + r.size;
             let h = r.host < o.host + o.size as usize && o.host < r.host + r.size as usize;
@@ -194,14 +199,74 @@ pub fn to_host_in(regions: &[Region], vaddr: u32) -> usize {
     vaddr as usize
 }
 
+/// Strict mode (`PW64_RELOC=strict`, option-a.md S5): see [`set_strict`].
+static STRICT: AtomicBool = AtomicBool::new(false);
+
+/// Strict mode: from now on [`to_vaddr`] / [`to_host`] (and so `PW64_U32` /
+/// `PW64_PTR`) panic instead of passing through a value that should have
+/// been in a region ([`to_vaddr_strict_in`], [`to_host_strict_in`]). Call
+/// with [`set_regions`], before the C runs.
+pub fn set_strict() {
+    STRICT.store(true, Ordering::Relaxed);
+}
+
+/// [`to_vaddr_in`], strict: a host address in no region must be below
+/// 0x80000000 (a ROM offset, physical value or small int cast to a pointer)
+/// or already a vaddr of some region (`OS_PHYSICAL_TO_K0` and friends apply
+/// `PW64_U32` to ints; no host memory lives at a vaddr in strict mode except
+/// identity regions, so this is idempotence, not a hidden pointer). Anything
+/// else (an unregistered host pointer, a sign-extended s32 vaddr that some C
+/// site cast to a pointer) panics, naming the value. Pure.
+pub fn to_vaddr_strict_in(regions: &[Region], host: usize) -> u32 {
+    for r in regions {
+        let off = host.wrapping_sub(r.host);
+        if off < r.size as usize {
+            return r.vbase + off as u32;
+        }
+    }
+    let is_vaddr = |v: u32| regions.iter().any(|r| v.wrapping_sub(r.vbase) < r.size);
+    assert!(
+        host < 0x8000_0000 || (host >> 32 == 0 && is_vaddr(host as u32)),
+        "PW64_U32({host:#x}): host address in no C-visible region (strict mode; \
+         the backtrace names the C site)"
+    );
+    host as u32
+}
+
+/// [`to_host_in`], strict: a vaddr with bit 31 set in no region (an
+/// unregistered or stale N64 address) panics; ROM offsets and physical
+/// values pass through. Pure.
+pub fn to_host_strict_in(regions: &[Region], vaddr: u32) -> usize {
+    for r in regions {
+        let off = vaddr.wrapping_sub(r.vbase);
+        if off < r.size {
+            return r.host + off as usize;
+        }
+    }
+    assert!(
+        vaddr < 0x8000_0000,
+        "PW64_PTR({vaddr:#x}): vaddr in no C-visible region (strict mode; \
+         the backtrace names the C site)"
+    );
+    vaddr as usize
+}
+
 /// Host address → vaddr (registered regions).
 pub fn to_vaddr(host: usize) -> u32 {
-    to_vaddr_in(regions(), host)
+    if STRICT.load(Ordering::Relaxed) {
+        to_vaddr_strict_in(regions(), host)
+    } else {
+        to_vaddr_in(regions(), host)
+    }
 }
 
 /// Vaddr → host address (registered regions).
 pub fn to_host(vaddr: u32) -> usize {
-    to_host_in(regions(), vaddr)
+    if STRICT.load(Ordering::Relaxed) {
+        to_host_strict_in(regions(), vaddr)
+    } else {
+        to_host_in(regions(), vaddr)
+    }
 }
 
 /// `PW64_U32(p)` (pw64_native.h) when the inline fast path misses:
@@ -313,5 +378,34 @@ mod tests {
     #[should_panic(expected = "in no C-visible region")]
     fn unregistered_host_pointer_panics_when_relocated() {
         to_vaddr_in(&R, 0x7_9999_0000);
+    }
+
+    /// Strict: identity regions translate to themselves; ROM offsets, physical
+    /// values and (to_vaddr) vaddrs pass; everything else panics.
+    #[test]
+    fn strict_mode() {
+        let rs = [
+            R[0],
+            Region {
+                vbase: 0x8080_0000,
+                size: 0x1000_0000,
+                host: 0x8080_0000,
+            },
+        ];
+        assert_eq!(to_host_strict_in(&rs, 0x8090_0010), 0x8090_0010);
+        assert_eq!(to_vaddr_strict_in(&rs, 0x8090_0010), 0x8090_0010);
+        assert_eq!(to_host_strict_in(&rs, 0x803D_A800), HIGH + 0x3D_A800);
+        for a in [0u32, 0x1050, 0x003D_A800, 0x7FFF_FFFF] {
+            assert_eq!(to_vaddr_strict_in(&rs, to_host_strict_in(&rs, a)), a);
+        }
+        let panics = |f: fn() -> usize| std::panic::catch_unwind(f).is_err();
+        let v = |h: usize| std::panic::catch_unwind(|| to_vaddr_strict_in(&R, h)).is_err();
+        assert!(panics(|| to_host_strict_in(&R, 0x8090_0000)));
+        assert!(panics(|| to_host_strict_in(&R, 0xC000_0000)));
+        // Already a vaddr (an int through PW64_U32): idempotent.
+        assert_eq!(to_vaddr_strict_in(&R, 0x8004_1820), 0x8004_1820);
+        assert!(v(0x8090_0000));
+        assert!(v(0xFFFF_FFFF_803D_A800));
+        assert!(v(0x7_9999_0000));
     }
 }

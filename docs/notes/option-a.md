@@ -41,7 +41,7 @@ Android). Game output must stay bit-identical to the fixed-window build at every
   at 0xC0000000, dylib module at 0xB0000000). `set_regions` is once-only: register
   after `dylib::load`, before `bootproc`.
 - **Co-existence:** the switch is runtime, in the same binary: no regions = old
-  model. Planned env `PW64_RELOC=alias|strict` (step S4/S5) selects relocation.
+  model. `PW64_RELOC=alias|strict` (S4/S5) selects relocation.
   Remove the fixed window/base code once strict mode passes the full sweep
   (sweep.md) on Windows + Linux and has shipped in one release.
 
@@ -100,8 +100,8 @@ pattern has zero hits left in its files.
   identical). `map_rdram_window` maps one zeroed shared block twice (Windows
   `CreateFileMappingW` + `MapViewOfFileEx`, Linux `memfd_create` + `mmap MAP_SHARED|
   MAP_FIXED_NOREPLACE`): at 0x80000000 and at the first free `0x7_2000_0000 + k·4 GB`,
-  then `set_regions([RDRAM → high])` there (before `dylib::load`: `set_module_vmap`
-  copies it). Low 32 bits of the high view are 0x20xxxxxx, so a straggler that
+  registered as `[RDRAM → high]` by `memmap::register_regions` (since S5; main.rs
+  `run_game`, after `dylib::load`, before `os::boot`). Low 32 bits of the high view are 0x20xxxxxx, so a straggler that
   truncates a pointer gets a bit-31-clear "ROM offset", not the window.
   `memmap::rdram_host()` = the translated view; `hle_writable` uses it (high only).
   Stacks, exe/module image and any Rust heap pointer stay low and unregistered: the
@@ -128,40 +128,58 @@ every PNG but frame 1800 matches and `PW64_DUMP_RDRAM` diffs show only pointer w
 all sweep scripts (sweep.md) run to the end with no panic and no crash.log; test +
 clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs).
 
-- **S5 `PW64_RELOC=strict`** (memmap.rs, vaddr.rs, main.rs/firstrun.rs):
-  1. No low view: map the block once, high; reserve 0x80000000+8 MB no-access
-     (Windows `VirtualAlloc(MEM_RESERVE, PAGE_NOACCESS)`, Linux `mmap PROT_NONE
-     MAP_FIXED_NOREPLACE`), so a window literal faults and crash.rs names the site.
-  2. Identity regions: `set_regions` accepts `host == vbase` (< 4 GB) besides high
-     hosts; register the stack window (0x80800000..0xA0000000) and the image
-     (`image_range()`: exe, plus module in dylib) that way. Needs the module range, so
-     move registration out of `map_rdram_window` into `memmap::register_regions()`,
-     called after `dylib::load` (firstrun.rs) / after `init` (static), before `os::boot`.
-  3. `vaddr::set_strict()`: `to_vaddr_in` panics on a host address in no region
-     unless it is < 0x80000000 (ROM offset / physical value cast to a pointer);
-     `to_host_in` panics on a vaddr ≥ 0x80000000 in no region. Sign-extended
-     (0xFFFFFFFF_8xxxxxxx) inputs panic: fix each such C site with `PW64_U32`.
-  4. List every straggler fixed in this file (patch file + line).
+- S5 **done**: `PW64_RELOC=strict` (memmap.rs `map_rdram_strict`, `register_regions`;
+  vaddr.rs `set_strict`, `to_vaddr_strict_in`/`to_host_strict_in`; main.rs `run_game`).
+  RDRAM mapped once at the first free `0x7_2000_0000 + k·4 GB`; 0x80000000+8 MB
+  reserved no-access (a window literal faults at its C site). `register_regions()`
+  (all modes, once, in `run_game` before `os::boot`, i.e. after `dylib::load`):
+  RDRAM → high, plus identity regions (`host == vbase`, now accepted by
+  `set_regions`) for the stack window 0x80800000..0xA0000000, the module (dylib)
+  and the exe image; then strict. Strict `to_host`: a vaddr ≥ 0x80000000 in no
+  region panics. Strict `to_vaddr`: in no region, passes values < 0x80000000 and
+  32-bit values that are already a region's vaddr; panics on the rest (any
+  unregistered host pointer ≥ 4 GB, sign-extended s32, bit-31 value in no range).
+  The panic message names the value; `RUST_BACKTRACE=1` names the C function
+  (frames symbolise through the inline `pw64_*_fast`). Test: `tests/rdram_strict.rs`.
+- S5 findings:
+  - Panicking on every bit-31 value tripped at once on texture.c 833: `OS_PHYSICAL_TO_K0`
+    (os_convert.h.patch) applies `PW64_U32` to a u32 that is already a vaddr. Not a
+    bug: values < 4 GB are never host pointers, so `PW64_U32` stays idempotent on vaddrs.
+  - Nothing else: no C or Rust straggler, no low-window fault, no sign-extended
+    pointer. S2/S3 covered everything these flows reach.
+  - Not detectable by strict mode on Windows: a Rust heap pointer handed to the C
+    (the heap sits below 0x80000000 there, e.g. 0x46f530, the same range as ROM
+    offsets). For the S6 audit, run strict mode on Linux, where the heap is above 4 GB.
+- S5 gate: default 7/7 (static). Strict, static and first-run module: 6/7 (frame 1800
+  = the known glyph over-read), RDRAM diffs = pointer words + the ≤ 6 csplayer
+  words. All 9 sweep scripts + `PW64_START` a:hg:2, a:rb:1, a:gc:1, b:jh:1,
+  beginner:cb:1, a:sd:1, beginner:bm:1 run with no panic and no crash.log. Frames
+  match off mode, except 6-10 px in 5 of 48 frames, in the red HUD digits' texrect
+  (`G_SETTIMG 0x800D16F0`, same over-read). Perf (6 runs, medians, avg | p99 |
+  rest): pre-S1 0.593 | 1.20 | 0.0333; off 0.609 | 1.21 | 0.0350; strict 0.602 |
+  1.21 | 0.0380 (image/stack conversions miss the fast path, as in alias).
 - **S6 stacks + Rust data anywhere** (pw64-platform stack.rs, memmap.rs):
   1. Reserve the whole stack window (`SEARCH_END − SEARCH_START`) as one block at a high
      address (same candidate scheme as RDRAM, distinct low 32 bits); stack.rs keeps a
      `BASE` (default `SEARCH_START`) and every slot/`stack_slot_of`/`in_live_stack`/
-     `map_fixed` computation goes through it; register `Region { vbase: 0x8080_0000,
-     size: SEARCH_END − SEARCH_START, host: BASE }` instead of the identity one.
+     `map_fixed` computation goes through it; `register_regions` then registers
+     `Region { vbase: 0x8080_0000, size: SEARCH_END − SEARCH_START, host: BASE }`
+     instead of the identity one.
   2. Audit Rust-owned memory the C stores as 32 bits (grep pw64-platform for pointers
      returned to C: `Box::into_raw`, `as *mut c_void`, `OSMesg` payloads, eep/pi
      buffers). Each one moves into a registered region (statics in the image are
      covered by S7) or the C keeps it as a full pointer; document the list here.
   3. Tests: stack.rs unit tests take a base; os/tests.rs range check uses the region.
 - **S7 image anywhere** (build.rs, dylib.rs, memmap.rs, crash.rs):
-  1. Register the exe image as `Region { vbase: 0xC000_0000, host: exe start }` and
-     the module as `vbase: 0xB000_0000`; then drop `/BASE` + `/DYNAMICBASE:NO` (Windows),
+  1. In `register_regions`, turn the identity image regions into `Region { vbase:
+     0xC000_0000, host: exe start }` and module `vbase: 0xB000_0000`; then drop `/BASE` + `/DYNAMICBASE:NO` (Windows),
      `--no-pie --image-base` (Linux: C objects need `-fPIC`), `DLL_BASE`,
      `reserve_module_range` and the module `/FIXED`, and `check_low_4gb`'s image asserts.
   2. Check function pointers and `&global` stored in u32 slots go through the macros
      (display lists already do); crash.rs symbolises by real ranges, not constants.
-  3. The fast path then misses for image addresses (static dlists, globals): measure;
-     if "rest" grows > 0.005 ms, add a second inline region to `pw64_vmap`.
+  3. Image and stack addresses already miss the fast path in strict mode: "rest"
+     +0.003 ms over off (S5), under the 0.005 ms bar for a second inline region
+     in `pw64_vmap`; re-measure once both are relocated.
 - S8: make relocation the default, delete the window/reservation code.
 
 ## Performance (inline fast path, measured after S2)
