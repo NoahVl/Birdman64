@@ -24,6 +24,7 @@
 //! fill_screen = true       # no letterbox bars (`PW64_FILL_SCREEN`; default: follows widescreen)
 //! display_mode = "windowed" # "windowed", "borderless" or "exclusive" (`PW64_DISPLAY_MODE`)
 //! fullscreen_resolution = "1920x1080@60" # exclusive video mode WxH[@Hz] (`PW64_FULLSCREEN_RES`)
+//! linux_window = "auto"    # Linux: "auto", "wayland" or "x11" (`PW64_LINUX_WINDOW`)
 //! no_audio = true          # no output device (`PW64_NO_AUDIO`)
 //! volume = 0.8             # output volume 0..1 (settings screen)
 //! show_fps = false         # frame rate in the window title (settings screen)
@@ -160,6 +161,9 @@ pub struct Graphics {
     pub display_mode: Option<String>,
     /// The exclusive video mode, "WxH[@Hz]" (`opts::parse_resolution`).
     pub fullscreen_resolution: Option<String>,
+    /// Linux window system, "auto" / "wayland" / "x11"
+    /// (`opts::parse_linux_window`).
+    pub linux_window: Option<String>,
     /// U25: the window title shows the frame rate; default off.
     pub show_fps: bool,
     pub no_audio: bool,
@@ -180,6 +184,7 @@ impl Default for Graphics {
             fill_screen: None,
             display_mode: None,
             fullscreen_resolution: None,
+            linux_window: None,
             show_fps: false,
             no_audio: false,
             volume: 1.0,
@@ -477,6 +482,14 @@ fn from_table(table: &toml::Table) -> Config {
                     &mut ignored,
                     "use WxH or WxH@Hz, no zeros",
                     |s| opts::parse_resolution(s).is_some(),
+                );
+                cfg.graphics.linux_window = checked_string(
+                    g,
+                    "linux_window",
+                    "graphics.linux_window",
+                    &mut ignored,
+                    "use auto, wayland or x11",
+                    |s| opts::parse_linux_window(s).is_some(),
                 );
                 cfg.graphics.no_audio =
                     bool_of(g, "no_audio", "graphics.no_audio", &mut ignored, false);

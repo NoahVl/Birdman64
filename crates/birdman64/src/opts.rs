@@ -442,6 +442,68 @@ pub fn allows_tearing(fps: Fps, monitor_mhz: Option<u32>) -> bool {
 /// unavailable on this surface, and what took its place.
 static PRESENT_FALLBACK: std::sync::Once = std::sync::Once::new();
 
+/// Linux: which window system the game window uses (`PW64_LINUX_WINDOW`,
+/// `[graphics] linux_window`): "auto" (default), "wayland" or "x11".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinuxWindow {
+    Auto,
+    Wayland,
+    X11,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) const LINUX_WINDOW_DEFAULT: &str = "auto";
+
+pub(crate) fn parse_linux_window(v: &str) -> Option<LinuxWindow> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(LinuxWindow::Auto),
+        "wayland" => Some(LinuxWindow::Wayland),
+        "x11" => Some(LinuxWindow::X11),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn linux_window() -> LinuxWindow {
+    let env = env_opt(
+        "PW64_LINUX_WINDOW",
+        "use auto, wayland or x11",
+        parse_linux_window,
+    );
+    // Config values were validated at load.
+    let cfg = crate::config::get()
+        .graphics
+        .linux_window
+        .as_deref()
+        .and_then(parse_linux_window);
+    precedence(env, cfg, parse_linux_window(LINUX_WINDOW_DEFAULT).unwrap())
+}
+
+/// A hybrid-graphics machine with an NVIDIA GPU: the DRM devices' PCI
+/// `vendors` hold NVIDIA (0x10de) and at least one other vendor.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn hybrid_nvidia(vendors: &[u32]) -> bool {
+    vendors.contains(&0x10de) && vendors.iter().any(|&v| v != 0x10de)
+}
+
+/// Open the window through X11 (XWayland) instead of native Wayland? Only
+/// on a Wayland session with an X server (`DISPLAY`). `Auto`: on a hybrid
+/// NVIDIA laptop, where the native Wayland window froze before the main
+/// menu (KWin, NVIDIA renders, AMD drives the panel; game and audio kept
+/// running) in every present setup but V-Sync / a fixed 60 fps, while the
+/// same build under XWayland worked.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn prefer_x11(wayland: bool, x11: bool, hybrid_nvidia: bool, mode: LinuxWindow) -> bool {
+    if !wayland || !x11 {
+        return false;
+    }
+    match mode {
+        LinuxWindow::Auto => hybrid_nvidia,
+        LinuxWindow::Wayland => false,
+        LinuxWindow::X11 => true,
+    }
+}
+
 /// Whether switching present mode `a` → `b` changes nothing on screen:
 /// AutoVsync is Fifo (always supported), so no reconfigure is needed.
 pub fn same_present_mode(a: wgpu::PresentMode, b: wgpu::PresentMode) -> bool {
@@ -761,6 +823,35 @@ mod tests {
             let modes = usable_present_modes(all_modes.clone(), wl, vendor);
             assert_eq!(present_mode(false, true, false, &modes), Pm::Mailbox);
         }
+    }
+
+    /// `auto` picks X11 only on Wayland + X server + hybrid NVIDIA; the
+    /// explicit modes override, but never pick a backend that isn't there.
+    #[test]
+    fn linux_window_choice() {
+        use super::{LinuxWindow as Lw, hybrid_nvidia, parse_linux_window, prefer_x11};
+        assert_eq!(parse_linux_window(" X11"), Some(Lw::X11));
+        assert_eq!(parse_linux_window("wayland"), Some(Lw::Wayland));
+        assert_eq!(
+            parse_linux_window(super::LINUX_WINDOW_DEFAULT),
+            Some(Lw::Auto)
+        );
+        assert_eq!(parse_linux_window("yes"), None);
+        assert!(hybrid_nvidia(&[0x1002, 0x10de]));
+        assert!(hybrid_nvidia(&[0x10de, 0x8086]));
+        assert!(!hybrid_nvidia(&[0x10de]), "desktop NVIDIA keeps Wayland");
+        assert!(!hybrid_nvidia(&[0x10de, 0x10de]));
+        assert!(!hybrid_nvidia(&[0x1002, 0x8086]));
+        assert!(prefer_x11(true, true, true, Lw::Auto));
+        assert!(!prefer_x11(true, true, false, Lw::Auto));
+        assert!(
+            !prefer_x11(false, true, true, Lw::Auto),
+            "plain X11 session"
+        );
+        assert!(!prefer_x11(true, false, true, Lw::Auto), "no XWayland");
+        assert!(!prefer_x11(true, true, true, Lw::Wayland));
+        assert!(prefer_x11(true, true, false, Lw::X11));
+        assert!(!prefer_x11(true, false, false, Lw::X11));
     }
 
     /// Tearing is allowed only when the player asked for more than the

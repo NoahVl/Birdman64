@@ -7,11 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Linux: `linux_window` setting in `pw64.toml` (`auto`, `wayland` or `x11`)
+  to choose between a native Wayland window and X11 (XWayland).
+
 ### Fixed
 
-- Linux (Wayland) with an NVIDIA GPU: the picture no longer freezes on the
-  title screen, and the game no longer crashes when the window is resized
-  (for example right after choosing Start game).
+- Linux (Wayland) on laptops with an NVIDIA GPU next to an AMD or Intel one:
+  the picture no longer freezes before the main menu, and the game no longer
+  crashes right after choosing Start game. The game now opens its window
+  through X11 (XWayland) on these laptops.
 - Linux: the first-start ROM tip now names the AppImage (or the birdman64
   program) instead of Birdman64.exe.
 

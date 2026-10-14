@@ -543,6 +543,26 @@ struct App {
     settings_shot_frame: u8,
 }
 
+/// PCI vendor ids of the DRM devices (`/sys/class/drm/cardN/device/vendor`,
+/// connector entries like `card0-HDMI-A-1` skipped) for
+/// `opts::hybrid_nvidia`. Empty when sysfs is unreadable.
+#[cfg(target_os = "linux")]
+fn drm_vendors() -> Vec<u32> {
+    let Ok(dir) = std::fs::read_dir("/sys/class/drm") else {
+        return Vec::new();
+    };
+    dir.flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.strip_prefix("card")
+                .is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .filter_map(|e| std::fs::read_to_string(e.path().join("device/vendor")).ok())
+        .filter_map(|s| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok())
+        .collect()
+}
+
 /// Opens the window and runs the game in it. `setup`: the game module still
 /// has to be built (first-run feature; always false otherwise): the window
 /// shows the setup screen first. `ask_rom`: no ROM is loaded yet (no file
@@ -550,7 +570,23 @@ struct App {
 pub fn run(setup: bool, ask_rom: bool) -> ! {
     #[cfg(not(feature = "first-run"))]
     let _ = setup;
-    let el = match EventLoop::<UserEvent>::with_user_event().build() {
+    #[allow(unused_mut)]
+    let mut builder = EventLoop::<UserEvent>::with_user_event();
+    #[cfg(target_os = "linux")]
+    if opts::prefer_x11(
+        std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        std::env::var_os("DISPLAY").is_some(),
+        opts::hybrid_nvidia(&drm_vendors()),
+        opts::linux_window(),
+    ) {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        eprintln!(
+            "[window] using X11 (XWayland) instead of Wayland; \
+             [graphics] linux_window = \"wayland\" to change"
+        );
+        builder.with_x11();
+    }
+    let el = match builder.build() {
         Ok(el) => el,
         Err(e) => {
             eprintln!("error: no window system ({e}); set PW64_HEADLESS=1");
