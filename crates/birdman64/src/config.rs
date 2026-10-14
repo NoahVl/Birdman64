@@ -33,7 +33,7 @@
 //! frametime = false        # frame time in ms next to the counter
 //! graph = false            # frame-time graph
 //! lows = false             # 1% low fps
-//! cpu = false              # process CPU load
+//! cpu = false              # busiest thread's load (% of one core)
 //! gpu = false              # GPU load estimate
 //! corner = "top_right"     # top_left, top_right, bottom_left, bottom_right
 //!

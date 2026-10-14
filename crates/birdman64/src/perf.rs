@@ -22,7 +22,7 @@
 use crate::settings;
 use crate::window::Gpu;
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -32,6 +32,11 @@ const HISTORY: usize = 300;
 const GRAPH_SAMPLES: usize = 120;
 /// The fps number averages over this long.
 const FPS_WINDOW: Duration = Duration::from_millis(500);
+/// A longer gap between presents is a pause (settings open, minimized),
+/// not a hitch; shorter ones, however bad, belong in the graph.
+const PAUSE_GAP: Duration = Duration::from_secs(5);
+/// The GPU waiter stops waiting after this long.
+const GPU_GIVE_UP: Duration = Duration::from_millis(250);
 /// CPU load is sampled this often.
 const CPU_PERIOD: Duration = Duration::from_millis(500);
 
@@ -48,8 +53,8 @@ impl Corner {
     pub const ALL: [Corner; 4] = [
         Corner::TopLeft,
         Corner::TopRight,
-        Corner::BottomLeft,
         Corner::BottomRight,
+        Corner::BottomLeft,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -231,7 +236,7 @@ pub struct Stats {
     /// ahead of the display: those frames were skipped (judder).
     frames: VecDeque<(f32, u32)>,
     last: Option<Instant>,
-    /// (when, frame count) for the fps window.
+    /// (when, present count) for the fps window.
     window_start: Option<Instant>,
     window_frames: u32,
     pub fps: f32,
@@ -242,10 +247,7 @@ impl Stats {
     /// interval is kept whole (not split by `n`): a skip must show up.
     pub fn frame(&mut self, now: Instant, n: u32) {
         // The game was paused (settings open, minimized): not a slow frame.
-        if self
-            .last
-            .is_some_and(|l| now.duration_since(l) > Duration::from_millis(500))
-        {
+        if self.last.is_some_and(|l| now.duration_since(l) > PAUSE_GAP) {
             self.reset_gap();
         }
         if let Some(last) = self.last {
@@ -257,7 +259,8 @@ impl Stats {
         }
         self.last = Some(now);
         let start = *self.window_start.get_or_insert(now);
-        self.window_frames += n;
+        // Presents, not game frames: the counter matches the graph.
+        self.window_frames += 1;
         let dt = now.duration_since(start);
         if dt >= FPS_WINDOW {
             self.fps = self.window_frames as f32 / dt.as_secs_f32();
@@ -316,8 +319,13 @@ pub struct Hud {
     started: Instant,
     pub stats: Stats,
     pending: u32,
-    cpu: Option<f32>,
-    cpu_at: Option<(Instant, HashMap<u32, f64>)>,
+    /// Busiest-thread load in tenths of a percent (`u32::MAX` = none yet),
+    /// written by the sampler thread.
+    cpu: Arc<AtomicU32>,
+    /// Whether the CPU row is on (the sampler idles and forgets when not).
+    cpu_on: Arc<AtomicBool>,
+    cpu_thread: bool,
+    was_on: bool,
     /// GPU busy estimate in microseconds, written by the waiter thread.
     gpu_us: Arc<AtomicU32>,
     /// Frame-submitted timestamps for the waiter thread (spawned on first
@@ -340,8 +348,10 @@ impl Hud {
             started: Instant::now(),
             stats: Stats::default(),
             pending: 0,
-            cpu: None,
-            cpu_at: None,
+            cpu: Arc::new(AtomicU32::new(u32::MAX)),
+            cpu_on: Arc::new(AtomicBool::new(false)),
+            cpu_thread: false,
+            was_on: false,
             gpu_us: Arc::new(AtomicU32::new(0)),
             gpu_tx: None,
             gpu_smooth: None,
@@ -365,27 +375,54 @@ impl Hud {
         }
     }
 
+    /// The process's thread list is long (a Toolhelp snapshot covers every
+    /// thread on the system), so a helper thread samples twice a second and
+    /// the render thread only reads the result.
     fn sample_cpu(&mut self) {
-        let now = Instant::now();
-        if let Some((t, _)) = &self.cpu_at
-            && now.duration_since(*t) < CPU_PERIOD
-        {
+        self.cpu_on.store(true, Ordering::Relaxed);
+        if self.cpu_thread {
             return;
         }
-        let Some(threads) = thread_cpu_secs() else {
-            return;
-        };
-        if let Some((t, prev)) = &self.cpu_at {
-            let wall = now.duration_since(*t).as_secs_f64();
-            self.cpu = Some(top_thread_pct(prev, &threads, wall));
-        }
-        self.cpu_at = Some((now, threads));
+        self.cpu_thread = true;
+        let (on, out) = (self.cpu_on.clone(), self.cpu.clone());
+        std::thread::Builder::new()
+            .name("pw64-perf-cpu".into())
+            .spawn(move || {
+                let mut prev: Option<(Instant, HashMap<u32, f64>)> = None;
+                loop {
+                    std::thread::sleep(CPU_PERIOD);
+                    if !on.load(Ordering::Relaxed) {
+                        prev = None;
+                        out.store(u32::MAX, Ordering::Relaxed);
+                        continue;
+                    }
+                    let now = Instant::now();
+                    let Some(threads) = thread_cpu_secs() else {
+                        continue;
+                    };
+                    if let Some((t, p)) = &prev {
+                        let wall = now.duration_since(*t).as_secs_f64();
+                        let pct = top_thread_pct(p, &threads, wall);
+                        out.store((pct * 10.0) as u32, Ordering::Relaxed);
+                    }
+                    prev = Some((now, threads));
+                }
+            })
+            .ok();
+    }
+
+    /// Forgets the history (settings opened, window minimized): the gap
+    /// is not a hitch.
+    pub fn pause(&mut self) {
+        self.stats.reset_gap();
+        self.pending = 0;
     }
 
     /// Times how long the GPU takes to finish what was just submitted. A
-    /// helper thread blocks in `device.poll(Wait)` (a queue callback only
-    /// fires when something else polls, which reads as a full frame); the
-    /// render thread never waits.
+    /// helper thread polls for the queue-done callback (a blocking
+    /// `poll(Wait)` holds wgpu locks the render thread's submit/present
+    /// need, which would serialise CPU and GPU and distort what it
+    /// measures); the render thread never waits.
     fn sample_gpu(&mut self, gpu: &Gpu) {
         let us = self.gpu_us.swap(0, Ordering::Relaxed);
         if us > 0 {
@@ -394,12 +431,20 @@ impl Hud {
         }
         let tx = self.gpu_tx.get_or_insert_with(|| {
             let (tx, rx) = std::sync::mpsc::sync_channel::<Instant>(1);
-            let (device, out) = (gpu.device.clone(), self.gpu_us.clone());
+            let (device, queue, out) = (gpu.device.clone(), gpu.queue.clone(), self.gpu_us.clone());
             std::thread::Builder::new()
                 .name("pw64-perf-gpu".into())
                 .spawn(move || {
                     for t0 in rx {
-                        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+                        let done = Arc::new(AtomicBool::new(false));
+                        let d = done.clone();
+                        queue.on_submitted_work_done(move || d.store(true, Ordering::Release));
+                        // Non-blocking polls; give up after a while (lost
+                        // device) rather than spin forever.
+                        while !done.load(Ordering::Acquire) && t0.elapsed() < GPU_GIVE_UP {
+                            let _ = device.poll(wgpu::PollType::Poll);
+                            std::thread::sleep(Duration::from_micros(300));
+                        }
                         let us = t0.elapsed().as_micros().clamp(1, u128::from(u32::MAX));
                         out.store(us as u32, Ordering::Relaxed);
                     }
@@ -415,17 +460,29 @@ impl Hud {
     pub fn render(&mut self, gpu: &Gpu, view: &wgpu::TextureView) {
         let c = cfg();
         if !c.any() {
-            self.cpu_at = None;
+            self.cpu_on.store(false, Ordering::Relaxed);
+            self.was_on = false;
             return;
+        }
+        // Switched on again: no stale numbers from the last time.
+        if !self.was_on {
+            self.was_on = true;
+            self.stats = Stats::default();
+            self.pending = 0;
+            self.gpu_smooth = None;
         }
         if c.cpu {
             self.sample_cpu();
+        } else {
+            self.cpu_on.store(false, Ordering::Relaxed);
         }
         if c.gpu {
             self.sample_gpu(gpu);
+        } else {
+            self.gpu_smooth = None;
+            self.gpu_us.store(0, Ordering::Relaxed);
         }
         let ppp = gpu.window.scale_factor() as f32;
-        // A bit smaller than the settings zoom: this is a corner readout.
         let zoom = settings::ui_zoom(gpu.config.height, ppp);
         if (self.ctx.zoom_factor() - zoom).abs() > f32::EPSILON {
             self.ctx.set_zoom_factor(zoom);
@@ -506,7 +563,10 @@ impl Hud {
                             }
                         }
                         if c.cpu {
-                            let v = self.cpu.map_or("--".to_string(), |p| format!("{p:.0}%"));
+                            let v = match self.cpu.load(Ordering::Relaxed) {
+                                u32::MAX => "--".to_string(),
+                                t => format!("{:.0}%", t as f32 / 10.0),
+                            };
                             stat_row(ui, "CPU core", &v, 12.0, fg, dim);
                         }
                         if c.gpu {
@@ -660,8 +720,8 @@ mod tests {
             assert_eq!(Corner::parse(c.as_str()), Some(c));
         }
         assert_eq!(Corner::parse("middle"), None);
-        assert_eq!(Corner::TopRight.step(1), Corner::BottomLeft);
-        assert_eq!(Corner::TopLeft.step(-1), Corner::BottomRight);
+        assert_eq!(Corner::TopRight.step(1), Corner::BottomRight);
+        assert_eq!(Corner::TopLeft.step(-1), Corner::BottomLeft);
     }
 
     #[test]

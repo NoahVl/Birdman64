@@ -1413,6 +1413,8 @@ impl App {
     /// Opens/closes the settings overlay: pause the OS core (threads sit in
     /// their waits; the clock freezes) and hand the pads to the overlay.
     fn toggle_settings(&mut self) {
+        // Opening/closing pauses the game: not a hitch for the overlay.
+        self.perf.pause();
         // First-run setup screen: no game to pause yet.
         if !self.game_started() {
             return;

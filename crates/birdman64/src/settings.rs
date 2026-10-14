@@ -2766,7 +2766,8 @@ fn help(row: Row) -> &'static str {
                 "A tiny graph of recent frame times. Spikes are stutters; green is smooth."
             }
             Opt::PerfCpu => {
-                "How busy the game's busiest thread keeps one processor core. Near 100% means \n                 the processor is the limit, however many cores you have."
+                "How busy the game's busiest thread keeps one processor core. Near 100% means \
+                 the processor is the limit, however many cores you have."
             }
             Opt::PerfGpu => {
                 "An estimate of how busy your graphics card is. At 100% the graphics card \
