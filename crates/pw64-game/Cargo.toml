@@ -16,6 +16,10 @@ static = ["dep:pw64-kernel"]
 # ports in the exe; the game module (DLL/.so, built on the player's machine
 # with zig) is loaded at runtime at 0xB0000000 (src/dylib.rs).
 dylib = []
+# Image anywhere (docs/notes/option-a.md S7): no fixed exe base (Windows
+# ASLR, Linux PIE), no fixed module base; the images are vaddr regions.
+# Such a build has no fixed-window mode (PW64_RELOC defaults to strict).
+reloc = []
 
 [[test]]
 name = "kernel_diff"

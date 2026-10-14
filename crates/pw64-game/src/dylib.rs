@@ -1,5 +1,6 @@
 //! `dylib` feature: the game C lives in a module built on the player's machine
-//! (docs/notes/first-run-build.md), loaded here at a fixed base below 4 GB.
+//! (docs/notes/first-run-build.md), loaded here at a fixed base below 4 GB
+//! (`reloc` feature: anywhere, a vaddr region at 0xB0000000; option-a.md S7).
 //!
 //! The module (`pw64game.dll` / `libpw64game.so`) has no imports from the
 //! exe: its calls into Rust go through jump slots that [`load`] fills via
@@ -94,7 +95,7 @@ extern "C" fn lookup(name: *const c_char) -> *const c_void {
         .map_or(core::ptr::null(), |(_, f)| f.0)
 }
 
-/// Loads the module at [`DLL_BASE`], checks its ABI string, binds its imports
+/// Loads the module at [`DLL_BASE`] (`reloc`: anywhere), checks its ABI string, binds its imports
 /// and resolves the entry points. Errors are player-facing sentences.
 pub fn load(path: &Path) -> Result<(), String> {
     if GAME.get().is_some() {
@@ -142,7 +143,9 @@ fn bind_module(h: *mut c_void, path: &Path) -> Result<(), String> {
         let (mut start, mut end) = (core::ptr::null(), core::ptr::null());
         range_fn(&mut start, &mut end);
         let range = (start as usize, end as usize);
-        if range.0 != DLL_BASE {
+        // `reloc`: the module is linked without a fixed base and loads
+        // anywhere (memmap::register_regions maps it to 0xB0000000).
+        if !crate::memmap::RELOC_BUILD && range.0 != DLL_BASE {
             return Err(format!(
                 "{} loaded at {:#x}, not {DLL_BASE:#x} (address range taken)",
                 path.display(),

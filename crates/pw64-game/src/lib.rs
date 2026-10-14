@@ -227,9 +227,14 @@ mod tests {
     }
 
     /// `memmap::init` maps the window at a fixed address: once per process.
+    /// Regions too (no-op without `PW64_RELOC`; the `reloc` build's strict
+    /// default needs them before the C runs).
     fn init_once() {
         static INIT: std::sync::Once = std::sync::Once::new();
-        INIT.call_once(|| println!("{}", super::memmap::init()));
+        INIT.call_once(|| {
+            println!("{}", super::memmap::init());
+            super::memmap::register_regions();
+        });
     }
 
     /// The test exe gets the same low fixed base as `pw64` (build.rs), so the
@@ -237,8 +242,8 @@ mod tests {
     #[test]
     fn memmap_low_4gb() {
         init_once();
-        // The window is usable.
-        let p = super::memmap::RDRAM_BASE as *mut u32;
+        // The window is usable (the high block in a `reloc` build).
+        let p = super::memmap::rdram_host() as *mut u32;
         unsafe {
             p.write_volatile(0x1234_5678);
             assert_eq!(p.read_volatile(), 0x1234_5678);

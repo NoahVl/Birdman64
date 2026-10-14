@@ -101,7 +101,8 @@ fn main() {
     sys::single_instance();
     // RDRAM window at 0x80000000 + checks that the exe (linked at 0xC0000000
     // by build.rs: Windows /BASE, Linux non-PIE) is addressable by the C's
-    // 32-bit pointers with bit 31 set.
+    // 32-bit pointers with bit 31 set (`reloc` build: no fixed bases, the
+    // image is a vaddr region; option-a.md S7).
     eprintln!("{}", pw64_game::memmap::init());
     // `--build-game` (or `PW64_BUILD_ONLY=1`): build or verify the game
     // module, then exit without a ROM or window (release smoke test, T11).

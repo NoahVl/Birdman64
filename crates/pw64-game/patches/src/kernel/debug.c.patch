@@ -67,11 +67,11 @@
  
 +#ifdef PW64_NATIVE
 +static void pw64DbgFixupVtx(void) {
-+    // Option C: the exe image lies below 4 GB, so the truncation is lossless.
-+    D_8024B5A8[0].words.w1 = (u32)(size_t)D_8024B348;
-+    D_8024B5B8[0].words.w1 = (u32)(size_t)D_8024B428;
-+    D_8024B5B8[1].words.w1 = (u32)(size_t)D_8024B518;
-+    D_8024B5D0[0].words.w1 = (u32)(size_t)D_8024B528;
++    // Image addresses reach the 32-bit word as vaddrs (option-a.md).
++    D_8024B5A8[0].words.w1 = PW64_U32(D_8024B348);
++    D_8024B5B8[0].words.w1 = PW64_U32(D_8024B428);
++    D_8024B5B8[1].words.w1 = PW64_U32(D_8024B518);
++    D_8024B5D0[0].words.w1 = PW64_U32(D_8024B528);
 +}
 +#else
 +#define pw64DbgFixupVtx()

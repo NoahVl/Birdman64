@@ -15,8 +15,10 @@ fn alias_views_share_rdram() {
     assert!(high >> 32 != 0, "high view {high:#x}");
     assert_eq!(vaddr::to_host(0x803D_A800), high + 0x3D_A800);
     assert_eq!(vaddr::to_vaddr(high + 0x3D_A800), 0x803D_A800);
-    // Stacks / image stay low and pass through.
+    // Stacks stay low and pass through; the exe image is its region.
     assert_eq!(vaddr::to_vaddr(0x8090_0000), 0x8090_0000);
+    let (e0, _) = memmap::exe_range();
+    assert_eq!(vaddr::to_vaddr(e0 + 0x10), memmap::EXE_VBASE + 0x10);
     // One block, two views.
     let low = RDRAM_BASE as *mut u32;
     let hi = high as *mut u32;

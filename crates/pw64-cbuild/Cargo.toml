@@ -9,6 +9,9 @@ license.workspace = true
 # First-run decomp download (fetch.rs): ureq + rustls + zip. Build scripts
 # (pw64-game build.rs) don't need it; the builder example and T9 do.
 fetch = ["dep:ureq", "dep:zip"]
+# Link the game module without a fixed base (docs/notes/option-a.md S7):
+# Windows ASLR, Linux plain -shared. Part of the build key (link_args).
+reloc = []
 
 [dependencies]
 # Decomp manifest (manifest.rs): per-file sha256 of the decomp sources,

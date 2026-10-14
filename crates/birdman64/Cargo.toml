@@ -17,6 +17,9 @@ static-game = ["pw64-game/static"]
 # Release: no decomp code in the exe; the game module is built on the
 # player's machine and loaded at runtime (docs/notes/first-run-build.md).
 first-run = ["pw64-game/dylib", "dep:pw64-cbuild"]
+# Relocatable exe + game module (docs/notes/option-a.md S7): no fixed image
+# bases; runs only with PW64_RELOC alias/strict (default strict).
+reloc = ["pw64-game/reloc", "pw64-cbuild?/reloc"]
 
 [dependencies]
 pw64-game = { path = "../pw64-game", default-features = false }

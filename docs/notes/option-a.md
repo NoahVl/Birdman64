@@ -37,11 +37,12 @@ Android). Game output must stay bit-identical to the fixed-window build at every
   Android/Linux: map with a high hint; Windows: `MEM_TOP_DOWN` or fixed high tries.
 - **Regions** (vaddr → host): RDRAM 0x80000000 + 8 MB; coroutine stacks
   0x80800000..0xA0000000 (one block reserved up front, registered once; stays
-  < 0xA0000000 so libultra's 29-bit `K0_TO_PHYS` keeps them); game image (static exe
-  at 0xC0000000, dylib module at 0xB0000000). `set_regions` is once-only: register
-  after `dylib::load`, before `bootproc`.
+  < 0xA0000000 so libultra's 29-bit `K0_TO_PHYS` keeps them); game images at fixed
+  vaddrs (exe 0xC0000000, dylib module 0xB0000000) wherever they load (S7).
+  `set_regions` is once-only: register after `dylib::load`, before `bootproc`.
 - **Co-existence:** the switch is runtime, in the same binary: no regions = old
-  model. `PW64_RELOC=alias|strict` (S4/S5) selects relocation.
+  model. `PW64_RELOC=alias|strict` (S4/S5) selects relocation. Images anywhere
+  needs the `reloc` cargo feature (S7): a separate build with no fixed-window mode.
   Remove the fixed window/base code once strict mode passes the full sweep
   (sweep.md) on Windows + Linux and has shipped in one release.
 
@@ -192,22 +193,68 @@ clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs
   (6 interleaved, medians, avg | p99 | rest): pre-S6 0.587 | 1.19 | 0.0342; default
   0.610 | 1.24 | 0.0345; strict 0.519 | 0.99 | 0.0367 (+0.002 rest: no second inline
   region needed).
-- **S7 image anywhere** (build.rs, dylib.rs, memmap.rs, crash.rs):
-  1. In `register_regions`, turn the identity image regions into `Region { vbase:
-     0xC000_0000, host: exe start }` and module `vbase: 0xB000_0000`; then drop `/BASE` + `/DYNAMICBASE:NO` (Windows),
-     `--no-pie --image-base` (Linux: C objects need `-fPIC`), `DLL_BASE`,
-     `reserve_module_range` and the module `/FIXED`, and `check_low_4gb`'s image asserts.
-  2. Check function pointers and `&global` stored in u32 slots go through the macros
-     (display lists already do); crash.rs symbolises by real ranges, not constants.
-  3. Image and stack addresses already miss the fast path in strict mode: "rest"
-     +0.002 ms over off with stacks relocated (S6), under the 0.005 ms bar for a
-     second inline region in `pw64_vmap`; re-measure with the image relocated.
-  4. Ordering: today the image (0xC0000000 host, low) sorts below RDRAM/stacks
-     (high), unlike its vaddrs; relocated above them it matches again. Keep the
-     image's 64 KB alignment (true for PE/ELF loads), like S6 did for stacks.
-  5. Strict + high heap stay the audit tool; the image's Rust statics (`osTvType`,
-     `osViModeTable`, ucode symbols) become C-visible through the exe region.
-- S8: make relocation the default, delete the window/reservation code.
+- S7 **done** (image anywhere): `memmap::image_regions` maps the exe to vaddr
+  `EXE_VBASE` 0xC0000000 and the module to `MODULE_VBASE` 0xB0000000 at their real
+  host ranges (asserts: exe ≤ 1 GB, module ≤ 256 MB); registered in alias and
+  strict (identity in the fixed-base build, so behaviour there is unchanged).
+  `check_low_4gb` skips its image/heap/stack asserts when `PW64_RELOC` is set.
+- One exe can't do both: default mode needs the image at 0xC0000000, which only a
+  fixed, non-ASLR link guarantees (Linux: non-PIE ET_EXEC; a PIE ignores its base;
+  a Windows `/DYNAMICBASE` image always moves). So the cargo feature `reloc`
+  (birdman64 → pw64-game, pw64-cbuild): pw64-game build.rs exports no base args
+  (Windows: rustc's `/DYNAMICBASE /HIGHENTROPYVA`, ASLR above 4 GB; Linux: PIE; the
+  C objects were already RIP-relative), the module links with lld's defaults (no
+  `-base -fixed -dynamicbase:no`, no `--image-base`: other flags hash, other cache
+  key), `bind_module` skips the `DLL_BASE` check, `init` skips the module
+  reservation, and `PW64_RELOC` defaults to strict (`off` is refused). The default
+  build's link args, module flags hash and cache key are unchanged.
+- C straggler found: debug.c.patch `pw64DbgFixupVtx` stored `(u32)(size_t)&vtx` in
+  Gfx words (an explicit cast, invisible to `-Werror`); now `PW64_U32`. Grep for
+  `(size_t)`/`uintptr` in patches + native: only pointer differences remain.
+- Rust statics the C reads by address live in the exe image, so in its region; the
+  dylib shim has its own. crash.rs and `hle_readable` already used real ranges.
+- Gate: default 7/7 (static, first-run). `reloc` static (exe at 0x7ff6…) and
+  first-run (module at 0x7ffd…): 6/7, frame 1800 = the S4-S6 hash; RDRAM diffs vs
+  off = 8-byte host pointers (RDRAM, exe or module) + ≤ 6 csplayer words. 16 strict
+  sweep flows: no panic or crash.log, every frame = S6 strict. Alias also 6/7.
+- Perf (6 interleaved, medians, avg | p99 | rest): pre-S1 0.585 | 1.21 | 0.0343;
+  default 0.629 | 1.28 | 0.0356 (= S6's exe, 0.641 | 1.27 | 0.0347, run alongside);
+  `reloc` strict 0.512 | 0.98 | 0.0357. Rest +0.0001 ms: no second inline region.
+  Host order now matches vaddr order for RDRAM < stacks < images; exe vs module
+  order is whatever the loader picks.
+
+## Flipping the default (S8, after a release with `reloc`) and port prerequisites
+
+- Needs first: a production relocated mode = strict minus the audits: `System`
+  allocator (high_heap is an audit arena), no no-access reservation of the old
+  windows (macOS can't map below 4 GB at all), panics on a miss kept (cold path).
+  Fix the frame-1800 glyph over-read (it samples host-pointer bytes, which ASLR
+  makes differ per run: exact-hash dumps would flake). crash.rs should print
+  `exe+0x…` like `pw64game+0x…`, since the exe base changes per run.
+- Then make `reloc` the only build and delete: pw64-game build.rs
+  `LOW_BASE_LINK_ARGS(_LINUX)` and the `low_base_link_args` export (birdman64
+  build.rs keeps only `PW64_MAP`); pw64-cbuild's fixed module link args; dylib.rs
+  `DLL_BASE`, `reserve_module_range`, `sys::reserve/release`; firstrun.rs
+  `RangeTaken` (its "close overlays" message and test); memmap `Reloc::Off`/`Alias`,
+  the fixed window and alias mappings, `check_low_4gb`/`assert_low`/`image_range`,
+  `RELOC_BUILD`; stack.rs's fixed-window default (`SEARCH_START` stays a vaddr);
+  vaddr.rs identity-region acceptance and `VMap::IDENTITY` as the live default;
+  lib.rs `memmap_low_4gb`; the fixed-base text in native-build.md §2/§10 and
+  first-run-build.md.
+- Windows: rustc's defaults (`/DYNAMICBASE /HIGHENTROPYVA`, base 0x140000000) put
+  the exe at a random base above 4 GB per boot; the module gets ASLR too. Gains:
+  no "address range taken" failures (overlays/AV), no LNK4281 ignore, ordinary
+  CFG/ASLR mitigations. Risk: a hidden 32-bit truncation outside the swept flows
+  now truncates a 64-bit address (strict panics name the site; keep it on).
+- Linux: plain PIE (no `--no-pie`, no crtbegin `R_X86_64_32S` caveat).
+- aarch64 Linux: pw64-game build.rs target gate, zig `--target aarch64-…` flag
+  sets in pw64-cbuild, crash handlers (x86 register names), stack.rs's x86_64
+  TEB asm is Windows-only; corosensei already supports arm64. The high
+  candidates (0x7_2000_0000 + k·4 GB) fit a 39-bit VA.
+- macOS arm64: memmap mapping paths (no `MAP_FIXED_NOREPLACE`: hint + check),
+  no low reservations, ad-hoc code signing of the on-device module.
+- Android: as aarch64 Linux, plus loading the module from app storage
+  (android.md "Building the game module"); no low-4 GB range is needed any more.
 
 ## Performance (inline fast path, measured after S2)
 

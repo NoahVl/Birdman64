@@ -32,9 +32,11 @@ fn strict_regions() {
     assert_eq!(vaddr::to_host(v), hi - 8);
     assert!(memmap::hle_writable(lo, hi - lo));
     drop(s);
-    // The image is an identity region.
+    // The exe image is the region at EXE_VBASE, wherever it loaded
+    // (identity in the fixed-base build).
     let (e0, _) = memmap::exe_range();
-    assert_eq!(vaddr::to_host(e0 as u32), e0);
+    assert_eq!(vaddr::to_host(memmap::EXE_VBASE + 0x10), e0 + 0x10);
+    assert_eq!(vaddr::to_vaddr(e0 + 0x10), memmap::EXE_VBASE + 0x10);
     // ROM offsets / physical values pass; the rest panics.
     assert_eq!(vaddr::to_host(0x3D_A800), 0x3D_A800);
     assert!(std::panic::catch_unwind(|| vaddr::to_host(0xA800_0000)).is_err());

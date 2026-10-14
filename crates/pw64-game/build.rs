@@ -98,7 +98,13 @@ fn main() {
             }]
         })
         .unwrap_or_default();
+    // `reloc` (option-a.md S7): the platform defaults (Windows: /DYNAMICBASE
+    // + /HIGHENTROPYVA, ASLR above 4 GB; Linux: PIE). The C objects are
+    // RIP-relative either way (MSVC_FLAGS / GNU_FLAGS -fPIE), and every C
+    // address reaches a 32-bit slot through the vaddr regions.
+    let reloc = std::env::var_os("CARGO_FEATURE_RELOC").is_some();
     let base_args = match flavor {
+        _ if reloc => &[][..],
         Flavor::Msvc => LOW_BASE_LINK_ARGS,
         Flavor::Gnu => LOW_BASE_LINK_ARGS_LINUX,
     };

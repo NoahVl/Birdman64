@@ -10,6 +10,11 @@
 //!   function address fits in 32 bits and has bit 31 set (the C code treats
 //!   addresses with bit 31 clear as ROM offsets);
 //! - [`check_low_4gb`] asserts all of this at startup.
+//!
+//! `PW64_RELOC=alias|strict` (docs/notes/option-a.md) registers vaddr
+//! regions instead: RDRAM, stacks and the images may then live anywhere.
+//! The `reloc` feature builds an exe (and game module) without the fixed
+//! bases; such a build has no fixed-window mode (see [`RELOC_BUILD`]).
 
 use core::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,6 +25,18 @@ pub const RDRAM_BASE: usize = 0x8000_0000;
 pub const RDRAM_SIZE: usize = 0x80_0000;
 /// Everything the C code can see must lie below this.
 pub const LIMIT_4GB: usize = 1 << 32;
+
+/// Vaddr of the exe image (the fixed base of the default build).
+pub const EXE_VBASE: u32 = 0xC000_0000;
+/// Vaddr of the game module image (`dylib`; the fixed base of the default
+/// build). Its region must end below [`EXE_VBASE`].
+pub const MODULE_VBASE: u32 = 0xB000_0000;
+
+/// `reloc` feature (option-a.md S7): the exe is linked without a fixed base
+/// (Windows ASLR / Linux PIE) and the game module loads anywhere, so C globals
+/// may lie above 4 GB and only work through the vaddr regions. Such a build
+/// has no fixed-window mode: `PW64_RELOC` unset means strict, `off` is refused.
+pub const RELOC_BUILD: bool = cfg!(feature = "reloc");
 
 /// Relocation mode, `PW64_RELOC` (docs/notes/option-a.md).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,16 +49,29 @@ pub enum Reloc {
     Alias,
     /// `strict`: RDRAM mapped once, above 4 GB; the low window is reserved
     /// no-access (an untranslated literal faults at its C site), the same for
-    /// the stack window and the Rust heap (`high_heap`). The image is an
-    /// identity region; any other value with bit 31 set that
-    /// reaches `PW64_U32`/`PW64_PTR` panics (`vaddr::set_strict`).
+    /// the stack window and the Rust heap (`high_heap`). The
+    /// image(s) are regions at their real host addresses (S7); any other
+    /// value with bit 31 set that reaches `PW64_U32`/`PW64_PTR` panics
+    /// (`vaddr::set_strict`).
     Strict,
 }
 
 impl Reloc {
-    /// Parses a `PW64_RELOC` value. Pure.
+    /// Parses a `PW64_RELOC` value for this build ([`RELOC_BUILD`]). Pure.
     pub fn parse(v: Option<&str>) -> Result<Reloc, String> {
+        Self::parse_for(v, RELOC_BUILD)
+    }
+
+    /// [`Self::parse`] for a fixed-base (`reloc_build` false) or a `reloc`
+    /// build: the latter defaults to strict and has no `off`. Pure.
+    pub fn parse_for(v: Option<&str>, reloc_build: bool) -> Result<Reloc, String> {
         match v.map(str::trim) {
+            None | Some("") if reloc_build => Ok(Reloc::Strict),
+            Some("0" | "off") if reloc_build => Err(
+                "PW64_RELOC=off: this is a relocatable build (feature `reloc`), which \
+                 has no fixed-window mode; use alias or strict"
+                    .to_string(),
+            ),
             None | Some("" | "0" | "off") => Ok(Reloc::Off),
             Some("alias") => Ok(Reloc::Alias),
             Some("strict") => Ok(Reloc::Strict),
@@ -353,9 +383,11 @@ fn map_rdram_strict() -> usize {
 /// Registers the vaddr regions for [`Reloc::Alias`] / [`Reloc::Strict`]
 /// (no-op for [`Reloc::Off`]). Call once, after the game module is loaded
 /// (`dylib`: strict mode needs its range) and before `os::boot`.
-/// Alias: RDRAM only (stacks and the image pass through unregistered).
-/// Strict: RDRAM, the coroutine stack window (high, [`init`]), plus
-/// identity regions (`host == vbase`) for the image(s), then
+/// Both: RDRAM, plus the image(s) at their fixed vaddrs ([`image_regions`]:
+/// the exe at [`EXE_VBASE`], the module at [`MODULE_VBASE`], wherever they
+/// were loaded; identity in the fixed-base build).
+/// Alias: the stacks pass through unregistered (they stay at their vaddrs).
+/// Strict: also the coroutine stack window (high, [`init`]), then
 /// `vaddr::set_strict`.
 pub fn register_regions() {
     use pw64_platform::os::stack::{self, SEARCH_START, WINDOW_SIZE};
@@ -370,30 +402,51 @@ pub fn register_regions() {
         host: rdram_host(),
     }];
     if mode == Reloc::Strict {
-        let ident = |(start, end): (usize, usize)| {
-            assert_low("identity vaddr region", start, end - start);
-            Region {
-                vbase: start as u32,
-                size: (end - start) as u32,
-                host: start,
-            }
-        };
         // Stacks: the high window `init` reserved (S6).
         regions.push(Region {
             vbase: SEARCH_START as u32,
             size: WINDOW_SIZE as u32,
             host: stack::window().0,
         });
-        #[cfg(feature = "dylib")]
-        regions.push(ident(
-            module_range().expect("strict mode: register regions after dylib::load"),
-        ));
-        regions.push(ident(exe_range()));
     }
+    #[cfg(feature = "dylib")]
+    let module = Some(module_range().expect("PW64_RELOC: register regions after dylib::load"));
+    #[cfg(not(feature = "dylib"))]
+    let module = None;
+    regions.extend(image_regions(exe_range(), module));
     vaddr::set_regions(regions);
     if mode == Reloc::Strict {
         vaddr::set_strict();
     }
+}
+
+/// The vaddr regions of the exe image `exe` (at [`EXE_VBASE`]) and the game
+/// module image `module` (at [`MODULE_VBASE`]), `[start, end)` host ranges
+/// loaded anywhere (option-a.md S7). Panics if an image does not fit its
+/// vaddr range (exe: up to 4 GB, module: up to [`EXE_VBASE`]). Pure.
+pub fn image_regions(
+    exe: (usize, usize),
+    module: Option<(usize, usize)>,
+) -> Vec<pw64_platform::vaddr::Region> {
+    let region = |what: &str, (start, end): (usize, usize), vbase: u32, limit: u64| {
+        let size = end - start;
+        assert!(
+            vbase as u64 + size as u64 <= limit,
+            "{what} image {start:#x}..{end:#x} does not fit its vaddr range \
+             {vbase:#x}..{limit:#x}"
+        );
+        pw64_platform::vaddr::Region {
+            vbase,
+            size: size as u32,
+            host: start,
+        }
+    };
+    let mut v: Vec<_> = module
+        .map(|m| region("game module", m, MODULE_VBASE, EXE_VBASE as u64))
+        .into_iter()
+        .collect();
+    v.push(region("exe", exe, EXE_VBASE, LIMIT_4GB as u64));
+    v
 }
 
 /// `(start, end)` of this exe's loaded image (code, data, BSS).
@@ -440,13 +493,17 @@ unsafe extern "C" {
 }
 
 /// `(start, end)` of everything the C's code and globals live in: the exe
-/// image (`static`: all C globals), plus (`dylib`) the game module below it
-/// at 0xB0000000. hle.rs maps this range 1:1 (the gap between the two holds
-/// nothing C-visible).
+/// image (`static`: all C globals), plus (`dylib`) the game module (below it
+/// at 0xB0000000 in the fixed-base build; anywhere with `reloc`). Only
+/// [`check_low_4gb`] uses the span; the gap between the two holds nothing
+/// C-visible.
 pub fn image_range() -> (usize, usize) {
     let (start, end) = exe_image_range();
     #[cfg(feature = "dylib")]
-    let start = start.min(crate::dylib::game().range.0);
+    let (start, end) = {
+        let m = crate::dylib::game().range;
+        (start.min(m.0), end.max(m.1))
+    };
     (start, end)
 }
 
@@ -515,20 +572,25 @@ fn c_samples() -> (usize, usize) {
 /// Asserts that everything the C code sees lies below 4 GB: the exe image
 /// (all C globals and functions, bit 31 set) and the RDRAM window (plus, on
 /// Windows, the host heap and the current stack). Returns a one-line summary
-/// of the addresses.
+/// of the addresses. With `PW64_RELOC` set the image checks are skipped: the
+/// images are vaddr regions at [`EXE_VBASE`]/[`MODULE_VBASE`] wherever they
+/// load ([`register_regions`]; `set_regions` checks them).
 pub fn check_low_4gb() -> String {
+    let fixed = Reloc::get() == Reloc::Off;
     let (img0, img1) = image_range();
-    assert_low("exe image", img0, img1 - img0);
-    assert!(
-        img0 >= RDRAM_BASE + RDRAM_SIZE,
-        "exe image at {img0:#x}: must be above the RDRAM window (bit 31 set = RAM for the C)"
-    );
-    // Implied by the two checks above, stated for the reader: the C treats
-    // `(u32)p & 0x80000000 == 0` as a ROM offset (memory.c, filesystem.c).
-    assert!(
-        img0 & 0x8000_0000 != 0 && (img1 - 1) & 0x8000_0000 != 0,
-        "exe image {img0:#x}..{img1:#x} must have bit 31 set (else the C reads it as ROM)"
-    );
+    if fixed {
+        assert_low("exe image", img0, img1 - img0);
+        assert!(
+            img0 >= RDRAM_BASE + RDRAM_SIZE,
+            "exe image at {img0:#x}: must be above the RDRAM window (bit 31 set = RAM for the C)"
+        );
+        // Implied by the two checks above, stated for the reader: the C treats
+        // `(u32)p & 0x80000000 == 0` as a ROM offset (memory.c, filesystem.c).
+        assert!(
+            img0 & 0x8000_0000 != 0 && (img1 - 1) & 0x8000_0000 != 0,
+            "exe image {img0:#x}..{img1:#x} must have bit 31 set (else the C reads it as ROM)"
+        );
+    }
     let (c_global, c_func) = c_samples();
     for (what, a) in [("C global", c_global), ("C function", c_func)] {
         assert!(
@@ -547,12 +609,11 @@ pub fn check_low_4gb() -> String {
     // `osTvType` live in the image), and it runs on the pw64-platform
     // coroutine stacks (0x80800000..). On Linux both are high (glibc brk is
     // randomised up to 1 GB past the image; stacks at 0x7ff…), so only report.
-    // Strict mode moves the heap above 4 GB on purpose (high_heap.rs).
+    // Strict mode moves the heap above 4 GB on purpose (high_heap.rs), and
+    // a `reloc` exe (high-entropy ASLR) may get both high.
     #[cfg(windows)]
-    {
-        if Reloc::get() != Reloc::Strict {
-            assert_low("host heap", heap, 8);
-        }
+    if fixed {
+        assert_low("host heap", heap, 8);
         assert_low("stack", stack, 1);
     }
     format!(
@@ -574,9 +635,10 @@ pub fn check_low_4gb() -> String {
 pub fn init() -> String {
     map_rdram_window();
     let stacks = pw64_platform::os::stack::reserve_region();
-    #[cfg(feature = "dylib")]
+    // `reloc`: the module has no fixed range (dylib.rs).
+    #[cfg(all(feature = "dylib", not(feature = "reloc")))]
     let module = crate::dylib::reserve_module_range();
-    #[cfg(not(feature = "dylib"))]
+    #[cfg(not(all(feature = "dylib", not(feature = "reloc"))))]
     let module = false;
     let mut reserved = format!("reserved: stacks {stacks}, module {module}");
     match Reloc::get() {
@@ -615,11 +677,18 @@ mod tests {
 
     #[test]
     fn reloc_parse() {
-        assert_eq!(Reloc::parse(None), Ok(Reloc::Off));
-        assert_eq!(Reloc::parse(Some("off")), Ok(Reloc::Off));
-        assert_eq!(Reloc::parse(Some(" alias ")), Ok(Reloc::Alias));
-        assert_eq!(Reloc::parse(Some("strict")), Ok(Reloc::Strict));
-        assert!(Reloc::parse(Some("on")).is_err());
+        let p = |v| Reloc::parse_for(v, false);
+        assert_eq!(p(None), Ok(Reloc::Off));
+        assert_eq!(p(Some("off")), Ok(Reloc::Off));
+        assert_eq!(p(Some(" alias ")), Ok(Reloc::Alias));
+        assert_eq!(p(Some("strict")), Ok(Reloc::Strict));
+        assert!(p(Some("on")).is_err());
+        // A `reloc` build: strict by default, no fixed window.
+        let r = |v| Reloc::parse_for(v, true);
+        assert_eq!(r(None), Ok(Reloc::Strict));
+        assert_eq!(r(Some("")), Ok(Reloc::Strict));
+        assert_eq!(r(Some("alias")), Ok(Reloc::Alias));
+        assert!(r(Some("off")).is_err() && r(Some("0")).is_err());
         // A truncated high view must not land in the low window.
         assert!(alias_candidates().all(|a| a >> 32 != 0 && (a as u32) & 0x8000_0000 == 0));
     }
@@ -632,6 +701,24 @@ mod tests {
         assert!(!range_holds(r, 0x1ffc, 8));
         assert!(!range_holds(r, 0xffc, 8));
         assert!(!range_holds(r, usize::MAX - 2, 4));
+    }
+
+    /// Images map to their fixed vaddrs wherever they load; one that would
+    /// overrun its vaddr range is refused.
+    #[test]
+    fn image_regions_fixed_vbases() {
+        let exe = (0x7FF6_1234_0000, 0x7FF6_1534_0000);
+        let m = (0x7FFA_0000_0000, 0x7FFA_0200_0000);
+        let r = image_regions(exe, Some(m));
+        let parts = |i: usize| (r[i].vbase, r[i].size, r[i].host);
+        assert_eq!(parts(0), (MODULE_VBASE, 0x200_0000, m.0));
+        assert_eq!(parts(1), (EXE_VBASE, 0x300_0000, exe.0));
+        // The fixed-base build: identity.
+        let r = image_regions((0xC000_0000, 0xC100_0000), None);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].host, r[0].vbase as usize);
+        let big = std::panic::catch_unwind(|| image_regions(exe, Some((0, 0x1000_0001))));
+        assert!(big.is_err());
     }
 
     /// Reads cover the exe image; writes never do (no code patching).

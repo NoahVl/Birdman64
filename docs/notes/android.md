@@ -21,6 +21,10 @@ behind `cfg(target_os = "android")`, the same way the Windows and Linux splits w
 
 ## Address space
 
+**Status:** option A is implemented through S7 on desktop (option-a.md): RDRAM,
+stacks and images may live anywhere (`reloc` build, plain `dlopen`). Left for Android:
+the S8 production mode and the aarch64/module-loading items in option-a.md "Flipping the default".
+
 The C needs every C-visible address to be < 4 GB with bit 31 set (native-build.md §2
 option C). This comes from the C's data model, not from linking: display lists, ROM
 structs, the allocator and the filesystem hold addresses in 32-bit fields, there are

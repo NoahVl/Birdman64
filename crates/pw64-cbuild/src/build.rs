@@ -193,8 +193,23 @@ pub fn flags_hash_host() -> String {
 /// The constant linker argument list (before the map/output/script path
 /// arguments [`build_module`] appends): the Windows `lld-link` invocation
 /// and the Linux `ld.lld` one, `spike_build.sh` step 4. Hashed into the
-/// build key via [`flags_hash`].
+/// build key via [`flags_hash`]. `reloc` feature (option-a.md S7): no fixed
+/// base (Windows: lld-link's DLL defaults, ASLR with high entropy; Linux: no
+/// `--image-base`, ld.so maps it anywhere), so the key differs too.
 pub fn link_args(os: Os) -> Vec<String> {
+    #[cfg(not(feature = "reloc"))]
+    const WIN_BASE: &[&str] = &[
+        "-base:0xB0000000",
+        "-fixed",
+        "-dynamicbase:no",
+        "-highentropyva:no",
+    ];
+    #[cfg(feature = "reloc")]
+    const WIN_BASE: &[&str] = &[];
+    #[cfg(not(feature = "reloc"))]
+    const LINUX_BASE: &[&str] = &["--image-base=0xB0000000"];
+    #[cfg(feature = "reloc")]
+    const LINUX_BASE: &[&str] = &[];
     match os {
         Os::Windows => [
             "lld-link",
@@ -204,10 +219,10 @@ pub fn link_args(os: Os) -> Vec<String> {
             "-nodefaultlib",
             "-machine:x64",
             "-Brepro",
-            "-base:0xB0000000",
-            "-fixed",
-            "-dynamicbase:no",
-            "-highentropyva:no",
+        ]
+        .iter()
+        .chain(WIN_BASE)
+        .chain(&[
             "-opt:ref",
             "-opt:icf",
             "-export:bootproc",
@@ -221,22 +236,15 @@ pub fn link_args(os: Os) -> Vec<String> {
             "-export:pw64_split_hint,DATA",
             "-export:D_802B892C,DATA",
             "-export:pw64_vmap,DATA",
-        ]
-        .iter()
+        ])
         .map(|s| s.to_string())
         .collect(),
-        Os::Linux => [
-            "ld.lld",
-            "-shared",
-            "-Bsymbolic",
-            "--eh-frame-hdr",
-            "--image-base=0xB0000000",
-            "-z",
-            "noexecstack",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect(),
+        Os::Linux => ["ld.lld", "-shared", "-Bsymbolic", "--eh-frame-hdr"]
+            .iter()
+            .chain(LINUX_BASE)
+            .chain(&["-z", "noexecstack"])
+            .map(|s| s.to_string())
+            .collect(),
     }
 }
 
