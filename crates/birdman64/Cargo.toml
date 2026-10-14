@@ -46,6 +46,13 @@ egui.workspace = true
 egui-wgpu.workspace = true
 resvg.workspace = true
 
+# Process CPU time for the performance overlay (perf.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [build-dependencies]
 # Windows exe resource (pw64.rc: icon + VERSIONINFO; build.rs gates on the
 # target OS so Linux-target clippy/cross builds stay clean).

@@ -27,7 +27,15 @@
 //! linux_window = "auto"    # Linux: "auto", "wayland" or "x11" (`PW64_LINUX_WINDOW`)
 //! no_audio = true          # no output device (`PW64_NO_AUDIO`)
 //! volume = 0.8             # output volume 0..1 (settings screen)
-//! show_fps = false         # frame rate in the window title (settings screen)
+//! show_fps = false         # FPS counter overlay (settings: Performance overlay)
+//!
+//! [perf]                   # performance overlay extras, all off by default
+//! frametime = false        # frame time in ms next to the counter
+//! graph = false            # frame-time graph
+//! lows = false             # 1% low fps
+//! cpu = false              # process CPU load
+//! gpu = false              # GPU load estimate
+//! corner = "top_right"     # top_left, top_right, bottom_left, bottom_right
 //!
 //! [input]                  # settings-screen triggers (default: F10 / Select)
 //! settings_key = "F10"
@@ -82,6 +90,9 @@ pub struct Config {
     pub splitscreen: Splitscreen,
     /// `[oled]`: OLED care for the flight HUD (drift + brightness).
     pub oled: Oled,
+    /// `[perf]`: the performance overlay's extras (its fps counter is
+    /// `[graphics] show_fps`, merged in `perf::cfg`).
+    pub perf: crate::perf::Cfg,
     pub rom: Rom,
     pub ui: Ui,
     /// Keys skipped at load (wrong type or invalid value; see `ignored_keys`).
@@ -572,6 +583,31 @@ fn from_table(table: &toml::Table) -> Config {
         }
     }
 
+    if let Some(v) = table.get("perf") {
+        match v.as_table() {
+            Some(p) => {
+                let b =
+                    |k: &str, ig: &mut Vec<String>| bool_of(p, k, &format!("perf.{k}"), ig, false);
+                cfg.perf.frametime = b("frametime", &mut ignored);
+                cfg.perf.graph = b("graph", &mut ignored);
+                cfg.perf.lows = b("lows", &mut ignored);
+                cfg.perf.cpu = b("cpu", &mut ignored);
+                cfg.perf.gpu = b("gpu", &mut ignored);
+                if let Some(c) = checked_string(
+                    p,
+                    "corner",
+                    "perf.corner",
+                    &mut ignored,
+                    "use top_left, top_right, bottom_left or bottom_right",
+                    |s| crate::perf::Corner::parse(s).is_some(),
+                ) {
+                    cfg.perf.corner = crate::perf::Corner::parse(&c).unwrap_or_default();
+                }
+            }
+            None => ignore(&mut ignored, "perf", v, "must be a [perf] table"),
+        }
+    }
+
     if let Some(v) = table.get("splitscreen") {
         match v.as_table() {
             Some(ss) => {
@@ -733,6 +769,9 @@ pub struct SavedSettings {
     /// Split-screen view layout (`[splitscreen] layout`, the
     /// `SplitLayout::to_config` spelling; None = leave as-is).
     pub split_layout: Option<&'static str>,
+    /// Performance overlay extras (`[perf]`; None = leave as-is). The fps
+    /// counter itself is `show_fps`.
+    pub perf: Option<crate::perf::Cfg>,
 }
 
 /// Writes the screen's settings into `pw64.toml`. The file is round-tripped
@@ -874,6 +913,8 @@ fn builtin_default(section: &str, key: &str, low_end: bool) -> Option<toml::Valu
         // monitor's current video mode), not a value, so they are removed
         // by the `""` / `Some(None)` sentinels in `apply`, never compared.
         ("graphics", "widescreen" | "fill_screen" | "fullscreen_resolution") => None,
+        ("perf", "corner") => Some(crate::perf::Corner::default().as_str().into()),
+        ("perf", _) => Some(false.into()),
         ("oled", "drift") => Some(Oled::default().drift.into()),
         ("oled", "brightness") => Some(float(Oled::default().brightness)),
         // U26: background pausing is on until the player turns it off.
@@ -1076,6 +1117,32 @@ pub(crate) fn apply(
         }
         if let Some(v) = u.split_layout {
             sput("layout", v.into());
+        }
+    }
+    // Performance overlay extras: own table, defaults removed like the rest.
+    if let Some(p) = u.perf {
+        let pt = table
+            .entry("perf")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let toml::Value::Table(pt) = pt else {
+            return Err("[perf] is not a table in pw64.toml; not saved".to_string());
+        };
+        for (k, v) in [
+            ("frametime", toml::Value::from(p.frametime)),
+            ("graph", p.graph.into()),
+            ("lows", p.lows.into()),
+            ("cpu", p.cpu.into()),
+            ("gpu", p.gpu.into()),
+            ("corner", p.corner.as_str().into()),
+        ] {
+            if builtin_default("perf", k, low_end).as_ref() == Some(&v) {
+                pt.remove(k);
+            } else {
+                pt.insert(k.into(), v);
+            }
+        }
+        if pt.is_empty() {
+            table.remove("perf");
         }
     }
     // Input maps (R1): a Save that includes bindings replaces the

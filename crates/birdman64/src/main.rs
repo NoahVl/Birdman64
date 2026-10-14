@@ -30,6 +30,7 @@ mod packs;
 mod pad_art;
 mod pad_sprites;
 mod paths;
+mod perf;
 mod rom_screen;
 mod rom_setup;
 mod settings;

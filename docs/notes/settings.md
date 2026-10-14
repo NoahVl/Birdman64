@@ -584,3 +584,9 @@ Code: `crates/birdman64/src/settings.rs` (overlay + nav + config write), hooks i
   `PW64_MAX_RETRACES`, which implies headless; kill the process after the shot).
 - "Assign player 2" row (`Row::P2Assign`, under the P2 controller row; greyed while staged Split is Off): confirm arms `input::start_source_capture` (gilrs press -> `Gamepad(Some(name))`, `name#k` when several connected pads share the name, in the same `ButtonPressed` arm as the Bind capture; BLE press = button edge vs the published `s.ble` in the poll loop -> `Ble`; key via `on_key` -> `Keyboard`); `apply_p2` restages `p2_choices`/`p2_sel` + live `set_p2`, same 5 s timeout as Bind captures.
 - Limits: a pad's `#k` same-name index follows connect order, so unplugging/replugging can swap which pad is #2; a BLE press+release between two polls is missed; F10/F11 are ignored while armed (hotkeys).
+
+## Performance overlay
+
+- `perf.rs`: `Hud` (egui card over the frame, like toasts; zero work while all options are off), `Stats` (frame-interval ring, fps over 0.5 s, 1% low = fps at the 99th-percentile frame time of the last 300 frames; a >0.5 s gap resets, so pauses aren't "slow frames").
+- Options: `[graphics] show_fps` (counter) + `[perf]` frametime/graph/lows/cpu/gpu/corner; Settings > Performance overlay page, all live via `perf::set_cfg` in `apply_live`, saved as one `SavedSettings::perf`.
+- CPU = the busiest thread's CPU time (Toolhelp + `GetThreadTimes` / `/proc/self/task/*/stat`) over wall time, % of ONE core: a whole-process figure divided by logical cores reads ~1% on many-core PCs. GPU is an estimate: a helper thread blocks in `device.poll(Wait)` after each submit (a queue callback only fires on the next poll, ~1 frame late); busy ms × fps; includes work queued ahead of it.

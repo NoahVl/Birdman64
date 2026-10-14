@@ -74,7 +74,7 @@ corosensei = "0.3"
 # Shared C-build plumbing: pw64-game build.rs + the first-run builder.
 pw64-cbuild = { path = "crates/pw64-cbuild" }# Linux: mmap of the fixed-address RDRAM window / coroutine stacks, SIGSEGV tracer.
 libc = "0.2"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Kernel", "Win32_System_Threading"] }
 # Windows exe resource (icon + VERSIONINFO, crates/birdman64/pw64.rc + build.rs):
 # host-compiling MSVC rc.exe from the Windows Kits registry/vswhom, with the
 # `RC` env override; a missing rc.exe degrades to no icon (manifest_optional).

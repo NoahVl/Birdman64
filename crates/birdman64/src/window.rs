@@ -530,6 +530,8 @@ struct App {
     rom_screen: Option<crate::rom_screen::Screen>,
     /// Toast notifications (bottom-left; the first-launch settings hint).
     toast: crate::toast::Toast,
+    /// Optional performance overlay (perf.rs); nothing drawn while all off.
+    perf: crate::perf::Hud,
     /// The first-launch hint has been handled this run (once, whatever the
     /// outcome: the config flag alone can't gate it, it is read once).
     hint_shown: bool,
@@ -617,6 +619,7 @@ pub fn run(setup: bool, ask_rom: bool) -> ! {
         setup_frame: Instant::now(),
         rom_screen: ask_rom.then(crate::rom_screen::Screen::new),
         toast: crate::toast::Toast::new(),
+        perf: crate::perf::Hud::new(),
         hint_shown: false,
         settings_shot: crate::hle::env_list("PW64_SETTINGS_SHOT").first().copied(),
         settings_shot_frame: 0,
@@ -1181,6 +1184,7 @@ impl App {
         }
         if q.frames > 0 {
             self.frames += q.frames;
+            self.perf.frames(q.frames as u32);
             self.presented += 1;
             self.first_frame_hint();
         }
@@ -1285,6 +1289,8 @@ impl App {
         // Toasts (S2): over the game frame, before the shot readback (shots
         // show them) and before the overlay.
         self.toast.render(g, &view);
+        // Performance overlay (opt-in; shots show it like the toasts).
+        self.perf.render(g, &view);
         // Once per frame number (redraws without a new frame don't re-shoot;
         // a number skipped by a multi-frame drain shoots at the next one).
         if let Some(i) = g.shots.iter().position(|&n| n <= self.presented) {
