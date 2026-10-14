@@ -6,9 +6,10 @@
 //! surface, own pass with `LoadOp::Load`). With everything off it does no
 //! egui or GPU work at all, so game rendering is untouched.
 //!
-//! - **Frame rate / frame time:** from the intervals between game frames
-//!   (`UserEvent::Frame`), not between redraws, so it is the game's rate even
-//!   while the window redraws for other reasons.
+//! - **Frame rate / frame time:** the time between presented frames (what the
+//!   eye sees: a missed refresh is a long bar). A present that shows more than
+//!   one new game frame means the display skipped some: it is drawn as a
+//!   full-height red bar, never averaged away.
 //! - **CPU:** the busiest thread's CPU time over wall time, as a percentage
 //!   of one core (the game, audio and window each run on their own thread;
 //!   a game is limited by its busiest thread, and a whole-process figure
@@ -225,8 +226,10 @@ fn top_thread_pct(prev: &HashMap<u32, f64>, now: &HashMap<u32, f64>, wall: f64) 
 /// Frame-time statistics, kept apart from the drawing so they unit-test.
 #[derive(Default)]
 pub struct Stats {
-    /// Frame intervals in ms, oldest first.
-    frames: VecDeque<f32>,
+    /// (interval in ms between presents, game frames that present showed),
+    /// oldest first. More than one game frame in a present = the game ran
+    /// ahead of the display: those frames were skipped (judder).
+    frames: VecDeque<(f32, u32)>,
     last: Option<Instant>,
     /// (when, frame count) for the fps window.
     window_start: Option<Instant>,
@@ -235,8 +238,8 @@ pub struct Stats {
 }
 
 impl Stats {
-    /// `n` game frames arrived at `now` (more than 1 when a redraw skipped
-    /// some: the interval is split evenly).
+    /// A frame was presented at `now` showing `n` new game frames. The
+    /// interval is kept whole (not split by `n`): a skip must show up.
     pub fn frame(&mut self, now: Instant, n: u32) {
         // The game was paused (settings open, minimized): not a slow frame.
         if self
@@ -246,13 +249,11 @@ impl Stats {
             self.reset_gap();
         }
         if let Some(last) = self.last {
-            let ms = now.duration_since(last).as_secs_f32() * 1000.0 / n.max(1) as f32;
-            for _ in 0..n {
-                if self.frames.len() == HISTORY {
-                    self.frames.pop_front();
-                }
-                self.frames.push_back(ms);
+            let ms = now.duration_since(last).as_secs_f32() * 1000.0;
+            if self.frames.len() == HISTORY {
+                self.frames.pop_front();
             }
+            self.frames.push_back((ms, n.max(1)));
         }
         self.last = Some(now);
         let start = *self.window_start.get_or_insert(now);
@@ -274,11 +275,11 @@ impl Stats {
     }
 
     pub fn latest_ms(&self) -> Option<f32> {
-        self.frames.back().copied()
+        self.frames.back().map(|f| f.0)
     }
 
     pub fn median_ms(&self) -> Option<f32> {
-        let mut v: Vec<f32> = self.frames.iter().copied().collect();
+        let mut v: Vec<f32> = self.frames.iter().map(|f| f.0).collect();
         if v.is_empty() {
             return None;
         }
@@ -289,7 +290,7 @@ impl Stats {
     /// "1% low" fps: the frame rate at the 99th percentile frame time of
     /// the history (the slowest 1% of frames are at least this slow).
     pub fn low_1pct_fps(&self) -> Option<f32> {
-        let mut v: Vec<f32> = self.frames.iter().copied().collect();
+        let mut v: Vec<f32> = self.frames.iter().map(|f| f.0).collect();
         if v.len() < 30 {
             return None;
         }
@@ -298,7 +299,12 @@ impl Stats {
         (v[i] > 0.0).then(|| 1000.0 / v[i])
     }
 
-    fn graph(&self) -> impl Iterator<Item = f32> + '_ {
+    /// Game frames the display never showed, over the history.
+    pub fn skipped(&self) -> u32 {
+        self.frames.iter().map(|f| f.1 - 1).sum()
+    }
+
+    fn graph(&self) -> impl Iterator<Item = (f32, u32)> + '_ {
         let skip = self.frames.len().saturating_sub(GRAPH_SAMPLES);
         self.frames.iter().skip(skip).copied()
     }
@@ -309,6 +315,7 @@ pub struct Hud {
     renderer: Option<egui_wgpu::Renderer>,
     started: Instant,
     pub stats: Stats,
+    pending: u32,
     cpu: Option<f32>,
     cpu_at: Option<(Instant, HashMap<u32, f64>)>,
     /// GPU busy estimate in microseconds, written by the waiter thread.
@@ -332,6 +339,7 @@ impl Hud {
             renderer: None,
             started: Instant::now(),
             stats: Stats::default(),
+            pending: 0,
             cpu: None,
             cpu_at: None,
             gpu_us: Arc::new(AtomicU32::new(0)),
@@ -340,10 +348,20 @@ impl Hud {
         }
     }
 
-    /// Call per drained game frame batch.
+    /// Game frames drained since the last present.
     pub fn frames(&mut self, n: u32) {
         if cfg().any() {
-            self.stats.frame(Instant::now(), n);
+            self.pending += n;
+        } else {
+            self.pending = 0;
+        }
+    }
+
+    /// Call right after a present: times it against the previous one.
+    pub fn presented(&mut self) {
+        if self.pending > 0 {
+            self.stats.frame(Instant::now(), self.pending);
+            self.pending = 0;
         }
     }
 
@@ -473,6 +491,19 @@ impl Hud {
                         }
                         if c.graph {
                             graph(ui, st, med);
+                            // Only while the history holds skips: keeps the card
+                            // quiet when everything is smooth.
+                            if st.skipped() > 0 {
+                                let v = st.skipped().to_string();
+                                stat_row(
+                                    ui,
+                                    "Skipped",
+                                    &v,
+                                    12.0,
+                                    egui::Color32::from_rgb(235, 90, 80),
+                                    dim,
+                                );
+                            }
                         }
                         if c.cpu {
                             let v = self.cpu.map_or("--".to_string(), |p| format!("{p:.0}%"));
@@ -522,7 +553,8 @@ fn stat_row(
 }
 
 /// Frame-time bars: height ∝ ms (full height = 3× the median), green near
-/// the median, yellow when 1.5× slower, red when 2.5× slower.
+/// the median, yellow when 1.5× slower, red when 2.5× slower or when the
+/// present skipped game frames.
 fn graph(ui: &mut egui::Ui, st: &Stats, median: f32) {
     let size = egui::vec2(GRAPH_SAMPLES as f32, 30.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -535,9 +567,16 @@ fn graph(ui: &mut egui::Ui, st: &Stats, median: f32) {
     // Right-aligned: the newest frame sits at the right edge.
     let n = st.graph().count();
     let x0 = rect.right() - n as f32;
-    for (i, ms) in st.graph().enumerate() {
-        let h = (ms / (median * 3.0)).clamp(0.04, 1.0) * rect.height();
-        let col = if ms > median * 2.5 {
+    for (i, (ms, n)) in st.graph().enumerate() {
+        // A present that showed several game frames is a skip: full-height
+        // red, whatever its interval.
+        let skipped = n > 1;
+        let h = if skipped {
+            rect.height()
+        } else {
+            (ms / (median * 3.0)).clamp(0.04, 1.0) * rect.height()
+        };
+        let col = if skipped || ms > median * 2.5 {
             egui::Color32::from_rgb(235, 90, 80)
         } else if ms > median * 1.5 {
             egui::Color32::from_rgb(235, 200, 80)
@@ -585,6 +624,18 @@ mod tests {
         feed(&mut s, &v);
         let low = s.low_1pct_fps().unwrap();
         assert!((low - 20.0).abs() < 0.5, "{low}");
+    }
+
+    #[test]
+    fn skipped_game_frames_are_counted_not_averaged_away() {
+        let mut s = Stats::default();
+        let t = Instant::now();
+        s.frame(t, 1);
+        s.frame(t + Duration::from_millis(17), 1);
+        // Two game frames shown by one present.
+        s.frame(t + Duration::from_millis(34), 2);
+        assert_eq!(s.skipped(), 1);
+        assert!(s.latest_ms().unwrap() > 16.0);
     }
 
     #[test]

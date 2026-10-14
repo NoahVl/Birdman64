@@ -1320,6 +1320,7 @@ impl App {
         }
         g.window.pre_present_notify();
         tex.present();
+        self.perf.presented();
         // A frame went out: the OS core's Display pacing (V-Sync) ticks on
         // this counter (crates/pw64-platform/src/os/vi.rs).
         os::vi::VBLANK.fetch_add(1, Ordering::Relaxed);
