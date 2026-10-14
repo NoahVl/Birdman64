@@ -22,6 +22,7 @@
 //!
 //! vsync = false            # V-Sync: display-paced ticks (`PW64_VSYNC`)
 //! fill_screen = true       # no letterbox bars (`PW64_FILL_SCREEN`; default: follows widescreen)
+//! texture_pack = "hd"      # folder name in the data dir's `packs/` (`PW64_TEX_PACKS` wins)
 //! display_mode = "windowed" # "windowed", "borderless" or "exclusive" (`PW64_DISPLAY_MODE`)
 //! fullscreen_resolution = "1920x1080@60" # exclusive video mode WxH[@Hz] (`PW64_FULLSCREEN_RES`)
 //! no_audio = true          # no output device (`PW64_NO_AUDIO`)
@@ -155,6 +156,9 @@ pub struct Graphics {
     /// No letterbox bars around world views (`PW64_FILL_SCREEN`); None =
     /// default follows `widescreen` (`opts::fill_default`).
     pub fill_screen: Option<bool>,
+    /// Texture pack name: a folder in the data dir's `packs/`
+    /// (`opts::texture_pack_dir`). Absent or empty = off (packs not used).
+    pub texture_pack: Option<String>,
     /// How the window goes fullscreen, "windowed" / "borderless" /
     /// "exclusive" (`opts::parse_display_mode`).
     pub display_mode: Option<String>,
@@ -178,6 +182,7 @@ impl Default for Graphics {
             fps: None,
             vsync: false,
             fill_screen: None,
+            texture_pack: None,
             display_mode: None,
             fullscreen_resolution: None,
             show_fps: false,
@@ -375,6 +380,20 @@ fn checked_string(
     }
 }
 
+/// A texture pack name from `pw64.toml`: one plain folder name, resolved
+/// against the data dir's `packs/` (`paths::packs_dir`), so a hand-edited
+/// value can't reach outside it. Separators are rejected explicitly (`\` is
+/// not one off Windows); the component check catches `..` and Windows
+/// drive prefixes like `C:x`, which `Path::join` would treat as a new root.
+fn valid_pack_name(s: &str) -> bool {
+    use std::path::{Component, Path};
+    let n = s.trim();
+    let mut parts = Path::new(n).components();
+    !n.contains(['/', '\\', ':'])
+        && matches!(parts.next(), Some(Component::Normal(_)))
+        && parts.next().is_none()
+}
+
 /// Reads one parsed `pw64.toml` table into validated settings, one key at a
 /// time (S1 review): a value with the wrong type or an invalid value is
 /// warned, skipped and collected in the result's `ignored`, instead of
@@ -462,6 +481,23 @@ fn from_table(table: &toml::Table) -> Config {
                 cfg.graphics.vsync = bool_of(g, "vsync", "graphics.vsync", &mut ignored, false);
                 cfg.graphics.fill_screen =
                     opt_bool_of(g, "fill_screen", "graphics.fill_screen", &mut ignored);
+                cfg.graphics.texture_pack =
+                    match string_of(g, "texture_pack", "graphics.texture_pack", &mut ignored) {
+                        // Absent or empty = off (packs not used); only a
+                        // plain folder name resolves inside `packs/`.
+                        Some(s) if valid_pack_name(&s) => Some(s.trim().to_string()),
+                        Some(s) if s.trim().is_empty() => None,
+                        Some(s) => {
+                            ignore(
+                                &mut ignored,
+                                "graphics.texture_pack",
+                                &s,
+                                "use a folder name from the packs folder",
+                            );
+                            None
+                        }
+                        None => None,
+                    };
                 cfg.graphics.display_mode = checked_string(
                     g,
                     "display_mode",
@@ -680,6 +716,9 @@ pub struct SavedSettings {
     /// Fill screen (None = leave as-is, `Some(None)` = remove the key: the
     /// default follows widescreen).
     pub fill_screen: Option<Option<bool>>,
+    /// Texture pack (`[graphics] texture_pack`; None = leave as-is,
+    /// `Some(None)` = remove the key = off, `Some(Some(name))` = write it).
+    pub texture_pack: Option<Option<String>>,
     /// How the window goes fullscreen ("windowed" / "borderless" /
     /// "exclusive"); None = leave as-is.
     pub display_mode: Option<&'static str>,
@@ -858,9 +897,12 @@ fn builtin_default(section: &str, key: &str, low_end: bool) -> Option<toml::Valu
         ("graphics", "show_fps") => Some(Graphics::default().show_fps.into()),
         // Dynamic defaults: the default is "follow something" (the
         // monitor's aspect for widescreen, widescreen for fill_screen, the
-        // monitor's current video mode), not a value, so they are removed
-        // by the `""` / `Some(None)` sentinels in `apply`, never compared.
-        ("graphics", "widescreen" | "fill_screen" | "fullscreen_resolution") => None,
+        // monitor's current video mode) or "off" (texture_pack), not a
+        // value, so they are removed by the `""` / `Some(None)` sentinels
+        // in `apply`, never compared.
+        ("graphics", "widescreen" | "fill_screen" | "fullscreen_resolution" | "texture_pack") => {
+            None
+        }
         ("oled", "drift") => Some(Oled::default().drift.into()),
         ("oled", "brightness") => Some(float(Oled::default().brightness)),
         // U26: background pausing is on until the player turns it off.
@@ -963,6 +1005,9 @@ pub(crate) fn apply(
         if let Some(Some(v)) = u.fill_screen {
             put("fill_screen", v.into());
         }
+        if let Some(Some(v)) = &u.texture_pack {
+            put("texture_pack", v.clone().into());
+        }
         if let Some(Some(v)) = &u.fullscreen_resolution {
             put("fullscreen_resolution", v.clone().into());
         }
@@ -975,6 +1020,10 @@ pub(crate) fn apply(
     // monitor's current mode).
     if u.fill_screen == Some(None) {
         graphics.remove("fill_screen");
+    }
+    // `Some(None)`: the texture pack default is off (packs not used).
+    if u.texture_pack == Some(None) {
+        graphics.remove("texture_pack");
     }
     // `Some("")`: the widescreen default (the monitor's aspect, D3/S8).
     if u.widescreen.as_deref() == Some("") {
@@ -1674,6 +1723,56 @@ mod tests {
         assert_eq!(fill(&table), Some(true));
         apply(&mut table, &upd(Some(None))).unwrap();
         assert_eq!(fill(&table), None, "back to the default removes the key");
+    }
+
+    /// `[graphics] texture_pack`: a plain folder name parses (trimmed),
+    /// empty = off, anything that could reach outside the packs folder
+    /// (paths, `..`) is ignored with a warning entry, and the settings
+    /// screen's update writes or removes the key.
+    #[test]
+    fn texture_pack_parses_validated_and_round_trips() {
+        // A plain name parses (trimmed); the key absent = off.
+        let c = parse("[graphics]\ntexture_pack = \" red \"\n").unwrap();
+        assert_eq!(c.graphics.texture_pack.as_deref(), Some("red"));
+        let d = parse("[graphics]\nmsaa = 4\n").unwrap();
+        assert_eq!(d.graphics.texture_pack, None);
+        // Empty = off (silently, the documented default).
+        let e = parse("[graphics]\ntexture_pack = \"\"\n").unwrap();
+        assert_eq!(e.graphics.texture_pack, None);
+        assert!(e.ignored.is_empty());
+        // Not a plain folder name: paths and `..` are dropped, only that
+        // key (collected for the toast).
+        for bad in ["../evil", "a/b", "a\\b", "..", ".", "C:/packs", "C:x"] {
+            // Single-quoted TOML literal strings: no escape processing, so
+            // the backslash in "a\b" really reaches the validator.
+            let b = parse(&format!("[graphics]\ntexture_pack = '{bad}'\n")).unwrap();
+            assert_eq!(b.graphics.texture_pack, None, "{bad} rejected");
+            assert!(b.ignored.iter().any(|k| k.contains("texture_pack")));
+        }
+        // A wrong type is ignored like any other key.
+        let b = parse("[graphics]\ntexture_pack = 3\n").unwrap();
+        assert_eq!(b.graphics.texture_pack, None);
+        assert!(b.ignored.iter().any(|k| k.contains("texture_pack")));
+        // Round trip: a choice is written, back to off removes the key.
+        let mut t: toml::Table = toml::from_str("[graphics]\nmsaa = 4\n").unwrap();
+        let upd = |p| SavedSettings {
+            texture_pack: p,
+            ..Default::default()
+        };
+        apply(&mut t, &upd(Some(Some("red".into())))).unwrap();
+        assert_eq!(t["graphics"]["texture_pack"].as_str(), Some("red"));
+        let c = parse(&toml::to_string_pretty(&t).unwrap()).unwrap();
+        assert_eq!(c.graphics.texture_pack.as_deref(), Some("red"));
+        assert_eq!(t["graphics"]["msaa"].as_integer(), Some(4), "survives");
+        apply(&mut t, &upd(Some(None))).unwrap();
+        assert!(
+            t["graphics"].get("texture_pack").is_none(),
+            "off removes the key"
+        );
+        // None leaves the key as-is.
+        apply(&mut t, &upd(Some(Some("red".into())))).unwrap();
+        apply(&mut t, &upd(None)).unwrap();
+        assert_eq!(t["graphics"]["texture_pack"].as_str(), Some("red"));
     }
 
     #[test]

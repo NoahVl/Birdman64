@@ -1,8 +1,11 @@
-//! Texture packs (Phase 6): `PW64_TEX_PACKS=<dir>` replaces decoded
-//! textures with PNGs keyed by their content key (`pw64-gfx` `texture.rs`:
-//! FNV-1a of format, size, covered TMEM bytes + TLUT per bound tile). The
+//! Texture packs (Phase 6): the pack root replaces decoded textures with
+//! PNGs keyed by their content key (`pw64-gfx` `texture.rs`: FNV-1a of
+//! format, size, covered TMEM bytes + TLUT per bound tile). The
 //! `PW64_DUMP_TEX` dump names are the same keys, so a pack is made by
-//! dumping and editing those files.
+//! dumping and editing those files. The root is `opts::texture_pack_dir()`:
+//! `PW64_TEX_PACKS=<dir>` (any path) or the config's
+//! `[graphics] texture_pack = "<name>"`, a folder in the data dir's
+//! `packs/` (`paths::packs_dir`).
 //!
 //! The directory is indexed once at startup, so a texture without a pack
 //! file costs one map lookup, never a file-system probe. A PNG is decoded
@@ -36,16 +39,21 @@ pub struct TexPacks {
 }
 
 impl TexPacks {
-    /// `PW64_TEX_PACKS=<dir>` (relative to the cwd like the other path
-    /// options). Absent/empty → packs off; not a directory → reported, off.
-    pub fn from_env() -> Self {
-        let Some(dir) = std::env::var_os("PW64_TEX_PACKS").filter(|d| !d.is_empty()) else {
+    /// The configured pack root (`opts::texture_pack_dir`, which names its
+    /// source: `PW64_TEX_PACKS` or the config's texture pack name). None →
+    /// packs off; not a directory → reported, off.
+    pub fn load() -> Self {
+        let Some(dir) = crate::opts::texture_pack_dir() else {
             return Self::default();
         };
-        let dir = PathBuf::from(dir);
+        let what = if crate::opts::texture_pack_env() {
+            "PW64_TEX_PACKS"
+        } else {
+            "texture_pack"
+        };
         if !dir.is_dir() {
             eprintln!(
-                "[packs] PW64_TEX_PACKS={}: not a directory - packs off",
+                "[packs] {what}={}: not a directory - packs off",
                 dir.display()
             );
             return Self::default();
@@ -153,6 +161,22 @@ fn hex_key(stem: &str) -> Option<u64> {
     } else {
         None
     }
+}
+
+/// The pack folder names in `root` (the data dir's `packs/`), for the
+/// settings screen's Texture pack row: only subdirectories, sorted
+/// case-insensitively. A missing `root` (no pack folder made yet) is an
+/// empty list.
+pub fn list_packs(root: &Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    out.sort_by_key(|n| n.to_ascii_lowercase());
+    out
 }
 
 /// Pack hash name → file, from `rt64.json` (or the `texture.json` alias).
@@ -441,6 +465,19 @@ mod tests {
         assert_eq!(bridge.len(), 2);
         assert_eq!(bridge[&1], "0001d0556bc980b5");
         assert_eq!(bridge[&2], "61094ee7#4#1");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `list_packs`: the pack folder names, case-insensitively sorted;
+    /// files (and a missing root) are not packs.
+    #[test]
+    fn lists_pack_folders() {
+        let dir = test_dir("list");
+        std::fs::create_dir_all(dir.join("red")).unwrap();
+        std::fs::create_dir_all(dir.join("HD")).unwrap();
+        std::fs::write(dir.join("note.txt"), "x").unwrap();
+        assert_eq!(list_packs(&dir), vec!["HD".to_string(), "red".to_string()]);
+        assert!(list_packs(&dir.join("missing")).is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

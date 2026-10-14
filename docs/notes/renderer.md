@@ -590,6 +590,9 @@ identity tests (`interp_identity`, `render_identity`, all existing placement ass
   `stretch_y`/`vanchor`; `interp_identity`/`render_identity` unchanged.
 
 ## Texture packs (`PW64_TEX_PACKS=<dir>`, `crates/birdman64/src/packs.rs`)
+- Which pack runs: `PW64_TEX_PACKS=<dir>` wins; else `[graphics] texture_pack` names a folder of the data dir's
+  `packs/` (the settings screen's "Texture pack" row picks it, "Open texture packs folder" creates/opens that
+  folder). A config change needs a restart — the index is built once at startup.
 - Key-named files: `<dir>/<16-hex-key>.png` (any case) — the keys are the F3D TMEM content hashes `PW64_DUMP_TEX`
   writes (FNV-1a of format, size, covered TMEM bytes + TLUT per bound tile, "Textures" above). Any PNG colour
   type (expanded to RGBA8), ≤ 8192 per side (renderer also drops mips past the device limit); UVs are normalized.

@@ -149,7 +149,10 @@ button printed B is the N64 A):
   linear or nearest filter
 - The N64's 3-point texture filter (set the filter to `n64`, see
   `PW64_FILTER` below)
-- Texture packs (PNG files, keyed by content hash)
+- Texture packs: PNG folders keyed by texture content hash, in your data
+  dir's `packs` folder — pick one under Settings > Display & graphics >
+  "Texture pack" (a restart applies it) or open the folder from the game
+  with "Open texture packs folder"
 - Optional V-Sync style pacing to remove judder
 - OLED care: the HUD drifts and the screen dims a little to spread wear
 - Gamepads (including Switch 2 controllers over Bluetooth, experimental)
@@ -280,7 +283,7 @@ when both are set:
 | `PW64_ROM=<path>` | which ROM file to use |
 | `PW64_DATA_DIR=<path>` | folder for saves and settings |
 | `PW64_EEP=<path>` | exact save file to use instead of `pw64.eep` |
-| `PW64_TEX_PACKS=<dir>` | replace textures from a PNG pack |
+| `PW64_TEX_PACKS=<dir>` | replace textures from a PNG pack (overrides the in-game "Texture pack" setting) |
 | `PW64_NO_AUDIO=1` | run without an audio device |
 
 The developer variables live in [Developing](#developing).
@@ -444,7 +447,7 @@ environment variables):
 | `PW64_FALLBACK_ADAPTER` | force the fallback graphics adapter |
 | `PW64_CAPTURE_DL=<n[,..]>` | capture real display lists (bench input) |
 | `PW64_BENCH_CAPTURE=<file>` | replay a capture in the interpreter bench |
-| `PW64_DUMP_TEX=1` | write texture-pack keys as PNGs |
+| `PW64_DUMP_TEX=1` | write texture-pack keys as PNGs (a pack is a folder of these `<key>.png` files, named exactly as they are dumped; higher resolutions work) |
 | `PW64_AUDIO_VIRTUAL=1` | silent virtual audio device for stats |
 | `PW64_DUMP_AUDIO=<file>` | dump the audio stream to a WAV |
 | `PW64_AUDIO_STATS` | periodic audio counters and the Acmd histogram at exit |

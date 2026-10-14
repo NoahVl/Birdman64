@@ -132,6 +132,9 @@ enum Row {
     Back,
     /// Main: open the save/data folder in the file manager (U15).
     OpenSaveFolder,
+    /// Graphics: open (creating if missing) the texture packs folder in the
+    /// file manager — where the Texture pack row's choices come from.
+    OpenPacksFolder,
     /// Main: quit the game (two confirms, U3).
     Quit,
     /// Graphics: the restart banner's "Restart now" row (U16). Only on the
@@ -164,6 +167,10 @@ enum Opt {
     Scale,
     Filter,
     TexFilter,
+    /// Texture pack (`[graphics] texture_pack`): the pack folder the game
+    /// replaces decoded textures from (`packs.rs`). Restart-only, exactly
+    /// like Fill screen. Overridden by `PW64_TEX_PACKS` (disabled row).
+    TexturePack,
     Widescreen,
     FillScreen,
     Fps,
@@ -271,6 +278,9 @@ struct Running {
     msaa: u32,
     widescreen: Option<f32>,
     fill_screen: bool,
+    /// The config's texture pack name (None = off); what a restart runs
+    /// with unless `PW64_TEX_PACKS` overrides it (`opts::texture_pack_env`).
+    texture_pack: Option<String>,
 }
 
 /// The S8b keep-resolution countdown: what to go back to when an applied
@@ -300,14 +310,19 @@ pub struct Overlay {
     widescreen_sel: usize,
     /// Staged fill screen (restart-only, like widescreen).
     fill_screen: bool,
+    /// Texture pack choices — Off first, then the pack folders in the data
+    /// dir's `packs/` (`packs::list_packs`, read once at creation) — and the
+    /// staged index. Restart-only, exactly like fill screen.
+    pack_choices: Vec<Option<String>>,
+    texture_pack_sel: usize,
     /// S8: the staged widescreen is the monitor default from "Reset to
     /// defaults": saving removes the key (the file follows the display)
     /// instead of pinning a value. Cleared by any Widescreen row change.
     widescreen_follow: bool,
-    /// S7: the restart-only values (MSAA, widescreen aspect, fill screen)
-    /// this session last saved; `open` stages these instead of the running
-    /// ones while that restart is pending.
-    saved_restart: Option<(u32, Option<f32>, bool)>,
+    /// S7: the restart-only values (MSAA, widescreen aspect, fill screen,
+    /// texture pack) this session last saved; `open` stages these instead of
+    /// the running ones while that restart is pending.
+    saved_restart: Option<(u32, Option<f32>, bool, Option<String>)>,
     fps: Vec<opts::Fps>,
     fps_sel: usize,
     vsync: bool,
@@ -433,6 +448,7 @@ impl Overlay {
             msaa: opts::msaa(),
             widescreen: opts::widescreen(),
             fill_screen: opts::fill_screen(),
+            texture_pack: crate::config::get().graphics.texture_pack.clone(),
         };
         let staged_fill = running.fill_screen;
         // Staged lists up front so the overlay is consistent before open()
@@ -440,6 +456,8 @@ impl Overlay {
         // these in tests).
         let (widescreen, widescreen_sel) = widescreen_choices(running.widescreen);
         let (fps, fps_sel) = fps_choices(opts::Fps::Monitor);
+        // The Texture pack row: Off first, then the packs folder's folders.
+        let (pack_choices, texture_pack_sel) = pack_choices(&running.texture_pack);
         // The Player-2 controller row: the configured routing (the live one
         // while split-screen runs) and the connected pads.
         let saved_p2 = input::p2_current();
@@ -455,6 +473,8 @@ impl Overlay {
             widescreen,
             widescreen_sel,
             fill_screen: staged_fill,
+            pack_choices,
+            texture_pack_sel,
             widescreen_follow: false,
             saved_restart: None,
             split: input::split_wanted(),
@@ -641,14 +661,18 @@ impl Overlay {
     /// `running`. Split-screen (live) stages the game's state, or a switch
     /// still waiting for a menu (the main menu's item may have changed it).
     fn stage_restart_rows(&mut self) {
-        let (msaa, widescreen, fill) = self.saved_restart.unwrap_or((
+        let (msaa, widescreen, fill, pack) = self.saved_restart.clone().unwrap_or((
             self.running.msaa,
             self.running.widescreen,
             self.running.fill_screen,
+            self.running.texture_pack.clone(),
         ));
         self.msaa = msaa;
         (self.widescreen, self.widescreen_sel) = widescreen_choices(widescreen);
         self.fill_screen = fill;
+        // Re-read the packs folder on every open: the player opens it from
+        // here, drops a pack in and comes back to pick it.
+        (self.pack_choices, self.texture_pack_sel) = pack_choices(&pack);
         self.split = input::split_wanted();
         self.widescreen_follow = false;
         // The Player-2 controller row stages the routing as it stands: the
@@ -673,6 +697,7 @@ impl Overlay {
                         self.msaa,
                         choice_aspect(&self.widescreen[self.widescreen_sel]),
                         self.fill_screen,
+                        self.pack_choices[self.texture_pack_sel].clone(),
                     ));
                     let pending = self.pending_restart();
                     if !pending.is_empty() {
@@ -1221,6 +1246,9 @@ impl Overlay {
                     Row::Opt(Opt::Scale),
                     Row::Opt(Opt::Filter),
                     Row::Opt(Opt::TexFilter),
+                    // Restart-only, exactly like Fill screen.
+                    Row::Opt(Opt::TexturePack),
+                    Row::OpenPacksFolder,
                     Row::Opt(Opt::Msaa),
                     // OLED care (O3): live, no restart.
                     Row::Opt(Opt::OledDrift),
@@ -1365,10 +1393,15 @@ impl Overlay {
                     Opt::Scale,
                     Opt::Filter,
                     Opt::TexFilter,
-                    Opt::Msaa,
-                    Opt::OledDrift,
-                    Opt::OledBrightness,
+                    Opt::TexturePack,
                 ] {
+                    self.opt_row(ui, at(Row::Opt(o)), o);
+                }
+                // Where the Texture pack row's folders live (created when
+                // missing on confirm), like "Open save folder" on Main.
+                // Drawn in `rows` order: right under the Texture pack row.
+                self.text_row(ui, at(Row::OpenPacksFolder), "Open texture packs folder");
+                for o in [Opt::Msaa, Opt::OledDrift, Opt::OledBrightness] {
                     self.opt_row(ui, at(Row::Opt(o)), o);
                 }
                 self.text_row(ui, at(Row::ResetGraphics), "Reset to defaults");
@@ -1493,7 +1526,10 @@ impl Overlay {
             // Pilot collisions only matter in split-screen: same greying.
             || (o == Opt::Collisions && !self.split)
             || (o == Opt::ShareScores && !self.split)
-            || (o == Opt::SplitLayout && !self.split);
+            || (o == Opt::SplitLayout && !self.split)
+            // Set by the PW64_TEX_PACKS env var: the config choice has no
+            // effect until it is unset (like Frame rate under V-Sync).
+            || (o == Opt::TexturePack && opts::texture_pack_env());
         if disabled {
             let (name, value, hint) = self.row_text(o);
             let text = format!("{name}: {value}  {hint}");
@@ -1667,6 +1703,18 @@ impl Overlay {
                 },
                 "",
             ),
+            // The env override wins and can't be changed here (row disabled,
+            // like Frame rate under V-Sync).
+            Opt::TexturePack if opts::texture_pack_env() => {
+                ("Texture pack", "Set by PW64_TEX_PACKS".into(), "")
+            }
+            Opt::TexturePack => (
+                "Texture pack",
+                self.pack_choices[self.texture_pack_sel]
+                    .clone()
+                    .unwrap_or_else(|| "Off".into()),
+                "",
+            ),
             Opt::Widescreen => {
                 let staged = &self.widescreen[self.widescreen_sel];
                 (
@@ -1791,6 +1839,9 @@ impl Overlay {
         if self.fill_screen != self.running.fill_screen {
             out.push("Fill screen");
         }
+        if self.pack_choices[self.texture_pack_sel] != self.running.texture_pack {
+            out.push("Texture pack");
+        }
         // Live rows staged but not confirmed yet: Save writes them, so a
         // restart applies them.
         if self.display_mode_choice() != self.running_mode {
@@ -1825,6 +1876,13 @@ impl Overlay {
                 "Fill screen",
                 if self.fill_screen { "On" } else { "Off" }.into(),
                 self.fill_screen != self.running.fill_screen,
+            ),
+            Opt::TexturePack => (
+                "Texture pack",
+                self.pack_choices[self.texture_pack_sel]
+                    .clone()
+                    .unwrap_or_else(|| "Off".into()),
+                self.pack_choices[self.texture_pack_sel] != self.running.texture_pack,
             ),
             _ => return None,
         };
@@ -1880,6 +1938,15 @@ impl Overlay {
             Row::Graphics => self.enter_page(Page::Graphics, Row::Graphics),
             // U15: the save/data folder in the OS file manager.
             Row::OpenSaveFolder => crate::paths::open_in_file_manager(crate::paths::data_dir()),
+            // The texture packs folder: created when missing (the Texture
+            // pack row's choices come from it), then opened like above.
+            Row::OpenPacksFolder => {
+                let dir = crate::paths::packs_dir();
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    eprintln!("[settings] could not create {}: {e}", dir.display());
+                }
+                crate::paths::open_in_file_manager(&dir);
+            }
             // U16: the restart banner's row: save, spawn, quit.
             Row::RestartNow => self.restart_now(),
             // Quit (U3): the first confirm arms "Press again to quit" for
@@ -2001,6 +2068,14 @@ impl Overlay {
                 }
                 Opt::Vsync => self.vsync = !self.vsync,
                 Opt::FillScreen => self.fill_screen = !self.fill_screen,
+                // Restart-only, like Fill screen; left/right and confirm
+                // both cycle with wrap. Set by PW64_TEX_PACKS: disabled.
+                Opt::TexturePack if opts::texture_pack_env() => {}
+                Opt::TexturePack => {
+                    let n = self.pack_choices.len() as i32;
+                    self.texture_pack_sel =
+                        (self.texture_pack_sel as i32 + d).rem_euclid(n) as usize;
+                }
                 // The Player-2 controller row is disabled while the staged
                 // Split value is off (greyed, like Frame rate under V-Sync).
                 Opt::P2Input if !self.split => {}
@@ -2077,6 +2152,7 @@ impl Overlay {
             | Row::P2Assign
             | Row::Quit
             | Row::OpenSaveFolder
+            | Row::OpenPacksFolder
             | Row::RestartNow => {}
             // Neither do Resume / the page-open rows / Reset to defaults.
             Row::Resume | Row::Graphics | Row::SplitScreen | Row::ResetGraphics => {}
@@ -2095,6 +2171,9 @@ impl Overlay {
         self.widescreen_sel = select_aspect(&mut self.widescreen, widescreen);
         self.widescreen_follow = true;
         self.fill_screen = opts::fill_default(widescreen);
+        // The texture pack default is Off (row 0; the choices list starts
+        // with it).
+        self.texture_pack_sel = 0;
         let fps_default = if opts::low_end() {
             opts::Fps::Hz(60)
         } else {
@@ -2157,6 +2236,9 @@ impl Overlay {
                 self.fill_screen,
                 choice_aspect(&self.widescreen[self.widescreen_sel]),
             )),
+            // Off (None) removes the key, a pack name writes it
+            // (`config::apply`'s `Some(None)` sentinel).
+            texture_pack: Some(self.pack_choices[self.texture_pack_sel].clone()),
             fps: Some(self.fps[self.fps_sel].to_config()),
             vsync: Some(self.vsync),
             display_mode: Some(self.display_mode_choice().as_str()),
@@ -2478,6 +2560,28 @@ fn p2_select(choices: &[P2Choice], pads: &[String], saved: &input::P2Input) -> u
     choices.iter().position(|c| c.input == *saved).unwrap_or(0)
 }
 
+/// Texture pack choices — Off, then the pack folders in the data dir's
+/// `packs/` folder (`packs::list_packs`, read once at creation) — and the
+/// index of the running one. A configured pack that isn't in the folder
+/// (moved away, renamed) keeps its row, so cycling doesn't lose it (like a
+/// saved-but-unconnected pad).
+fn pack_choices(running: &Option<String>) -> (Vec<Option<String>>, usize) {
+    let mut list: Vec<Option<String>> = vec![None];
+    list.extend(
+        crate::packs::list_packs(&crate::paths::packs_dir())
+            .into_iter()
+            .map(Some),
+    );
+    let sel = match list.iter().position(|c| c.as_deref() == running.as_deref()) {
+        Some(i) => i,
+        None => {
+            list.push(running.clone());
+            list.len() - 1
+        }
+    };
+    (list, sel)
+}
+
 /// The D2 auto-save update: only the fields that differ from the snapshot
 /// taken at open (None = leave the key as-is), so values the player never
 /// touched (env-var overrides, the low-end preset, hand-edited keys) are not
@@ -2497,6 +2601,7 @@ fn changed_since(s: config::SavedSettings, snap: &config::SavedSettings) -> conf
         fps: keep(s.fps, &snap.fps),
         vsync: keep(s.vsync, &snap.vsync),
         fill_screen: if fill_changed { s.fill_screen } else { None },
+        texture_pack: keep(s.texture_pack, &snap.texture_pack),
         display_mode: keep(s.display_mode, &snap.display_mode),
         fullscreen_resolution: keep(s.fullscreen_resolution, &snap.fullscreen_resolution),
         volume: keep(s.volume, &snap.volume),
@@ -2677,6 +2782,10 @@ fn help(row: Row) -> &'static str {
                 "Smooth is the modern look; N64 original copies the console's texture \
                  filtering."
             }
+            Opt::TexturePack => {
+                "Replaces the game's textures with a pack you put in the texture packs \
+                 folder. Needs a restart."
+            }
             Opt::Msaa => {
                 "Smooths jagged edges. 4\u{d7} is a good choice; 8\u{d7} needs a strong \
                  graphics card. Needs a restart."
@@ -2732,6 +2841,10 @@ fn help(row: Row) -> &'static str {
         Row::OpenSaveFolder => {
             "Your save (pw64.eep), settings and crash reports. Copy pw64.eep to back up \
              your progress."
+        }
+        Row::OpenPacksFolder => {
+            "The folder texture packs live in: one folder per pack. Opened here after \
+             dropping one in, pick it on the Texture pack row."
         }
         Row::RestartNow => "Saves your changes and starts Birdman64 again so they take effect.",
     }
@@ -3176,6 +3289,7 @@ mod tests {
             fps: Some("60".into()),
             vsync: Some(true),
             fill_screen: Some(Some(true)),
+            texture_pack: Some(Some("hd".into())),
             display_mode: Some("exclusive"),
             fullscreen_resolution: Some(Some("640x480".into())),
             volume: Some(0.35),
@@ -3210,6 +3324,7 @@ mod tests {
             fps: Some("monitor".into()),
             vsync: Some(false),
             fill_screen: Some(None),
+            texture_pack: Some(None),
             display_mode: Some("windowed"),
             fullscreen_resolution: Some(None),
             volume: Some(1.0),
@@ -3231,7 +3346,7 @@ mod tests {
             "[graphics]\nmsaa = 4\nscale = 2.0\nscale_filter = \"nearest\"\nfilter = \"n64\"\n\
              widescreen = \"16:9\"\nfps = 60\nvsync = true\nfill_screen = true\n\
              display_mode = \"exclusive\"\nfullscreen_resolution = \"640x480\"\nvolume = 0.35\n\
-             show_fps = true\n\
+             texture_pack = \"hd\"\nshow_fps = true\n\
              \n[oled]\ndrift = true\nbrightness = 0.7\n\
              \n[ui]\npause_in_background = false\n\
              \n[input.keyboard]\nA = \"KeyX\"\n\n[input.gamepad]\nA = \"East\"\n\
@@ -3251,6 +3366,7 @@ mod tests {
             "fps",
             "vsync",
             "fill_screen",
+            "texture_pack",
             "display_mode",
             "fullscreen_resolution",
             "volume",
@@ -3323,26 +3439,26 @@ mod tests {
         assert_eq!(rows[6], Row::OpenSaveFolder);
         assert_eq!(rows[7], Row::Quit);
         // Confirm on Display & graphics opens the Graphics page: the
-        // eleven graphics options (incl. Show FPS, U25), the two OLED care
+        // thirteen graphics options (incl. Show FPS, U25), the two OLED care
         // rows, Reset to defaults, and Back (no restart-pending change yet,
         // so no banner row, U16).
         o.sel = 3;
         o.confirm();
         assert_eq!(o.page, Page::Graphics);
         let rows = o.rows();
-        assert_eq!(rows.len(), 15);
+        assert_eq!(rows.len(), 17);
         assert_eq!(rows[0], Row::Opt(Opt::DisplayMode));
         assert_eq!(rows[6], Row::Opt(Opt::ShowFps));
-        assert_eq!(rows[10], Row::Opt(Opt::Msaa));
-        assert_eq!(rows[11], Row::Opt(Opt::OledDrift));
-        assert_eq!(rows[12], Row::Opt(Opt::OledBrightness));
-        assert_eq!(rows[13], Row::ResetGraphics);
-        assert_eq!(rows[14], Row::Back);
+        assert_eq!(rows[12], Row::Opt(Opt::Msaa));
+        assert_eq!(rows[13], Row::Opt(Opt::OledDrift));
+        assert_eq!(rows[14], Row::Opt(Opt::OledBrightness));
+        assert_eq!(rows[15], Row::ResetGraphics);
+        assert_eq!(rows[16], Row::Back);
         // Stage a restart-only change: the banner's "Restart now" row (U16)
         // appears first, right under the banner.
         o.msaa = 4;
         let rows = o.rows();
-        assert_eq!(rows.len(), 16);
+        assert_eq!(rows.len(), 18);
         assert_eq!(rows[0], Row::RestartNow);
         // Back (B / Escape / the Back row) returns to Main, selection on
         // the row that opened it.
@@ -3960,12 +4076,99 @@ mod tests {
             o.running.widescreen
         );
         assert_eq!(o.fill_screen, o.running.fill_screen);
-        o.saved_restart = Some((8, Some(21.0 / 9.0), true));
+        o.saved_restart = Some((8, Some(21.0 / 9.0), true, Some("hd".into())));
         o.stage_restart_rows();
         assert_eq!(o.msaa, 8);
         assert_eq!(o.widescreen[o.widescreen_sel].as_deref(), Some("21:9"));
         assert!(o.fill_screen);
         assert!(!o.widescreen_follow);
+        // The saved pack keeps its row even when the folder is gone
+        // (`pack_choices` appends it), Off stays row 0.
+        assert_eq!(o.pack_choices[o.texture_pack_sel].as_deref(), Some("hd"));
+        o.saved_restart = Some((8, Some(21.0 / 9.0), true, None));
+        o.stage_restart_rows();
+        assert_eq!(o.texture_pack_sel, 0);
+    }
+
+    /// The texture-pack row: Off first, cycles wrap, a staged change is
+    /// restart-pending, and Reset stages Off.
+    #[test]
+    fn texture_pack_row_cycles_and_resets() {
+        let mut o = Overlay::new();
+        // Nothing configured: Off, row 0 (the folder's packs may follow).
+        assert_eq!(o.pack_choices[0], None);
+        assert_eq!(o.texture_pack_sel, 0);
+        // Off first, then the pack folders; a configured-but-missing pack
+        // keeps its own row (appended).
+        let (choices, sel) = pack_choices(&Some("hd".into()));
+        assert_eq!(choices, vec![None, Some("hd".into())]);
+        assert_eq!(sel, 1);
+        // Cycling wraps in both directions (select the row first: change
+        // steps the selected row).
+        o.page = Page::Graphics;
+        o.sel = o
+            .rows()
+            .iter()
+            .position(|r| *r == Row::Opt(Opt::TexturePack))
+            .unwrap();
+        o.pack_choices = vec![None, Some("a".into()), Some("b".into())];
+        // Re-derive the row index before every change: a staged value that
+        // differs from the running one shows the restart banner, whose row
+        // shifts the page.
+        let sel_row = |o: &Overlay| {
+            o.rows()
+                .iter()
+                .position(|r| *r == Row::Opt(Opt::TexturePack))
+                .unwrap()
+        };
+        o.texture_pack_sel = 2;
+        o.sel = sel_row(&o);
+        o.change(1, false);
+        assert_eq!(o.texture_pack_sel, 0);
+        o.sel = sel_row(&o);
+        o.change(-1, false);
+        assert_eq!(o.texture_pack_sel, 2);
+        // A staged change is restart-pending (the banner names it).
+        o.sel = sel_row(&o);
+        o.change(1, false); // back to Off (still nothing pending)
+        o.sel = sel_row(&o);
+        o.change(1, false); // "a" differs from the running Off
+        assert_eq!(o.pending_restart(), vec!["Texture pack"]);
+        // Reset stages Off again.
+        o.reset_graphics();
+        assert_eq!(o.texture_pack_sel, 0);
+        assert_eq!(o.staged_settings().texture_pack, Some(None));
+    }
+
+    /// The auto-save writes `[graphics] texture_pack` only when the staged
+    /// pack changed (Off stages `Some(None)`, so the key is removed).
+    #[test]
+    fn auto_save_writes_and_removes_texture_pack() {
+        let snap = config::SavedSettings {
+            texture_pack: Some(Some("hd".into())),
+            ..Default::default()
+        };
+        // Unchanged pack → nothing written (not pinned).
+        let d = changed_since(snap.clone(), &snap);
+        assert_eq!(d.texture_pack, None);
+        // A different pack → written.
+        let d = changed_since(
+            config::SavedSettings {
+                texture_pack: Some(Some("red".into())),
+                ..snap.clone()
+            },
+            &snap,
+        );
+        assert_eq!(d.texture_pack, Some(Some("red".into())));
+        // Off → the key is removed.
+        let d = changed_since(
+            config::SavedSettings {
+                texture_pack: Some(None),
+                ..snap.clone()
+            },
+            &snap,
+        );
+        assert_eq!(d.texture_pack, Some(None));
     }
 
     /// S8: Reset stages the monitor-default widescreen and saves it by

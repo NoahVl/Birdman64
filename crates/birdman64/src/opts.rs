@@ -271,6 +271,28 @@ pub(crate) fn fill_default(widescreen: Option<f32>) -> bool {
     widescreen.is_some()
 }
 
+/// The texture pack directory (`packs.rs`): `PW64_TEX_PACKS=<dir>` (a path,
+/// relative to the cwd like the other path options; empty = unset) wins,
+/// else the config's `[graphics] texture_pack = "<name>"` names a folder in
+/// the data dir's `packs/` (`paths::packs_dir`). None = packs off.
+/// Restart-only (indexed once at startup).
+pub fn texture_pack_dir() -> Option<std::path::PathBuf> {
+    if let Some(dir) = std::env::var_os("PW64_TEX_PACKS").filter(|d| !d.is_empty()) {
+        return Some(std::path::PathBuf::from(dir));
+    }
+    crate::config::get()
+        .graphics
+        .texture_pack
+        .as_deref()
+        .map(|n| crate::paths::packs_dir().join(n))
+}
+
+/// Is a non-empty `PW64_TEX_PACKS` override set? The settings screen's
+/// Texture pack row can't change it (it shows "Set by PW64_TEX_PACKS").
+pub fn texture_pack_env() -> bool {
+    std::env::var_os("PW64_TEX_PACKS").is_some_and(|d| !d.is_empty())
+}
+
 /// OLED care (O3). `PW64_OLED=<0|1>` or `[oled] drift`: the HUD drifts
 /// (spreads burn-in). The env var presets the quick care mode: drift on
 /// and the brightness at most 0.8 unless the config dimmed further.

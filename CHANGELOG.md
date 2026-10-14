@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Texture packs without command-line setup: put a pack folder in the new
+  `packs` folder (Settings > Display & graphics > "Open texture packs
+  folder"), pick it under "Texture pack" and restart.
+
 ## [1.1.0] - 2026-10-13
 
 ### Added
