@@ -158,6 +158,7 @@ fn bind_module(h: *mut c_void, path: &Path) -> Result<(), String> {
                 path.display()
             ));
         }
+        let vmap = sym(c"pw64_vmap")?;
         let game = Game {
             bootproc: core::mem::transmute::<*mut c_void, unsafe extern "C-unwind" fn(*mut c_void)>(
                 sym(c"bootproc")?,
@@ -174,6 +175,9 @@ fn bind_module(h: *mut c_void, path: &Path) -> Result<(), String> {
             range,
         };
         let _ = GAME.set(game);
+        // The module's PW64_U32/PW64_PTR fast-path map (it can't read the
+        // exe's); kept in sync by vaddr::set_regions. Nothing runs yet.
+        pw64_platform::vaddr::set_module_vmap(vmap.cast());
         // Crash symbolization (first-run-build.md T14): the tracer prints
         // RIPs inside the module as `pw64game+0x<off>` and logs where its
         // `.map` is. Both spike_build.sh and the builder's cache layout

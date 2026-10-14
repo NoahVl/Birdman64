@@ -36,11 +36,37 @@ typedef __SIZE_TYPE__ size_t;
  * (fixed low-4 GB window) both are the identity.
  *   PW64_U32(p): pointer (or 32-bit int) -> 32-bit vaddr.
  *   PW64_PTR(a): 32-bit vaddr (s32 or u32) -> host pointer; also for literal
- *                RDRAM addresses: (u8*)PW64_PTR(0x800DA800). */
+ *                RDRAM addresses: (u8*)PW64_PTR(0x800DA800).
+ * Inline fast path: one region (`pw64_vmap`, Rust vaddr.rs `VMap`; the
+ * dylib shim defines the module's copy) is tried first; a miss calls Rust.
+ * No regions: the map covers all 2^32 values at host 0 (identity, always
+ * hits, so the fixed-window build never calls out). Not usable in static
+ * initializers. */
 unsigned int pw64_to_vaddr(const void* p);
 void* pw64_to_host(unsigned int a);
-#define PW64_U32(p) pw64_to_vaddr((const void*)(__UINTPTR_TYPE__)(p))
-#define PW64_PTR(a) pw64_to_host((unsigned int)(a))
+struct pw64_vmap {
+    __UINTPTR_TYPE__ host;
+    unsigned long long size;
+    unsigned int vbase;
+    unsigned int pad;
+};
+extern struct pw64_vmap pw64_vmap;
+static __inline__ unsigned int pw64_u32_fast(__UINTPTR_TYPE__ p) {
+    __UINTPTR_TYPE__ off = p - pw64_vmap.host;
+    if (__builtin_expect(off < pw64_vmap.size, 1)) {
+        return pw64_vmap.vbase + (unsigned int)off;
+    }
+    return pw64_to_vaddr((const void*)p);
+}
+static __inline__ void* pw64_ptr_fast(unsigned int a) {
+    unsigned int off = a - pw64_vmap.vbase;
+    if (__builtin_expect(off < pw64_vmap.size, 1)) {
+        return (void*)(pw64_vmap.host + off);
+    }
+    return pw64_to_host(a);
+}
+#define PW64_U32(p) pw64_u32_fast((__UINTPTR_TYPE__)(p))
+#define PW64_PTR(a) pw64_ptr_fast((unsigned int)(a))
 
 /* Endianness (native-build.md §3, task 6). ROM data is big-endian; scalars
  * read through uvMemRead/uvConsumeBytes(1/2/4) are already converted. Structs

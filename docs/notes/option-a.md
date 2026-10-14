@@ -8,9 +8,11 @@ Android). Game output must stay bit-identical to the fixed-window build at every
 
 - **Keep 32-bit addresses ("vaddr") in the C; translate at the conversions.** Every
   int↔pointer conversion is already explicit (`PW64_U32`/`PW64_PTR`; the build has
-  `-Werror` on int/pointer casts and `shorten-64-to-32`). These now call Rust
-  `pw64_to_vaddr`/`pw64_to_host` (pw64-platform `vaddr.rs`), which map registered
-  host blocks to vaddr ranges. No region registered = identity = today's build.
+  `-Werror` on int/pointer casts and `shorten-64-to-32`). These are `static inline`
+  C (`pw64_u32_fast`/`pw64_ptr_fast`) that translate through one region (`pw64_vmap`,
+  RDRAM when registered) and call Rust `pw64_to_vaddr`/`pw64_to_host` (pw64-platform
+  `vaddr.rs`) only on a miss. No region registered = `pw64_vmap` covers all 2^32
+  values at host 0 = identity, always hits = today's build.
 - **Display lists: keep 8-byte `Gfx` with vaddr words; the HLE rebases.** Rejected
   widening to 16 bytes because: UVTX dlists are raw-copied from ROM and patched in
   place (`setimg.dram |= K0(base)`, texture.c 807-812) and would need a size-changing
@@ -60,7 +62,7 @@ line numbers = decomp source):
 - memory.c 41-42 `D_803805E0` / `kernel_TEXT_START` defines, 72/77/81 clear loops.
   The `D_802B8830[]` / `D_802B892C` / `osMemSize + 0x80000000` u32 literals stay.
 - debug.c 626/646 (2); audio_manager.c 41 `gAudioHeapStart` (static initializer:
-  `PW64_PTR` is a call, so it is assigned in `uvaManagerInit` before the first use).
+  `PW64_PTR` is not a constant, so it is assigned in `uvaManagerInit` before the first use).
 
 **Rust consumers** (take or produce C addresses):
 - pw64-platform: misc.rs 50 `osVirtualToPhysical` (`as u32`); pi.rs 265 truncates the
@@ -89,6 +91,9 @@ pattern has zero hits left in its files.
   mio0 bound via `to_vaddr(src)`; vi fb → keep host, convert at the consumer.
 - S3b: hle.rs/audio.rs: `map()` returns the vaddr (`raw | K0` if bit 31 clear), reads
   call `to_host`; `data_ptr`/`framebuffer` via `to_vaddr`; audio `to_host(addr + K0)`.
+  `to_host` walks a `OnceLock` Vec: call it once per `read_bytes`/`read_raw` range
+  (regions never span a read), and give `read_u32` (per DL word) a `VMap::to_host`
+  fast path like the C. Gfx HLE is ~80% of a retrace, so this is where cost would show.
 - S4: `PW64_RELOC=alias`: one shared-memory RDRAM block mapped twice (low at
   0x80000000 for unconverted sites, high above 4 GB registered as the region;
   Windows `CreateFileMapping` + 2 views, Linux `memfd_create` + 2 `mmap`);
@@ -98,6 +103,34 @@ pattern has zero hits left in its files.
 - S6: stacks block anywhere above 4 GB, region 0x80800000. S7: image regions;
   drop `/BASE`, fixed module base and their checks. S8: make relocation the default,
   delete the window/reservation code.
+
+## Performance (inline fast path, measured after S2)
+
+- Fast path = 3 loads of `pw64_vmap` + sub/cmp + one always-taken branch + add; the
+  Rust call stays as a cold miss path. Dylib flavour: the module can't read exe data,
+  so the shim defines its own `pw64_vmap` (exported, DATA); `dylib::load` hands it to
+  `vaddr::set_module_vmap` and `set_regions` writes both copies. `set_regions` rejects
+  overlapping regions (the fast path tries one region before the others).
+- Hang-glider script, 2700 retraces headless, `PW64_PROFILE_RETRACES=1`, 12 runs per exe
+  interleaved; medians (spread of avg in brackets). "rest" = avg − gfx − audio HLE per
+  retrace, i.e. C game + OS core, the only part the macros touch:
+
+  | exe | avg ms/retrace | p99 | gfx ms/task | rest ms |
+  |---|---|---|---|---|
+  | pre-S1 static | 0.591 (0.562-0.608) | 1.194 | 0.483 | 0.0331 |
+  | S1 call, static | 0.584 (0.564-0.611) | 1.169 | 0.474 | 0.0338 |
+  | inline, static | 0.584 (0.566-0.622) | 1.192 | 0.470 | 0.0339 |
+  | pre-S1 dylib | 0.619 (0.611-0.649) | 1.220 | 0.506 | 0.0337 |
+  | S1 call, dylib | 0.624 (0.603-0.644) | 1.220 | 0.508 | 0.0357 |
+  | inline, dylib | 0.619 (0.607-0.677) | 1.232 | 0.506 | 0.0346 |
+
+- The S1 "+3%" was noise (run-to-run spread ±5%). The real cost is in "rest": ≤ 0.002 ms
+  per retrace (S1 call, dylib), ≤ 0.001 ms inline: < 0.02% of the 6.9 ms 144 Hz frame.
+  So no compile-time `PW64_FIXED_WINDOW` (macros = plain casts) flag. Fallback if a later
+  step regresses: define that flag from build.rs for the Windows/Linux x86_64 fixed-window
+  builds and make both macros plain casts there (no regions are ever registered then).
+- Profiling old commits: `git worktree` + its own `CARGO_TARGET_DIR` (a shared one
+  reuses the other tree's workspace crates: same relative paths, stale link).
 
 ## Pattern (S1 template: literal RDRAM address → host pointer)
 
@@ -112,7 +145,7 @@ In the `.patch` file only the `+` line changes (same line count, hunk header sta
   pointer stored in or compared as an int. Never `(u8*)0x80...` or `(u32)ptr`.
 - Arithmetic stays on the side it started: `(u8*)PW64_PTR(0x80000000) + off` is fine
   inside one region; don't mix a converted pointer with an unconverted literal.
-- Not in static initializers (it is a call): assign at init instead.
+- Not in static initializers (reads a global, may call): assign at init instead.
 - Rust side: `pw64_platform::vaddr::{to_host, to_vaddr}`; never `as u32` a host
   address or `as usize` a C address.
 - Applier (pw64-cbuild `apply_unified_diff`): no fuzz — it skips to each hunk's

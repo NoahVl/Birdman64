@@ -9,9 +9,16 @@
 //! pass through unchanged: ROM offsets and physical (`K0 - 0x80000000`)
 //! addresses, and, until regions are registered, everything (the fixed
 //! low-4 GB window build, where vaddr == host address).
+//!
+//! Fast path: the macros are `static inline` C that translate through one
+//! region ([`VMap`], C global `pw64_vmap`) and call the Rust functions only
+//! on a miss. With no regions the [`VMap`] is [`VMap::IDENTITY`], which hits
+//! for every 32-bit value, so the fixed-window build never calls Rust.
 
+use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 /// One C-visible host block and the vaddr range the C sees it at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,21 +33,116 @@ pub struct Region {
 
 static REGIONS: OnceLock<Vec<Region>> = OnceLock::new();
 
+/// The one region the inline C fast path translates (`struct pw64_vmap`,
+/// pw64_native.h; same layout in dylib/pw64_dll_shim.c). `size` is 64-bit so
+/// [`VMap::IDENTITY`] can cover all 2^32 vaddrs.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VMap {
+    pub host: usize,
+    pub size: u64,
+    pub vbase: u32,
+    pub pad: u32,
+}
+
+impl VMap {
+    /// No regions: vaddr == host for every 32-bit value.
+    pub const IDENTITY: VMap = VMap {
+        host: 0,
+        size: 1 << 32,
+        vbase: 0,
+        pad: 0,
+    };
+
+    /// The fast-path region for `regions`: RDRAM (vbase 0x80000000) if
+    /// registered, else the first; [`Self::IDENTITY`] if none.
+    pub fn for_regions(regions: &[Region]) -> VMap {
+        regions
+            .iter()
+            .find(|r| r.vbase == 0x8000_0000)
+            .or(regions.first())
+            .map_or(Self::IDENTITY, |r| VMap {
+                host: r.host,
+                size: r.size as u64,
+                vbase: r.vbase,
+                pad: 0,
+            })
+    }
+
+    /// `PW64_PTR`'s inline part (pw64_native.h `pw64_ptr_fast`): `None` =
+    /// miss, the C calls [`pw64_to_host`].
+    pub fn to_host(&self, vaddr: u32) -> Option<usize> {
+        let off = vaddr.wrapping_sub(self.vbase);
+        ((off as u64) < self.size).then(|| self.host.wrapping_add(off as usize))
+    }
+
+    /// `PW64_U32`'s inline part (pw64_native.h `pw64_u32_fast`): `None` =
+    /// miss, the C calls [`pw64_to_vaddr`].
+    pub fn to_vaddr(&self, host: usize) -> Option<u32> {
+        let off = host.wrapping_sub(self.host);
+        ((off as u64) < self.size).then(|| self.vbase.wrapping_add(off as u32))
+    }
+}
+
+/// `UnsafeCell` so the C may read it; written only by [`set_regions`]
+/// before the C runs.
+#[repr(transparent)]
+pub struct VMapCell(UnsafeCell<VMap>);
+
+// SAFETY: written once before the C starts (set_regions), read-only after.
+unsafe impl Sync for VMapCell {}
+
+/// The static build's fast-path region (read by the C as `pw64_vmap`).
+#[allow(non_upper_case_globals)]
+#[unsafe(no_mangle)]
+pub static pw64_vmap: VMapCell = VMapCell(UnsafeCell::new(VMap::IDENTITY));
+
+/// The game module's own `pw64_vmap` (dylib flavour: a module cannot read
+/// exe data), or null.
+static MODULE_VMAP: AtomicPtr<VMap> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Dylib flavour: the loaded module's `pw64_vmap` (dylib/pw64_dll_shim.c).
+/// [`set_regions`] keeps it equal to ours; the current value is copied now,
+/// so the order of the two calls doesn't matter.
+///
+/// # Safety
+/// `p` points at the module's `struct pw64_vmap`, valid for the process
+/// lifetime; the C must not be running yet.
+pub unsafe fn set_module_vmap(p: *mut VMap) {
+    MODULE_VMAP.store(p, Ordering::Release);
+    // SAFETY: caller contract; our cell is only written before the C runs.
+    unsafe { p.write(*pw64_vmap.0.get()) };
+}
+
 /// Registers the C-visible regions, once, before the C runs. Panics on a
-/// second call, a vaddr range below 0x80000000 or past 4 GB, or a host block
+/// second call, a vaddr range below 0x80000000 or past 4 GB, a host block
 /// below 4 GB (a host address that fits 32 bits could not be told apart from
-/// a vaddr). Without this call both conversions are the identity.
+/// a vaddr), or overlapping regions (the inline fast path tries one region
+/// before the rest). Without this call both conversions are the identity.
 pub fn set_regions(regions: Vec<Region>) {
-    for r in &regions {
+    for (i, r) in regions.iter().enumerate() {
         assert!(
             r.vbase & 0x8000_0000 != 0 && r.vbase.checked_add(r.size).is_some(),
             "vaddr region {r:?}: must lie in 0x80000000..4 GB"
         );
         assert!(r.host >> 32 != 0, "vaddr region {r:?}: host block must lie above 4 GB");
+        for o in &regions[..i] {
+            let v = r.vbase < o.vbase + o.size && o.vbase < r.vbase + r.size;
+            let h = r.host < o.host + o.size as usize && o.host < r.host + r.size as usize;
+            assert!(!v && !h, "vaddr regions {o:?} and {r:?} overlap");
+        }
     }
+    let map = VMap::for_regions(&regions);
     REGIONS
         .set(regions)
         .expect("vaddr regions are registered once, before the C runs");
+    // SAFETY: before the C runs (contract above); nothing reads it concurrently.
+    unsafe { *pw64_vmap.0.get() = map };
+    let module = MODULE_VMAP.load(Ordering::Acquire);
+    if !module.is_null() {
+        // SAFETY: set_module_vmap's contract.
+        unsafe { module.write(map) };
+    }
 }
 
 /// The registered regions (empty: identity mapping).
@@ -92,13 +194,15 @@ pub fn to_host(vaddr: u32) -> usize {
     to_host_in(regions(), vaddr)
 }
 
-/// `PW64_U32(p)` (pw64_native.h): pointer → 32-bit address for the C.
+/// `PW64_U32(p)` (pw64_native.h) when the inline fast path misses:
+/// pointer → 32-bit address for the C.
 #[unsafe(no_mangle)]
 pub extern "C-unwind" fn pw64_to_vaddr(p: *const c_void) -> u32 {
     to_vaddr(p as usize)
 }
 
-/// `PW64_PTR(a)` (pw64_native.h): 32-bit address from the C → pointer.
+/// `PW64_PTR(a)` (pw64_native.h) when the inline fast path misses:
+/// 32-bit address from the C → pointer.
 #[unsafe(no_mangle)]
 pub extern "C-unwind" fn pw64_to_host(a: u32) -> *mut c_void {
     to_host(a) as *mut c_void
@@ -142,6 +246,57 @@ mod tests {
             assert_eq!(to_vaddr_in(&R, to_host_in(&R, a)), a);
         }
         assert_eq!(to_vaddr_in(&R, 0xFFFF_FFFF_803D_A800), 0x803D_A800);
+    }
+
+    /// The inline C fast path, then the Rust call on a miss, equals the
+    /// plain lookup for every kind of value: no regions, one, several.
+    #[test]
+    fn fast_path_matches_lookup() {
+        let multi = [
+            Region {
+                vbase: 0x8080_0000,
+                size: 0x100_0000,
+                host: 0x9_0000_0000,
+            },
+            R[0],
+            Region {
+                vbase: 0xB000_0000,
+                size: 0x1000_0000,
+                host: 0x8_0000_0000,
+            },
+        ];
+        let vaddrs = [
+            0u32, 0x1050, 0x003D_A800, 0x7FFF_FFFF, 0x8000_0000, 0x803D_A800, 0x807F_FFFF,
+            0x8080_0000, 0x817F_FFFF, 0x8180_0000, 0xB000_0010, 0xC000_1234, u32::MAX,
+        ];
+        for regions in [&[][..], &R[..], &multi[..]] {
+            let m = VMap::for_regions(regions);
+            for &a in &vaddrs {
+                let h = to_host_in(regions, a);
+                assert_eq!(m.to_host(a).unwrap_or(h), h, "{a:#x}");
+                let back = to_vaddr_in(regions, h);
+                assert_eq!(m.to_vaddr(h).unwrap_or(back), back, "{h:#x}");
+            }
+            // Sign-extended s32 (miss in every map, the slow path truncates).
+            assert_eq!(m.to_vaddr(0xFFFF_FFFF_803D_A800), None);
+        }
+        // No regions: every 32-bit value hits (the C never calls Rust).
+        let id = VMap::for_regions(&[]);
+        for &a in &vaddrs {
+            assert_eq!(id.to_host(a), Some(a as usize));
+            assert_eq!(id.to_vaddr(a as usize), Some(a));
+        }
+        assert_eq!(VMap::for_regions(&multi).vbase, 0x8000_0000);
+    }
+
+    /// Panics before registering anything, so the once-only global stays unset.
+    #[test]
+    #[should_panic(expected = "overlap")]
+    fn overlapping_regions_rejected() {
+        let mut b = R[0];
+        b.vbase += 0x10_0000;
+        b.host = 0x9_0000_0000;
+        set_regions(vec![R[0], b]);
     }
 
     #[test]

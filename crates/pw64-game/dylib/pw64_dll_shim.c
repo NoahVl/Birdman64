@@ -127,6 +127,18 @@ long long gspFast3DTextStart[1], gspFast3DDataStart[1];
 long long gspF3DEX_fifoTextStart[1], gspF3DEX_fifoDataStart[1];
 long long aspMainTextStart[1], aspMainDataStart[1];
 
+/* PW64_U32/PW64_PTR inline fast path (pw64_native.h, pw64-platform
+ * vaddr.rs `VMap`): the module's own copy, since it cannot read exe data.
+ * Starts as the identity map; the exe writes it (vaddr::set_module_vmap,
+ * exported for that). Keep the layout in sync with pw64_native.h. */
+struct pw64_vmap {
+    __UINTPTR_TYPE__ host;
+    unsigned long long size;
+    unsigned int vbase;
+    unsigned int pad;
+};
+struct pw64_vmap pw64_vmap = {0, 1ULL << 32, 0, 0};
+
 /* --- MSVC CRT pieces the compiler references (no CRT is linked) --- */
 #if defined(_MSC_VER)
 /* clang emits a reference whenever floating point is used. */

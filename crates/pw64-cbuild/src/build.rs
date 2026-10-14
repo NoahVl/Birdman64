@@ -220,6 +220,7 @@ pub fn link_args(os: Os) -> Vec<String> {
             "-export:pw64_split_req,DATA",
             "-export:pw64_split_hint,DATA",
             "-export:D_802B892C,DATA",
+            "-export:pw64_vmap,DATA",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -693,7 +694,7 @@ const LINUX_VERSION_SCRIPT: &str = "\
 { global: pw64_dll_bind; pw64_dll_abi; pw64_dll_range;
   bootproc; pw64_widescreen_aspect; pw64_fill_screen;
   pw64_split; pw64_split_collide; pw64_split_layout; pw64_split_share; pw64_split_req;
-  pw64_split_hint; D_802B892C;
+  pw64_split_hint; D_802B892C; pw64_vmap;
   local: *; };";
 
 /// Host target of the build ([`Os`] docs: build scripts run on the host).
