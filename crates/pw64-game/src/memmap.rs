@@ -94,6 +94,7 @@ impl Reloc {
 static RDRAM_HOST: AtomicUsize = AtomicUsize::new(RDRAM_BASE);
 
 /// Host address of RDRAM's vaddr 0x80000000 (see [`RDRAM_HOST`]).
+#[inline]
 pub fn rdram_host() -> usize {
     RDRAM_HOST.load(Ordering::Relaxed)
 }
@@ -527,6 +528,7 @@ pub fn module_range() -> Option<(usize, usize)> {
 }
 
 /// `[addr, addr + len)` lies within `[start, end)`. Pure.
+#[inline]
 pub fn range_holds((start, end): (usize, usize), addr: usize, len: usize) -> bool {
     addr >= start && addr.checked_add(len).is_some_and(|e| e <= end)
 }
@@ -536,21 +538,35 @@ pub fn range_holds((start, end): (usize, usize), addr: usize, len: usize) -> boo
 /// range, or the exe / game module image (static display lists in .data).
 /// Not the reserved-but-uncommitted rest of the stack window, the stack
 /// guard pages, or the gap between the module and the exe. Cheap (per
-/// command): no locks, no allocation.
+/// command): no locks, no allocation. Inline, so the common RDRAM case
+/// stays inline in the HLE's per-word reads (option-a.md "Performance").
+#[inline]
 pub fn hle_readable(addr: usize, len: usize) -> bool {
-    hle_writable(addr, len)
+    in_rdram(addr, len) || readable_outside_rdram(addr, len)
+}
+
+/// [`hle_readable`] outside RDRAM (out of line: rare).
+#[inline(never)]
+fn readable_outside_rdram(addr: usize, len: usize) -> bool {
+    pw64_platform::os::stack::in_live_stack(addr, len)
         || range_holds(exe_range(), addr, len)
         || module_range().is_some_and(|r| range_holds(r, addr, len))
 }
 
 /// The RSP HLE may write `[addr, addr + len)`: only the RDRAM window and live
 /// thread stacks, never code or the images (audio HLE DMA writes).
+#[inline]
 pub fn hle_writable(addr: usize, len: usize) -> bool {
-    // The RDRAM view the vaddr layer translates to (alias mode: the high
-    // one only; the HLE never sees low-view addresses there).
+    in_rdram(addr, len) || pw64_platform::os::stack::in_live_stack(addr, len)
+}
+
+/// `[addr, addr + len)` lies in the RDRAM view the vaddr layer translates to
+/// (alias mode: the high one only; the HLE never sees low-view addresses
+/// there).
+#[inline]
+fn in_rdram(addr: usize, len: usize) -> bool {
     let rdram = rdram_host();
     range_holds((rdram, rdram + RDRAM_SIZE), addr, len)
-        || pw64_platform::os::stack::in_live_stack(addr, len)
 }
 
 /// Address of a sample C global and of `bootproc` (the real C one).

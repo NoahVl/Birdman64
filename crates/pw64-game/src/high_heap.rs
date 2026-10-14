@@ -140,7 +140,25 @@ pub fn enable() -> Option<usize> {
     Some(base)
 }
 
+/// Returns an arena block of layout `l` to its free list. Cold, like
+/// [`arena_alloc`]: with the arena off the global allocator stays a plain
+/// forward to [`System`] (option-a.md "Performance").
+///
+/// # Safety
+/// `p` came from [`arena_alloc`] with a layout of the same class as `l`.
+#[cold]
+#[inline(never)]
+unsafe fn arena_free(p: *mut u8, l: Layout) {
+    let mut s = STATE.lock().unwrap_or_else(PoisonError::into_inner);
+    let k = class(l);
+    // SAFETY: our block (≥ 16 bytes, aligned): link it into its list.
+    unsafe { (p as *mut usize).write(s.free[k]) };
+    s.free[k] = p as usize;
+}
+
 /// Allocates from the arena (`base` = its start); null if it is exhausted.
+#[cold]
+#[inline(never)]
 fn arena_alloc(base: usize, l: Layout) -> *mut u8 {
     let k = class(l);
     let mut s = STATE.lock().unwrap_or_else(PoisonError::into_inner);
@@ -172,6 +190,7 @@ fn arena_alloc(base: usize, l: Layout) -> *mut u8 {
 // both, start aligned to min(block size, MAX_ALIGN) ≥ align); everything
 // else is the system allocator's.
 unsafe impl GlobalAlloc for HighHeap {
+    #[inline]
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
         let base = BASE.load(Ordering::Acquire);
         if base == 0 || l.align() > MAX_ALIGN {
@@ -181,6 +200,7 @@ unsafe impl GlobalAlloc for HighHeap {
         arena_alloc(base, l)
     }
 
+    #[inline]
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
         if BASE.load(Ordering::Acquire) == 0 {
             // SAFETY: forwarded with the caller's layout.
@@ -196,27 +216,36 @@ unsafe impl GlobalAlloc for HighHeap {
         }
     }
 
+    #[inline]
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         if in_arena(p) {
-            let mut s = STATE.lock().unwrap_or_else(PoisonError::into_inner);
-            let k = class(l);
-            // SAFETY: our block (≥ 16 bytes, aligned): link it into its list.
-            unsafe { (p as *mut usize).write(s.free[k]) };
-            s.free[k] = p as usize;
+            // SAFETY: an arena block of layout `l`.
+            unsafe { arena_free(p, l) }
         } else {
             // SAFETY: a system block (allocated before `enable`, or over-aligned).
             unsafe { System.dealloc(p, l) }
         }
     }
 
+    #[inline]
     unsafe fn realloc(&self, p: *mut u8, l: Layout, new_size: usize) -> *mut u8 {
-        let Ok(new) = Layout::from_size_align(new_size, l.align()) else {
-            return core::ptr::null_mut();
-        };
         if BASE.load(Ordering::Acquire) == 0 {
             // SAFETY: forwarded; off means every block is a system block.
             return unsafe { System.realloc(p, l, new_size) };
         }
+        // SAFETY: the caller's contract, forwarded.
+        unsafe { self.realloc_on(p, l, new_size) }
+    }
+}
+
+impl HighHeap {
+    /// [`GlobalAlloc::realloc`] with the arena on (cold: strict mode only).
+    #[cold]
+    #[inline(never)]
+    unsafe fn realloc_on(&self, p: *mut u8, l: Layout, new_size: usize) -> *mut u8 {
+        let Ok(new) = Layout::from_size_align(new_size, l.align()) else {
+            return core::ptr::null_mut();
+        };
         if in_arena(p) && class(new) == class(l) {
             return p;
         }

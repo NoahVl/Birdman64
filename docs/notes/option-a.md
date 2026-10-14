@@ -95,8 +95,8 @@ pattern has zero hits left in its files.
   reads translate once per range through `VMapCell::load()`'s one-region fast path,
   `to_host` on miss (pure `GfxMemory::host(vm, regions, addr)`, unit-tested with local
   1/3-region lists — `set_regions` is once-only); `data_ptr`/`framebuffer` via
-  `to_vaddr`; audio.rs `AudioMem::host` = `to_host(addr + K0)`. Bit-identical; perf
-  unchanged (gfx HLE 0.48–0.50 ms/task both builds, whole-run avg within spread).
+  `to_vaddr`; audio.rs `AudioMem::host` = `to_host(addr + K0)`. Bit-identical. Perf:
+  see "Performance" (branch regression after S7).
 - S4 **done**: `PW64_RELOC=alias` (memmap.rs `Reloc`; unset/`off` = old path, byte-
   identical). `map_rdram_window` maps one zeroed shared block twice (Windows
   `CreateFileMappingW` + `MapViewOfFileEx`, Linux `memfd_create` + `mmap MAP_SHARED|
@@ -283,6 +283,30 @@ clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs
   builds and make both macros plain casts there (no regions are ever registered then).
 - Profiling old commits: `git worktree` + its own `CARGO_TARGET_DIR` (a shared one
   reuses the other tree's workspace crates: same relative paths, stale link).
+- Branch regression (after S7, default build, 24 interleaved runs pinned to 4 cores at
+  high priority, `start /b /wait /high /affinity F0`: much steadier than unpinned):
+  avg ms/retrace | gfx HLE | audio HLE | DL interp, medians. Per commit (12–20 runs,
+  unpinned, ±0.01 between sessions): main 0.582–0.598, S1/S2/inline/S3 within noise of
+  main, S4 +0.005, S5 ±0, S6 +0.017, S7 +0.007 — a creep, no single step.
+
+  | build | avg | gfx | audio | DL |
+  |---|---|---|---|---|
+  | main | 0.5875 | 0.4750 | 0.0780 | 0.4615 |
+  | S7 | 0.6185 | 0.5015 | 0.0800 | 0.4870 |
+  | S7 + fix | 0.6055 | 0.4890 | 0.0790 | 0.4745 |
+
+- Causes found (disassembly + toggles): (1) at S7 `memmap::hle_readable` is no longer
+  inlined into hle.rs `GfxMemory` reads (likely since S4's atomic `rdram_host()`): every
+  DL word pays an out-of-line cross-crate call (main: 2 inline compares). (2) S6's `HighHeap` global
+  allocator: its non-inline arena paths (mutex) made the dealloc shim a full call frame.
+  Fix: `hle_readable`/`hle_writable`/`range_holds`/`rdram_host` `#[inline]` with the
+  non-RDRAM checks out of line; `HighHeap` methods `#[inline]` with arena paths
+  `#[cold]`/`#[inline(never)]` (off path = plain `System` forward). Recovers ~40%.
+- Not the cause: translation arithmetic (identity reads in `GfxMemory`, or the one-region
+  fast path in audio/PI/`osVirtualToPhysical`: no gain beyond the fix); removing the
+  allocator entirely (= fix). The remaining ~3% is in the unchanged pw64-gfx interpreter
+  (thin-LTO codegen/layout shifts, e.g. `run_into` now inlines 16 allocator sites):
+  accepted, < 0.02 ms per retrace (0.3% of a 144 Hz frame).
 
 ## Pattern (S1 template: literal RDRAM address → host pointer)
 
