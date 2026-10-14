@@ -902,11 +902,14 @@ fn builtin_input_map(section: &str) -> BTreeMap<String, String> {
     match section {
         "keyboard" => crate::input::KEYBOARD_SLOTS
             .iter()
-            .map(|(_, slot, keys)| (slot.to_string(), format!("{:?}", keys[0])))
+            .filter_map(|(_, slot, keys)| Some((slot.to_string(), format!("{:?}", keys.first()?))))
             .collect(),
+        // The pad's N64 d-pad slots have no default (the d-pad is the stick).
         "gamepad" => crate::input::GAMEPAD_SLOTS
             .iter()
-            .map(|(_, slot, buttons)| (slot.to_string(), format!("{:?}", buttons[0])))
+            .filter_map(|(_, slot, buttons)| {
+                Some((slot.to_string(), format!("{:?}", buttons.first()?)))
+            })
             .collect(),
         _ => BTreeMap::new(),
     }
@@ -1497,10 +1500,11 @@ mod tests {
                 "every keyboard slot has a default entry"
             );
         }
-        for (_, slot, _) in crate::input::GAMEPAD_SLOTS {
-            assert!(
+        for (_, slot, buttons) in crate::input::GAMEPAD_SLOTS {
+            assert_eq!(
                 defaults.1.contains_key(slot),
-                "every gamepad slot has a default entry"
+                !buttons.is_empty(),
+                "every gamepad slot with a default has an entry: {slot}"
             );
         }
         assert_eq!(defaults.0["A"], "Space");
@@ -1508,6 +1512,7 @@ mod tests {
         assert_eq!(defaults.0["STICK_UP"], "KeyW");
         assert_eq!(defaults.1["A"], "South");
         assert_eq!(defaults.1["B"], "West", "first default of a multi-key slot");
+        assert_eq!(defaults.1["STICK_UP"], "DPadUp");
         let maps = |k: BTreeMap<String, String>, g: BTreeMap<String, String>| SavedSettings {
             keyboard: Some(k),
             gamepad: Some(g),

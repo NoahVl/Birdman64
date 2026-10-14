@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Linux: `linux_window` setting in `pw64.toml` (`auto`, `wayland` or `x11`)
   to choose between a native Wayland window and X11 (XWayland).
 
+### Changed
+
+- The controller's D-pad now moves the stick, so it works in menus and can steer. Rebind any
+  D-pad direction to another button (C buttons, A, ...) under Settings > Controls.
+
 ### Fixed
 
 - Linux (Wayland) on laptops with an NVIDIA GPU next to an AMD or Intel one:
