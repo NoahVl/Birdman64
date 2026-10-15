@@ -50,9 +50,12 @@ impl AudioMem {
     /// writes only the window and live stacks (`memmap::hle_writable`).
     /// Acmd/ABI addresses are `osVirtualToPhysical`/`K0_TO_PHYS` values
     /// (host address − 0x80000000 mod 2^32, native-build.md §7): add it back
-    /// to the vaddr, then translate (option-a.md S3b).
+    /// to the vaddr, then translate (option-a.md S3b). The non-strict lookup,
+    /// as in hle.rs `GfxMemory`: a bad address in the command data is
+    /// rejected below and logged, not a panic in strict / `on` mode (the C's
+    /// own conversions are checked where the C makes them).
     fn host(addr: u32, len: usize, write: bool) -> Option<usize> {
-        let h = vaddr::to_host(addr.wrapping_add(0x8000_0000));
+        let h = vaddr::to_host_in(vaddr::regions(), addr.wrapping_add(0x8000_0000));
         let ok = if write {
             hle_writable(h, len)
         } else {

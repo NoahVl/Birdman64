@@ -238,7 +238,7 @@ clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs
     row bilerps row 9 = the next heap block (host pointers). Not reproducible
     exactly (on hardware those are N64-layout BE structs). Fix: sprite.c.patch
     loads/clamps `tex_height` to `actualHeight` when smaller (whole strips unchanged).
-  - Default output changed (new gate `tmp/optA/b2.sum`): frames 1800/2400/2690, all
+  - Default output changed (the reference frame hashes were regenerated): frames 1800/2400/2690, all
     inside the digit rect: the garbage dots under the digits are gone (max Δ 182),
     plus ≤ 9/765 Δ inside the glyphs (sampler precision: texture now 9 rows, not
     128). Sweep (default, pre vs post): 22/48 frames, all altitude digits except the
@@ -360,5 +360,5 @@ In the `.patch` file only the `+` line changes (same line count, hunk header sta
   empty context line, so never leave a trailing blank line (new hunks must end
   at a real context line). Blank context lines are a single space.
 - Gate grep note: `rg` has no `-E`; use the plain pattern `rg -n "\)\s*\(?0x8[0-9A-Fa-f]{7}"`.
-- Identity runs: `bash` in PATH is WSL (paths are `/mnt/c/...`, run.sh needs
-  `/c/...` and zig.exe won't exec there) — use `C:\Program Files\Git\bin\bash.exe`.
+- Identity runs on Windows: use Git Bash, not WSL's `bash` (WSL paths are
+  `/mnt/c/...` and it can't exec zig.exe).

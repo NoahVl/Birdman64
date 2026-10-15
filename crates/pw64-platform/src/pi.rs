@@ -263,7 +263,9 @@ pub unsafe extern "C-unwind" fn osPiStartDma(
     // N64 virtual addresses are 32-bit, so the destination is translated
     // through the vaddr layer (option-a.md S3a): `to_vaddr` normalises a
     // sign-extended s32 (e.g. `_uvDMA`'s `s32 dest`, system.c:419) and a
-    // host pointer alike to the 32-bit vaddr, `to_host` maps it back.
+    // host pointer alike to the 32-bit vaddr, `to_host` maps it back (strict
+    // mode panics on a sign-extended value instead: system.c's call site
+    // passes `PW64_PTR(dest)`, so none reaches here).
     let vaddr = vaddr::to_host(vaddr::to_vaddr(vaddr as usize)) as *mut c_void;
     assert!(
         !vaddr.is_null(),
