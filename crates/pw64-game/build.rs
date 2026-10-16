@@ -78,14 +78,16 @@ fn main() {
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let os = pw64_cbuild::Os::from_target(&target_os, &target_arch).unwrap_or_else(|| {
         panic!(
-            "pw64-game: the native C build supports x86_64 Windows, x86_64 Linux and \
-             aarch64 Linux only, not {target_arch}-{target_os} (macOS: see \
+            "pw64-game: the native C build supports x86_64 Windows, x86_64 Linux, \
+             aarch64 Linux and aarch64 Android only, not {target_arch}-{target_os} (macOS: see \
              docs/notes/option-a.md \"Flipping the default\")"
         )
     });
     let flavor = match os {
         pw64_cbuild::Os::Windows => Flavor::Msvc,
-        pw64_cbuild::Os::Linux | pw64_cbuild::Os::LinuxArm64 => Flavor::Gnu,
+        pw64_cbuild::Os::Linux | pw64_cbuild::Os::LinuxArm64 | pw64_cbuild::Os::Android => {
+            Flavor::Gnu
+        }
     };
     // Crash diagnosis: when set, write a link map so a RIP from the
     // pw64-platform crash log resolves to a C symbol. It must be part of
@@ -107,8 +109,10 @@ fn main() {
     // `reloc` path is the future default everywhere, and rustc's aarch64
     // linker is the system `cc`/GNU ld, which has no `--image-base`). The
     // `pw64_reloc` cfg is what the crate's code tests (feature or arm64).
+    // Android likewise: the app is a `.so` loaded by the Java side, at
+    // whatever address the bionic linker picks.
     let reloc = std::env::var_os("CARGO_FEATURE_RELOC").is_some()
-        || os == pw64_cbuild::Os::LinuxArm64;
+        || matches!(os, pw64_cbuild::Os::LinuxArm64 | pw64_cbuild::Os::Android);
     println!("cargo::rustc-check-cfg=cfg(pw64_reloc)");
     if reloc {
         println!("cargo:rustc-cfg=pw64_reloc");

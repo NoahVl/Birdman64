@@ -10,6 +10,8 @@
 //! The picker call is gated behind [`is_interactive`], so tests never open one.
 
 use crate::config;
+#[cfg(target_os = "android")]
+use crate::rfd;
 use pw64_platform::pi;
 use std::path::{Path, PathBuf};
 
@@ -298,18 +300,32 @@ fn no_rom_chosen() -> ! {
 }
 
 /// What the file dialog gave.
+#[cfg_attr(target_os = "android", allow(dead_code))] // no dialog there yet
 enum Pick {
     File(PathBuf),
     Cancel,
     /// No dialog could be shown at all (Linux without the portal, zenity or
     /// kdialog).
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
     NoDialog,
 }
 
 /// Native open dialog filtered to N64 ROM files (any byte order). Only
 /// reached from [`pick_and_remember`], i.e. never in tests or CI.
 fn pick_rom(title: &str) -> Pick {
+    // Android: no picker yet (TODO: SAF `ACTION_OPEN_DOCUMENT` via JNI); the
+    // in-window ROM screen explains where to put the file instead.
+    #[cfg(target_os = "android")]
+    {
+        let _ = title;
+        Pick::NoDialog
+    }
+    #[cfg(not(target_os = "android"))]
+    pick_rom_dialog(title)
+}
+
+#[cfg(not(target_os = "android"))]
+fn pick_rom_dialog(title: &str) -> Pick {
     // rfd: the native dialog (Linux: the xdg desktop portal, then zenity on
     // a portal error). `None` is either a cancel (portal or zenity) or no
     // backend at all; rfd doesn't say which (rfd 0.15 xdg_desktop_portal.rs),

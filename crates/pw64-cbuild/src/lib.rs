@@ -190,12 +190,18 @@ pub enum Os {
     /// zig clang, aarch64-unknown-linux-gnu (LP64, AAPCS64 bitfields = the
     /// SysV layout, ELF). Always relocatable: no fixed module base.
     LinuxArm64,
+    /// zig clang, aarch64-linux-android (bionic; same LP64/AAPCS64 layout as
+    /// [`Os::LinuxArm64`], ELF). Relocatable only. zig bundles no bionic
+    /// libc, but the decomp C is `-nostdinc` and the module is import-free,
+    /// so neither the compile nor the module link needs one; only rustc's
+    /// final link of the app `.so` needs the NDK (docs/notes/android.md).
+    Android,
 }
 
 impl Os {
-    /// Linux (ELF, `ld.lld`, `.so`) on either architecture.
+    /// ELF + `ld.lld` + `.so` (Linux on either architecture, and Android).
     pub fn is_linux(self) -> bool {
-        matches!(self, Os::Linux | Os::LinuxArm64)
+        matches!(self, Os::Linux | Os::LinuxArm64 | Os::Android)
     }
 
     /// The target the crate is compiled for, from a build script's
@@ -205,6 +211,7 @@ impl Os {
             ("windows", "x86_64") => Some(Os::Windows),
             ("linux", "x86_64") => Some(Os::Linux),
             ("linux", "aarch64") => Some(Os::LinuxArm64),
+            ("android", "aarch64") => Some(Os::Android),
             _ => None,
         }
     }
@@ -230,12 +237,23 @@ const ZIG_TGT_LINUX: &[&str] = &["--target=x86_64-unknown-linux-gnu", "-fPIE"];
 /// (±4 GB from the PC), valid at any load address.
 const ZIG_TGT_LINUX_ARM64: &[&str] = &["--target=aarch64-unknown-linux-gnu", "-fPIE"];
 
+/// Android arm64, API 26 (= the APK's minSdk; AAudio needs it). The triple's
+/// API level only matters for emulated TLS (< 29), which the C doesn't use.
+/// `-mno-outline-atomics`: the Android triple defaults to outline atomics,
+/// which call compiler-rt helpers the import-free module can't resolve.
+const ZIG_TGT_ANDROID: &[&str] = &[
+    "--target=aarch64-linux-android26",
+    "-fPIE",
+    "-mno-outline-atomics",
+];
+
 /// The `TGT` part for `os`.
 fn zig_tgt(os: Os) -> &'static [&'static str] {
     match os {
         Os::Windows => ZIG_TGT_WINDOWS,
         Os::Linux => ZIG_TGT_LINUX,
         Os::LinuxArm64 => ZIG_TGT_LINUX_ARM64,
+        Os::Android => ZIG_TGT_ANDROID,
     }
 }
 
@@ -467,6 +485,12 @@ mod tests {
         assert_eq!(arm[1..], lin[1..]);
         assert_eq!(Os::from_target("linux", "aarch64"), Some(Os::LinuxArm64));
         assert_eq!(Os::from_target("macos", "aarch64"), None);
+        // Android = x86_64 Linux except the TGT part (triple + no outline atomics).
+        let android = zig_flags(Os::Android);
+        assert_eq!(android[0], "--target=aarch64-linux-android26");
+        assert_eq!(android[ZIG_TGT_ANDROID.len()..], lin[ZIG_TGT_LINUX.len()..]);
+        assert_eq!(Os::from_target("android", "aarch64"), Some(Os::Android));
+        assert!(Os::Android.is_linux());
     }
 
     #[test]
@@ -477,6 +501,7 @@ mod tests {
             (Os::Windows, ZIG_TGT_WINDOWS.len()),
             (Os::Linux, ZIG_TGT_LINUX.len()),
             (Os::LinuxArm64, ZIG_TGT_LINUX_ARM64.len()),
+            (Os::Android, ZIG_TGT_ANDROID.len()),
         ] {
             let flags = zig_flags(os);
             let mut i = 0;

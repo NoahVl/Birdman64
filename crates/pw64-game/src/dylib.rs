@@ -267,7 +267,9 @@ mod sys {
     }
 }
 
-#[cfg(target_os = "linux")]
+// Android: the same `dlopen`, from an absolute path in app storage (the
+// module is import-free, so no namespace/library-path setup is involved).
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod sys {
     use core::ffi::{CStr, c_void};
     use std::os::unix::ffi::OsStrExt;

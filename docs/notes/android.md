@@ -1,6 +1,8 @@
 # Android port (arm64): feasibility and plan
 
-Status: not started. Design notes only. Target is **arm64-v8a**. Distribution is an
+Status: compile-only groundwork. `aarch64-linux-android` builds and lints (CI job
+`android`), the app library links, and `packaging/android/build-apk.sh` makes a
+debug-signed APK. Nothing has run on a device yet. Target is **arm64-v8a**. Distribution is an
 APK on GitHub releases, not Google Play, so Play's rule against downloaded or locally
 built executable code doesn't apply. Goal: one codebase. Android-specific code sits
 behind `cfg(target_os = "android")`, the same way the Windows and Linux splits work.
@@ -11,8 +13,8 @@ behind `cfg(target_os = "android")`, the same way the Windows and Linux splits w
   pointer, `long` and layout patches apply unchanged. `-funsigned-char` and
   `-ffp-contract=off` are already in the shared flags (`pw64-cbuild`). Without them,
   arm64 clang would treat `char` as signed differently and fuse mul-add, which changes
-  float results. Re-run the record-layout diff (native-build.md §10) for
-  `aarch64-linux-android`.
+  float results. Not re-diffed for `aarch64-linux-android`: same LP64/AAPCS64 layout
+  as aarch64 Linux (aarch64.md), only the triple differs.
 - **Rust:** wgpu (Vulkan, GLES fallback), winit 0.30 (android-activity), cpal (AAudio),
   egui and corosensei all support aarch64 Android. pw64-gfx, pw64-audio, the formats
   code and the OS core have no target-specific code.
@@ -21,84 +23,50 @@ behind `cfg(target_os = "android")`, the same way the Windows and Linux splits w
 
 ## Address space
 
-**Status:** option A is implemented through S7 on desktop (option-a.md): RDRAM,
-stacks and images may live anywhere (`reloc` build, plain `dlopen`). Left for Android:
-the S8 production mode and the aarch64/module-loading items in option-a.md "Flipping the default".
+Option A (option-a.md) removed the low-4 GB requirement: the C sees 32-bit vaddrs
+translated to host addresses, so RDRAM, stacks, the app `.so` and the module live
+anywhere. Android is relocatable only, like aarch64 Linux (pw64-game build.rs sets
+`pw64_reloc`; `PW64_RELOC` defaults to `on`). No low reservation, so ART's use of the
+low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile there.
 
-The C needs every C-visible address to be < 4 GB with bit 31 set (native-build.md §2
-option C). This comes from the C's data model, not from linking: display lists, ROM
-structs, the allocator and the filesystem hold addresses in 32-bit fields, there are
-39 literal `0x80xxxxxx` addresses, and `(u32)p & 0x80000000` decides RAM vs ROM
-offset. The heap, stacks and framebuffers are bound by this as much as code and
-globals, so dynamic linking alone doesn't remove it.
+## Groundwork (compile-only, nothing run on a device)
 
-Two ways forward:
+- **C:** zig has no bionic libc, but the C is `-nostdinc` and the module imports
+  nothing, so zig still compiles and links it. `Os::Android` uses the target
+  `aarch64-linux-android26` (API 26 = minSdk, needed for AAudio) plus
+  `-mno-outline-atomics`, because the triple's default calls compiler-rt helpers the
+  module can't resolve. The NDK is needed only for rustc's final link and for `ring`
+  (first-run). A test link with `-z text` showed no text relocations.
+- **Platform:** the libc crate lacks `MAP_FIXED_NOREPLACE` on Android, hence
+  `pw64_platform::MAP_FIXED_NOREPLACE` (old kernels: hint, address checked). memfd
+  goes through the raw syscall (bionic's wrapper is API 30+). Bionic has no
+  `backtrace`, so frames come from `_Unwind_Backtrace`. An app `.so` has no
+  `__executable_start`, so the image range is its `dl_iterate_phdr` PT_LOAD span.
+- **App:** birdman64 = lib + thin bin; Android builds
+  `cargo rustc -p birdman64 --lib --crate-type cdylib`. NativeActivity was picked
+  because it needs no Java, AndroidX or Gradle. stdout/stderr are piped to logcat
+  (tag `birdman64`). Data dir = cwd = the internal files dir. `suspended` pauses
+  through the settings overlay and stops using the surface; `resumed` makes a new
+  one. EEPROM writes are already fsynced. When the activity is destroyed, `run_app`
+  returns and the process exits, so `android_main` is never re-entered.
+- **Pads:** `input/android_pad.rs` maps Android keycodes to gilrs `Button`s, so
+  bindings, capture and nav are unchanged. Back toggles settings. gilrs and btleplug
+  compile on Android but are never started; rfd is replaced by `android/rfd.rs`
+  (log only).
+- **Gaps:** winit 0.30 turns joystick MotionEvents into `Touch` (X/Y only), so there
+  is no stick or trigger path yet (hook: `android_pad::set_axes`; the d-pad steers
+  meanwhile). Also missing: touch controls (taps only drive menus), SAF picker,
+  dialogs, audio pause, cutouts, pad names.
 
-| | Reserved low range (option C on Android) | 64-bit pointers (option A) |
-|---|---|---|
-| Idea | Keep the current model; reserve 0x80000000..0xC0000000 at startup, load the module into it | C uses real pointers; RDRAM is a block allocated anywhere |
-| Work | Small: arm64 thunks, reservation, `android_dlopen_ext` | A few weeks (list below) |
-| Risk | ART keeps its heap/boot image in the low 4 GB; the range (1 GB of address space, not RAM) may be taken on some devices or versions | Hidden pointer-in-u32 sites the compiler can't flag |
-| Unlocks | Android only, maybe | Android, macOS, iOS; drops the fixed exe base, reservations and module base on every platform |
+## Build + first device test
 
-**Recommendation: option A**, done first on desktop, where today's build is a
-bit-identical reference (frame dumps, sweeps). A low reservation in a process ART
-already manages is too fragile to rely on across devices.
-
-### Option A work list (from the §2 hazard inventory)
-
-Superseded by option-a.md (design chosen: 32-bit vaddrs + translation layer, `Gfx`
-stays 8 bytes; inventory and step plan there). Kept as the original problem list.
-
-1. ~160 compiler-flagged int↔pointer sites (now zero-extending `PW64_U32`/`PW64_PTR`)
-   → real `uintptr_t`/pointers.
-2. 39 literal RDRAM addresses → `rdram_base + offset` (one host allocation, anywhere).
-3. `_uvMemAlloc` (returns `s32`), filesystem `dataInfo->address`, the memory map,
-   `gGfxFbPtrs`, `uvFileReadHeader(s32)` → 64-bit.
-4. ROM vs RAM bit-31 test (memory.c, filesystem.c) → explicit flag or range check.
-5. Display lists: widen `Gfx` to 16 bytes (SM64-port style) or keep 32-bit
-   **offsets** that the renderer adds a base to. Convert ROM dlists on load (UVTX
-   `setimg` patching, `OS_PHYSICAL_TO_K0` sites in texture/geometry/sprite.c).
-6. ROM structs with pointer slots (ParsedUVEN, UnkUVMD_24, font `Bitmap[]`, audio
-   `alBnkfNew`/`alSeqFileNew` in-place patching) → layout-aware loaders, which mostly
-   exist already for endianness.
-7. Rust side: the SP/audio emulation (`hle.rs`, Acmd addresses), the `pw64-gfx`
-   `Memory` mapping and `OSTask` reads → base translation. Re-check `pw64-kernel`
-   ports that touch addresses.
-8. Verification: frame-dump and audio-WAV identity against the option C build,
-   full gameplay sweep. Raw `sizeof` copies and arithmetic on stored addresses are
-   the sites to expect bugs in.
-
-With option A, Android still loads the game as a module (first-run layout), but with
-a plain `dlopen` at any address. The rest of this section describes the option C
-path, kept for reference.
-
-**Dynamic linking under option C:** yes, but the loader must not choose the address.
-- `android_dlopen_ext` with `ANDROID_DLEXT_RESERVED_ADDRESS` (API 21+) loads a
-  normal PIC `.so` into a range we `mmap`-reserve first, e.g. 0xB0000000. It's still
-  ordinary dynamic loading: the bionic linker applies relocations and
-  `dlsym` works. Android rejects text relocations (API 23+), so the module is linked
-  PIC/shared, not `/FIXED`-style. The base then comes from the reservation, not the
-  link address. Check the loaded base, as `dylib::load` does.
-- A plain `dlopen` would place the module high, so C globals would get addresses
-  ≥ 4 GB and truncate. That only becomes possible after widening Gfx and the
-  allocator (§2 option A), the same work macOS would need.
-- The module could import symbols straight from `libmain.so` (ELF data imports go
-  through the 64-bit GOT, so the MSVC dllimport problem doesn't exist here). Keep the
-  thunk table anyway: it's shared with Windows and Linux, and the module stays
-  import-free. The thunks (`pw64_dll_shim.c`, `jmp *pw64_imp_x(%rip)`) need an arm64
-  version: `adrp x16, slot; ldr x16, [x16, :lo12:slot]; br x16`. x16/x17 are the
-  AAPCS64 veneer registers, so the thunk clobbers nothing the callee expects.
-- **Audit:** nothing Rust passes to C may live in `libmain.so` statics or the Rust
-  heap. Both are high on Android, and they were only safe on Windows because the exe
-  was low. The module design already defines the C-read data in the shim. Check every
-  thunk argument and return value that is a pointer.
-- **Risk (check first, on a real device):** ART puts its heap and boot image in the
-  low 4 GB for compressed references. Reserve 0x80000000..0xC0000000 (RDRAM window,
-  coroutine stacks, module) as early as possible in `android_main`, and check whether
-  that range is free on a few devices and Android versions. If it isn't, the window,
-  stacks and module would need another < 4 GB range with bit 31 set, and that range
-  only spans 0x80000000..0xFFFFFFFF.
+- `ANDROID_HOME=… ANDROID_NDK_HOME=… packaging/android/build-apk.sh` (no Gradle,
+  16 KB-aligned) → `target/android-apk/birdman64.apk`, ~21 MB, debug-signed. It has
+  the game C linked in, so it is for development only.
+- `adb install -r` it, start once, `adb push <rom>.z64
+  /sdcard/Android/data/app.birdman64/files/rom/`, restart; `adb logcat -s birdman64`.
+- Test order: platform test binaries via `adb push` + `adb shell` first, then boot to
+  the title, then pad buttons, then home → back.
 
 ## Building the game module
 
@@ -111,30 +79,19 @@ path, kept for reference.
   `--target=aarch64-linux-android`, and the player copies it over. Simpler and no
   zig in the APK, but a worse experience for beginners.
 
-## Frontend work (new code)
+## Frontend work left
 
-- **Gamepads:** gilrs has no Android backend. Read key and motion events from
-  android-activity and feed pad slots in the same place gilrs does. BLE pads: skip
-  (btleplug needs Java glue).
 - **Touch controls:** on-screen stick + A/B/Z/R/C/Start overlay (egui or a dedicated
   pass), hidden while a pad is connected. Needed for phones without a controller.
-- **ROM / files:** no rfd. Pick the ROM through the Storage Access Framework
-  (`ACTION_OPEN_DOCUMENT`, JNI), copy it into app storage. Data dir = internal files
-  dir. No display modes, F11 or Alt+Enter.
-- **Lifecycle:** on `Suspended`, pause the OS core (settings pause model), drop the
-  surface and flush the EEPROM (the process may be killed). On `Resumed`, recreate
-  the surface. Handle rotation (landscape lock) and display cutouts (fill-screen
-  safe area).
-- **Packaging/CI:** GameActivity (or NativeActivity) + cargo-ndk + Gradle (or xbuild).
-  A CI job that builds and lints `aarch64-linux-android`. Debug-signed APK as a
-  release asset.
+- **ROM / files:** pick the ROM through the Storage Access Framework
+  (`ACTION_OPEN_DOCUMENT`, JNI), copy it into app storage.
+- **Release APK:** debug-signed APK as a release asset (CI signing); no static game C.
 
 ## Order
 
-1. **Option A on desktop** (Windows/Linux x86_64), verified bit-identical against the
-   current build.
-2. **aarch64 Linux** (Raspberry Pi 5 / ARM CI runner): proves the C on arm64, the
-   coroutine stacks and the module loader with no Android tooling. All of it is reused
-   on Android.
-3. **Android, pad only, module built on desktop:** proves wgpu, cpal and the lifecycle.
+1. **Option A on desktop** (Windows/Linux x86_64): done.
+2. **aarch64 Linux:** builds, tests pass under qemu (aarch64.md).
+3. **Android, pad only:** compile-only groundwork done (above); next is the device test,
+   then the stick path. A module built on desktop: `Os::Android` exists in pw64-cbuild,
+   but the builder only targets its host so far.
 4. **On-device build, touch controls, SAF ROM picker:** usable by beginners.

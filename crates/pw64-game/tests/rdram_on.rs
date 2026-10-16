@@ -17,14 +17,14 @@ fn range_free(base: usize, len: usize) -> bool {
         // PAGE_NOACCESS); the result is only compared.
         unsafe { VirtualAlloc(base as *mut u8, len, 0x2000, 0x01) as usize == base }
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     // SAFETY: PROT_NONE anonymous mapping that never clobbers; checked.
     unsafe {
         let p = libc::mmap(
             base as *mut libc::c_void,
             len,
             libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | libc::MAP_FIXED_NOREPLACE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | pw64_platform::MAP_FIXED_NOREPLACE,
             -1,
             0,
         );

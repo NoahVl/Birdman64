@@ -245,9 +245,11 @@ pub fn link_args(os: Os) -> Vec<String> {
             .chain(&["-z", "noexecstack"])
             .map(|s| s.to_string())
             .collect(),
-        // arm64 is relocatable only (no fixed-window build there, option-a.md
-        // "Flipping the default"): never an `--image-base`.
-        Os::LinuxArm64 => ["ld.lld", "-shared", "-Bsymbolic", "--eh-frame-hdr"]
+        // arm64 (Linux and Android) is relocatable only (no fixed-window
+        // build there, option-a.md "Flipping the default"): never an
+        // `--image-base`. Android also rejects text relocations (API 23+);
+        // the -fPIE objects have none.
+        Os::LinuxArm64 | Os::Android => ["ld.lld", "-shared", "-Bsymbolic", "--eh-frame-hdr"]
             .iter()
             .chain(&["-z", "noexecstack"])
             .map(|s| s.to_string())
@@ -360,7 +362,7 @@ pub fn build_module(
     // 3. Compile every decomp C + our native C in parallel.
     let ext = match host_os() {
         Os::Windows => "obj",
-        Os::Linux | Os::LinuxArm64 => "o",
+        Os::Linux | Os::LinuxArm64 | Os::Android => "o",
     };
     let mut jobs = Vec::new();
     for dir in SRC_DIRS {
@@ -481,7 +483,7 @@ pub fn build_module(
             link_args.push(format!("-map:{}", slash(&map)));
             link_args.push(format!("-out:{}", slash(&library)));
         }
-        Os::Linux | Os::LinuxArm64 => {
+        Os::Linux | Os::LinuxArm64 | Os::Android => {
             // -Bsymbolic + version script: every C symbol binds locally, so
             // the -fPIE objects (identical code to the static Linux build)
             // link into a .so. Nothing stays undefined since T1: the CRT
@@ -600,7 +602,7 @@ pub fn build_module(
 fn library_name() -> &'static str {
     match host_os() {
         Os::Windows => "pw64game.dll",
-        Os::Linux | Os::LinuxArm64 => "libpw64game.so",
+        Os::Linux | Os::LinuxArm64 | Os::Android => "libpw64game.so",
     }
 }
 
@@ -716,6 +718,8 @@ const LINUX_VERSION_SCRIPT: &str = "\
 fn host_os() -> Os {
     if cfg!(windows) {
         Os::Windows
+    } else if cfg!(target_os = "android") {
+        Os::Android
     } else if cfg!(target_arch = "aarch64") {
         Os::LinuxArm64
     } else {

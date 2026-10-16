@@ -281,8 +281,8 @@ clippy (Windows + `--target x86_64-unknown-linux-gnu`); perf vs pre-step (6 runs
 - macOS arm64: memmap/stack/high_heap mapping paths (no `MAP_FIXED_NOREPLACE`:
   hint + check; `on` already needs no low reservation), crash_linux.rs's glibc
   `backtrace`/`__executable_start` equivalents, ad-hoc code signing of the module.
-- Android: as aarch64 Linux, plus loading the module from app storage
-  (android.md "Building the game module"); no low-4 GB range is needed any more.
+- Android: builds relocatable-only like aarch64 Linux (compile-only so far, android.md);
+  left: loading the module from app storage (android.md "Building the game module").
 
 ## Performance (inline fast path, measured after S2)
 

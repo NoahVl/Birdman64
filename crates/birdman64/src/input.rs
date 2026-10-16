@@ -19,6 +19,10 @@
 //! `p2_input` choice. Without it everything merges into controller 1, as
 //! above.
 
+// Android: the gilrs thread (`spawn`) and its helpers never run (no gilrs
+// backend there); `android_pad` feeds the slots instead.
+#![cfg_attr(target_os = "android", allow(dead_code))]
+
 use crate::config;
 use gilrs::{Axis, Button, Gilrs};
 use std::collections::{BTreeMap, HashMap};
@@ -26,6 +30,12 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use winit::keyboard::KeyCode;
+
+// Android: no gilrs backend; the window feeds pad key events instead.
+#[cfg(target_os = "android")]
+mod android_pad;
+#[cfg(target_os = "android")]
+pub use android_pad::{AndroidKey, android_key};
 
 // libultra `os_cont.h` button bits.
 pub const CONT_A: u16 = 0x8000;

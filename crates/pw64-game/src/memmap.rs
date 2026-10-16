@@ -197,7 +197,7 @@ pub fn map_rdram_window() {
             "could not map the RDRAM window at {RDRAM_BASE:#x}"
         );
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         // MAP_FIXED_NOREPLACE: fail (EEXIST) rather than clobber a mapping;
         // pre-4.17 kernels take it as a hint, hence the address check.
@@ -207,7 +207,7 @@ pub fn map_rdram_window() {
                 RDRAM_BASE as *mut c_void,
                 RDRAM_SIZE,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | pw64_platform::MAP_FIXED_NOREPLACE,
                 -1,
                 0,
             )
@@ -220,8 +220,8 @@ pub fn map_rdram_window() {
         );
     }
     // macOS/arm64 forbids low mappings (`__PAGEZERO`): native-build.md §10.
-    #[cfg(not(any(windows, target_os = "linux")))]
-    compile_error!("RDRAM window mapping is implemented for Windows and Linux only");
+    #[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
+    compile_error!("RDRAM window mapping is implemented for Windows, Linux and Android only");
 }
 
 /// [`Reloc::Alias`]: one zeroed shared-memory block of [`RDRAM_SIZE`],
@@ -263,13 +263,22 @@ fn map_rdram_alias() -> usize {
             alias_candidates().find(|&a| view(a) == a)
         }
     };
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     let high = {
         // SAFETY: memfd (zero-filled) mapped shared at fixed addresses with
         // MAP_FIXED_NOREPLACE (never clobbers; pre-4.17 kernels take it as
         // a hint, hence the address checks); every result is checked. The
         // fd stays open (the mappings keep the file alive anyway).
         unsafe {
+            // Bionic's memfd_create wrapper needs API 30; the syscall works
+            // on every kernel Android 8 ships (3.17+).
+            #[cfg(target_os = "android")]
+            let fd = libc::syscall(
+                libc::SYS_memfd_create,
+                c"pw64-rdram".as_ptr(),
+                libc::MFD_CLOEXEC,
+            ) as libc::c_int;
+            #[cfg(target_os = "linux")]
             let fd = libc::memfd_create(c"pw64-rdram".as_ptr(), libc::MFD_CLOEXEC);
             assert!(
                 fd >= 0 && libc::ftruncate(fd, RDRAM_SIZE as libc::off_t) == 0,
@@ -281,7 +290,7 @@ fn map_rdram_alias() -> usize {
                     base as *mut c_void,
                     RDRAM_SIZE,
                     libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_SHARED | libc::MAP_FIXED_NOREPLACE,
+                    libc::MAP_SHARED | pw64_platform::MAP_FIXED_NOREPLACE,
                     fd,
                     0,
                 );
@@ -319,7 +328,7 @@ fn reserve_noaccess(base: usize, len: usize) -> bool {
         let p = unsafe { sys::VirtualAlloc(base as *mut c_void, len, sys::MEM_RESERVE, sys::PAGE_NOACCESS) };
         p as usize == base
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     // SAFETY: anonymous PROT_NONE mapping, MAP_FIXED_NOREPLACE (never
     // clobbers; old kernels take it as a hint, hence the check).
     unsafe {
@@ -327,7 +336,7 @@ fn reserve_noaccess(base: usize, len: usize) -> bool {
             base as *mut c_void,
             len,
             libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | libc::MAP_FIXED_NOREPLACE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | pw64_platform::MAP_FIXED_NOREPLACE,
             -1,
             0,
         );
@@ -373,7 +382,7 @@ fn map_rdram_high(audit: bool) -> usize {
         let high = alias_candidates().find(|&a| alloc(a, rw, sys::PAGE_READWRITE) == a);
         (high, !audit || reserve_noaccess(RDRAM_BASE, RDRAM_SIZE))
     };
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     let (high, low) = {
         let map = |base: usize, prot: i32| {
             // SAFETY: anonymous mapping, MAP_FIXED_NOREPLACE (never
@@ -383,7 +392,7 @@ fn map_rdram_high(audit: bool) -> usize {
                     base as *mut c_void,
                     RDRAM_SIZE,
                     prot,
-                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | pw64_platform::MAP_FIXED_NOREPLACE,
                     -1,
                     0,
                 );
@@ -471,6 +480,13 @@ pub fn image_regions(
         .collect();
     v.push(region("exe", exe, EXE_VBASE, LIMIT_4GB as u64));
     v
+}
+
+/// `(start, end)` of the app `.so`'s loaded image (no `__executable_start`
+/// on Android; the crash tracer finds it with `dl_iterate_phdr`).
+#[cfg(target_os = "android")]
+fn exe_image_range() -> (usize, usize) {
+    pw64_platform::os::crash::exe_image_range()
 }
 
 /// `(start, end)` of this exe's loaded image (code, data, BSS).

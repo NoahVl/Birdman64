@@ -85,7 +85,7 @@ fn reserve(base: usize) -> bool {
         };
         p as usize == base
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     // SAFETY: anonymous PROT_NONE mapping that never clobbers (old kernels
     // take NOREPLACE as a hint, hence the check).
     unsafe {
@@ -93,7 +93,7 @@ fn reserve(base: usize) -> bool {
             base as *mut libc::c_void,
             ARENA_SIZE,
             libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | libc::MAP_FIXED_NOREPLACE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | pw64_platform::MAP_FIXED_NOREPLACE,
             -1,
             0,
         );
@@ -112,7 +112,7 @@ fn commit(addr: usize, len: usize) -> bool {
         let p = unsafe { sys::VirtualAlloc(addr as *mut _, len, sys::MEM_COMMIT, sys::PAGE_READWRITE) };
         !p.is_null()
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     // SAFETY: pages inside our own reservation.
     unsafe {
         libc::mprotect(

@@ -33,6 +33,8 @@ use winit::window::{Fullscreen, Icon, Window, WindowId};
 /// the 60 Hz VI path).
 pub(crate) type PendingRate = Arc<Mutex<Option<Option<os::vi::PresentRate>>>>;
 
+// Android: no input thread sends Toast / Pause (yet).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 enum UserEvent {
     /// New framebuffer work is in the slot.
     Frame,
@@ -65,6 +67,7 @@ pub fn notify_settings() {
 
 /// Called by the input thread for a controller toast (U7): shows `text`
 /// for 6 s in the window's bottom-left corner.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn notify_toast(text: String) {
     if let Some(p) = PROXY.get() {
         let _ = p.send_event(UserEvent::Toast(text));
@@ -74,6 +77,7 @@ pub fn notify_toast(text: String) {
 /// Called by the input thread when the last controller disconnected (U26).
 /// Same route as [`notify_toast`]: the decision (the player's setting, a
 /// running game, no automation) is made on the window thread.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn request_pause() {
     if let Some(p) = PROXY.get() {
         let _ = p.send_event(UserEvent::Pause);
@@ -133,6 +137,14 @@ pub(crate) struct Gpu {
     /// Live frame rate + V-Sync (the settings overlay changes both live);
     /// startup values from `opts::fps(true)` / `opts::vsync()`.
     pub(crate) fps: opts::Fps,
+    /// Android: the surface is recreated on every `resumed` (the native
+    /// window is destroyed while the app is in the background).
+    #[cfg(target_os = "android")]
+    instance: wgpu::Instance,
+    /// Android: between `suspended` and `resumed` there is no native window;
+    /// the stale surface is never configured or presented.
+    #[cfg(target_os = "android")]
+    suspended: bool,
     pub(crate) vsync: bool,
     /// OLED care (O3, live): the HUD drifts and dims by these; startup
     /// values from `opts::oled_drift()` / `opts::oled_brightness()`.
@@ -373,6 +385,10 @@ impl Gpu {
     /// skipped configure is retried by `surface_ready` before each redraw
     /// (Wayland never reports the old configuration as outdated).
     fn configure_surface(&mut self) {
+        #[cfg(target_os = "android")]
+        if self.suspended {
+            return;
+        }
         if self
             .surface
             .get_capabilities(&self.adapter)
@@ -408,6 +424,10 @@ impl Gpu {
 
     /// Before a redraw: retries a skipped configure; false = skip this frame.
     fn surface_ready(&mut self) -> bool {
+        #[cfg(target_os = "android")]
+        if self.suspended {
+            return false;
+        }
         if self.surface_unsupported {
             self.configure_surface();
         }
@@ -585,6 +605,11 @@ pub fn run(setup: bool, ask_rom: bool) -> ! {
              [graphics] linux_window = \"wayland\" to change"
         );
         builder.with_x11();
+    }
+    #[cfg(target_os = "android")]
+    {
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+        builder.with_android_app(crate::android::app());
     }
     let el = match builder.build() {
         Ok(el) => el,
@@ -909,6 +934,10 @@ impl App {
             scale,
             filter,
             fps,
+            #[cfg(target_os = "android")]
+            instance,
+            #[cfg(target_os = "android")]
+            suspended: false,
             vsync,
             oled_drift: opts::oled_drift(),
             oled_brightness: opts::oled_brightness(),
@@ -1481,8 +1510,47 @@ impl App {
 
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
-        if self.gpu.is_none() {
+        let Some(g) = &mut self.gpu else {
             self.start(el);
+            return;
+        };
+        // Desktop: only the first `resumed` matters.
+        #[cfg(not(target_os = "android"))]
+        let _ = g;
+        // Android: back from the background with a new native window: a new
+        // surface for it. The game stays paused in the settings overlay
+        // (`suspended`) until the player resumes it.
+        #[cfg(target_os = "android")]
+        {
+            match g.instance.create_surface(g.window.clone()) {
+                Ok(s) => {
+                    g.surface = s;
+                    g.suspended = false;
+                    let size = g.window.inner_size();
+                    (g.config.width, g.config.height) = (size.width.max(1), size.height.max(1));
+                    g.configure_surface();
+                    g.window.request_redraw();
+                }
+                Err(e) => eprintln!("[window] resumed: no surface ({e}); waiting"),
+            }
+        }
+    }
+
+    /// Android: the app went to the background and its native window is
+    /// about to be destroyed (the process may be killed from here on). The
+    /// game pauses through the settings overlay, the same pause model as
+    /// U26's "pause in background"; the surface is not touched until
+    /// `resumed`. The EEPROM needs no flush: every save write is persisted
+    /// and fsynced as it happens (pw64-platform headless.rs `persist`).
+    /// TODO(android): stop the audio stream while suspended.
+    #[cfg(target_os = "android")]
+    fn suspended(&mut self, _: &ActiveEventLoop) {
+        input::release_all_keys();
+        if self.game_started() && !settings::is_open() {
+            self.open_settings();
+        }
+        if let Some(g) = &mut self.gpu {
+            g.suspended = true;
         }
     }
 
@@ -1641,6 +1709,25 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // Android: gamepad keys (BUTTON_*, the d-pad, Back) feed the
+                // pad slots; everything else is an ordinary keyboard key.
+                #[cfg(target_os = "android")]
+                if self.rom_screen.is_none() {
+                    let pressed = event.state == ElementState::Pressed;
+                    match input::android_key(event.physical_key, pressed, event.repeat) {
+                        input::AndroidKey::Pad => {
+                            if settings::is_open() {
+                                self.request_overlay_redraw();
+                            }
+                            return;
+                        }
+                        input::AndroidKey::Back => {
+                            self.toggle_settings();
+                            return;
+                        }
+                        input::AndroidKey::Keyboard => {}
+                    }
+                }
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
@@ -1705,6 +1792,31 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if !alt_enter {
                     input::on_key(code, pressed);
+                }
+            }
+            // Android: a tap drives the ROM screen and the settings overlay
+            // like a mouse click. TODO(android): on-screen touch controls
+            // (stick + A/B/Z/R/C/Start, hidden while a pad is connected).
+            #[cfg(target_os = "android")]
+            WindowEvent::Touch(t) => {
+                use winit::event::TouchPhase;
+                let pressed = match t.phase {
+                    TouchPhase::Started => true,
+                    TouchPhase::Ended | TouchPhase::Cancelled => false,
+                    TouchPhase::Moved => return,
+                };
+                self.cursor = (t.location.x as f32, t.location.y as f32);
+                let (x, y) = self.cursor;
+                if let (Some(s), Some(g)) = (&mut self.rom_screen, &self.gpu) {
+                    let scale = g.window.scale_factor() as f32;
+                    s.pointer_moved(x, y, scale);
+                    s.pointer_button(x, y, scale, pressed);
+                    g.window.request_redraw();
+                }
+                if let (true, Some(o)) = (settings::is_open(), &mut self.overlay) {
+                    o.pointer_moved(x, y);
+                    o.pointer_button(x, y, pressed);
+                    self.request_overlay_redraw();
                 }
             }
             // A file dropped onto the window: the ROM screen's way in.

@@ -87,6 +87,48 @@ jobs:
       - name: tests
         run: cargo test --workspace
 
+  # Android arm64 (docs/notes/android.md): compile + clippy only, no device
+  # tests and no APK signing yet. The decomp C is built by zig as on every
+  # target (no bionic needed: -nostdinc); rustc links the app library with
+  # the NDK clang. The cdylib step proves that link (NativeActivity entry,
+  # liblog/libandroid/libaaudio).
+  android:
+    name: Android arm64 · clippy, cdylib
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # decomp/ (read-only reference, needed by build.rs)
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        id: zig
+        with:
+          path: tools/zig
+          key: zig-0.16.0-tools-${{ runner.os }}
+      - name: zig (get_zig example, sha256-checked)
+        if: steps.zig.outputs.cache-hit != 'true'
+        run: cargo run -p pw64-cbuild --example get_zig --features fetch
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+      - name: NDK toolchain env
+        run: |
+          bin="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CC_aarch64_linux_android=$bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+      - name: clippy
+        run: >
+          cargo clippy --target aarch64-linux-android --all-targets
+          -p birdman64 -p pw64-game -p pw64-platform -p pw64-cbuild -- -D warnings
+      - name: app library (cdylib)
+        run: cargo rustc -p birdman64 --lib --crate-type cdylib --target aarch64-linux-android
+
   # First-run module build (docs/notes/first-run-build.md T12), both release
   # platforms, every push: builds the game module with zig via the
   # pw64-cbuild example (network-free: the checked-out decomp is

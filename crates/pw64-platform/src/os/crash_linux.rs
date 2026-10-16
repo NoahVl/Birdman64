@@ -52,7 +52,8 @@ fn module_range() -> (usize, usize) {
 
 /// `(start, end)` of this exe's loaded image (mirror of pw64-game memmap):
 /// linker-defined symbols, so async-signal-safe.
-fn exe_image_range() -> (usize, usize) {
+#[cfg(not(target_os = "android"))]
+pub fn exe_image_range() -> (usize, usize) {
     unsafe extern "C" {
         // Defined by the linker (lld and GNU ld): first byte of the first
         // PT_LOAD and the end of .bss.
@@ -63,6 +64,103 @@ fn exe_image_range() -> (usize, usize) {
         (&raw const __executable_start) as usize,
         (&raw const _end) as usize,
     )
+}
+
+/// Android: the "exe" is the app's `.so` (loaded by the Java side), and
+/// bionic's linker defines no `__executable_start` for it. The range is the
+/// PT_LOAD span of the object holding this function, found once with
+/// `dl_iterate_phdr` (not async-signal-safe: [`install`] primes the cache
+/// before any handler can run).
+#[cfg(target_os = "android")]
+pub fn exe_image_range() -> (usize, usize) {
+    static IMAGE: (AtomicUsize, AtomicUsize) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    let start = IMAGE.0.load(Ordering::Relaxed);
+    if start != 0 {
+        return (start, IMAGE.1.load(Ordering::Relaxed));
+    }
+    let r = image_containing(exe_image_range as *const () as usize);
+    IMAGE.1.store(r.1, Ordering::Relaxed);
+    IMAGE.0.store(r.0, Ordering::Relaxed);
+    r
+}
+
+/// PT_LOAD span `(start, end)` of the loaded object containing `addr`, or
+/// `(0, 0)` (an empty range, matches nothing).
+#[cfg(target_os = "android")]
+fn image_containing(addr: usize) -> (usize, usize) {
+    unsafe extern "C" fn cb(
+        info: *mut libc::dl_phdr_info,
+        _size: usize,
+        data: *mut libc::c_void,
+    ) -> libc::c_int {
+        // SAFETY: bionic passes a valid info whose phdr array has phnum
+        // entries; `data` is the `(addr, start, end)` below.
+        unsafe {
+            let st = &mut *(data as *mut (usize, usize, usize));
+            let info = &*info;
+            let phdrs = core::slice::from_raw_parts(info.dlpi_phdr, info.dlpi_phnum as usize);
+            let (mut lo, mut hi, mut hit) = (usize::MAX, 0, false);
+            for p in phdrs.iter().filter(|p| p.p_type == libc::PT_LOAD) {
+                let s = info.dlpi_addr as usize + p.p_vaddr as usize;
+                let e = s + p.p_memsz as usize;
+                hit |= (s..e).contains(&st.0);
+                lo = lo.min(s);
+                hi = hi.max(e);
+            }
+            if hit {
+                (st.1, st.2) = (lo, hi);
+                return 1; // stop iterating
+            }
+            0
+        }
+    }
+    let mut st = (addr, 0usize, 0usize);
+    // SAFETY: the callback only reads what bionic hands it and writes `st`.
+    unsafe { libc::dl_iterate_phdr(Some(cb), (&raw mut st).cast()) };
+    (st.1, st.2)
+}
+
+/// Return addresses of the current thread, innermost first, into `ips`
+/// (glibc `backtrace(3)`). Returns the count.
+#[cfg(not(target_os = "android"))]
+fn return_addresses(ips: &mut [usize; 48]) -> usize {
+    let mut raw = [core::ptr::null_mut::<libc::c_void>(); 48];
+    // SAFETY: glibc backtrace(3) into a 48-slot buffer.
+    let n = unsafe { libc::backtrace(raw.as_mut_ptr(), raw.len() as libc::c_int) }.max(0) as usize;
+    for (o, i) in ips.iter_mut().zip(&raw[..n]) {
+        *o = *i as usize;
+    }
+    n
+}
+
+/// Bionic has no `backtrace(3)`: walk with libunwind's `_Unwind_Backtrace`
+/// (Rust's std links it on Android), the same frames glibc's would give.
+#[cfg(target_os = "android")]
+fn return_addresses(ips: &mut [usize; 48]) -> usize {
+    unsafe extern "C" {
+        fn _Unwind_Backtrace(
+            trace: unsafe extern "C" fn(*mut libc::c_void, *mut libc::c_void) -> libc::c_int,
+            arg: *mut libc::c_void,
+        ) -> libc::c_int;
+        fn _Unwind_GetIP(ctx: *mut libc::c_void) -> usize;
+    }
+    unsafe extern "C" fn step(ctx: *mut libc::c_void, arg: *mut libc::c_void) -> libc::c_int {
+        // SAFETY: `arg` is the `(buffer, count)` below; `ctx` is the
+        // unwinder's live frame context.
+        unsafe {
+            let st = &mut *(arg as *mut (&mut [usize; 48], usize));
+            if st.1 == st.0.len() {
+                return 5; // _URC_END_OF_STACK: buffer full
+            }
+            st.0[st.1] = _Unwind_GetIP(ctx);
+            st.1 += 1;
+        }
+        0 // _URC_NO_REASON: keep going
+    }
+    let mut st = (ips, 0usize);
+    // SAFETY: the callback writes only into `st`.
+    unsafe { _Unwind_Backtrace(step, (&raw mut st).cast()) };
+    st.1
 }
 
 /// Pure code-address formatting for the crash lines (mirror: crash.rs):
@@ -104,9 +202,8 @@ fn write_images(
 /// frames (std's backtrace prints names only, no addresses).
 pub fn panic_frames(skip: u32) -> String {
     let (exe, module) = (exe_image_range(), module_range());
-    let mut ips = [core::ptr::null_mut::<libc::c_void>(); 48];
-    // SAFETY: glibc backtrace(3) into a 48-slot buffer.
-    let n = unsafe { libc::backtrace(ips.as_mut_ptr(), ips.len() as libc::c_int) }.max(0) as usize;
+    let mut ips = [0usize; 48];
+    let n = return_addresses(&mut ips);
     let mut s = String::new();
     let _ = write_images(&mut s, exe, module);
     s.push_str("\nframes:");
@@ -210,6 +307,8 @@ pub fn install() {
     if !prev.is_empty() {
         return;
     }
+    // Android: computes and caches the image range outside any handler.
+    let _ = exe_image_range();
     for sig in SIGNALS {
         // SAFETY: plain sigaction setup; SA_ONSTACK uses the alternate stack
         // Rust gives its threads, so a guard-page hit can still report.

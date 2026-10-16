@@ -340,6 +340,7 @@ dependencies = [
  "env_logger",
  "futures",
  "gilrs",
+ "libc",
  "log",
  "png",
  "pw64-audio",
