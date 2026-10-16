@@ -40,6 +40,7 @@ mod rom_setup;
 mod settings;
 mod sys;
 mod toast;
+mod touch;
 mod window;
 
 use pw64_platform::{headless, os};
@@ -366,6 +367,15 @@ fn park_if_quit() {
     }
 }
 
+/// The OS core's pause loop (settings overlay open): a quit parks; on
+/// Android the audio stream follows the app's background state (the
+/// overlay pauses the game while the app is in the background).
+fn pause_hook() {
+    park_if_quit();
+    #[cfg(target_os = "android")]
+    audio::sync_suspend();
+}
+
 pub fn exit_code(stop: os::Stop) -> i32 {
     match stop {
         os::Stop::RetraceLimit => 0,
@@ -409,6 +419,8 @@ pub fn run_game(
         // (time), whatever the present rate.
         os::set_retrace_hook(move |r| {
             park_if_quit();
+            #[cfg(target_os = "android")]
+            audio::sync_suspend();
             input::script_tick(r.number);
             input::split_tick();
             // The window re-read the monitor's refresh rate (move to
@@ -433,7 +445,7 @@ pub fn run_game(
         });
         // S3/P8: a quit while the settings overlay pauses the core (no
         // retraces or present ticks fire) parks from the pause loop.
-        os::set_pause_hook(park_if_quit);
+        os::set_pause_hook(pause_hook);
     }
     audio::install(); // audio tasks → pw64-audio HLE, AI → cpal (audio.rs)
     pw64_game::set_widescreen_aspect(opts::widescreen().unwrap_or(0.0));

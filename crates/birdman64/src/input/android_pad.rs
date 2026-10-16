@@ -20,6 +20,7 @@ use super::{
     FOCUSED, PAD_CAPTURE, Pad, SOURCES, TRIGGER_THRESHOLD, c_stick_buttons, digital_stick,
     gamepad_bindings, hat_buttons, publish, slot_bits_pad, stick_to_n64,
 };
+use crate::touch::TouchPad;
 use gilrs::Button;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
@@ -64,6 +65,9 @@ struct State {
     /// Some axis event arrived: the d-pad stops doubling as the stick.
     axes_seen: bool,
     settings_down: bool,
+    /// The on-screen touch controls (`touch.rs`): N64 bits, merged after
+    /// the bindings (they are labelled with N64 names, never rebound).
+    touch: TouchPad,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
@@ -80,6 +84,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     },
     axes_seen: false,
     settings_down: false,
+    touch: TouchPad::IDLE,
 });
 
 /// Android gamepad keycode → the gilrs button at the same position
@@ -155,8 +160,30 @@ pub fn android_key(key: PhysicalKey, pressed: bool, repeat: bool) -> AndroidKey 
     AndroidKey::Pad
 }
 
+/// The touch controls' state (window thread, on every touch event).
+pub fn set_touch(touch: TouchPad) {
+    let mut st = STATE.lock().unwrap();
+    if st.touch != touch {
+        st.touch = touch;
+        republish(&mut st, crate::settings::pad_button());
+    }
+}
+
+/// Releases everything held (pad keys, axes, touch): the window lost focus
+/// or the app went to the background, where the release events never come.
+/// Called by `input::release_all_keys` before it locks the sources (lock
+/// order: this `STATE`, then `SOURCES`).
+pub fn release_all() {
+    let mut st = STATE.lock().unwrap();
+    st.held.clear();
+    st.axes = Axes::default();
+    st.touch = TouchPad::IDLE;
+    republish(&mut st, crate::settings::pad_button());
+}
+
 /// TODO(android) hook: the analog axes of the pad, once something delivers
-/// them (module docs).
+/// them (module docs). Its caller should also hide the touch controls
+/// (`touch::Controls::hide`), as a pad key does.
 #[allow(dead_code)]
 pub fn set_axes(axes: Axes) {
     let mut st = STATE.lock().unwrap();
@@ -168,7 +195,7 @@ pub fn set_axes(axes: Axes) {
 /// One pad's N64 state from the resolved gamepad bindings (the gilrs
 /// `gamepad_pad` rules: triggers past the threshold, the hat as the d-pad,
 /// right stick → C buttons). Android's stick y points down.
-fn game_pad(held: &[Button], a: &Axes, axes_seen: bool) -> Pad {
+fn game_pad(held: &[Button], a: &Axes, axes_seen: bool, touch: &TouchPad) -> Pad {
     let hat = hat_buttons(a.hat_x, -a.hat_y);
     let mut bits = 0u32;
     for binding in gamepad_bindings().iter() {
@@ -200,11 +227,18 @@ fn game_pad(held: &[Button], a: &Axes, axes_seen: bool) -> Pad {
             dir(Button::DPadUp, Button::DPadDown),
         )
     };
-    slot_bits_pad(bits).merge(Pad {
-        button: c_stick_buttons(a.rx, -a.ry),
-        stick_x,
-        stick_y,
-    })
+    let (touch_x, touch_y) = stick_to_n64(touch.x, touch.y);
+    slot_bits_pad(bits)
+        .merge(Pad {
+            button: c_stick_buttons(a.rx, -a.ry),
+            stick_x,
+            stick_y,
+        })
+        .merge(Pad {
+            button: touch.buttons,
+            stick_x: touch_x,
+            stick_y: touch_y,
+        })
 }
 
 /// The overlay's navigation pad (W3: fixed physical buttons, never rebound).
@@ -238,7 +272,7 @@ fn republish(st: &mut State, settings_btn: Button) {
         crate::window::notify_settings();
     }
     st.settings_down = settings_down;
-    let pad = game_pad(&st.held, &st.axes, st.axes_seen);
+    let pad = game_pad(&st.held, &st.axes, st.axes_seen, &st.touch);
     let nav = nav_pad(&st.held, &st.axes);
     let mut s = SOURCES.lock().unwrap();
     s.gamepads = vec![(PAD_ID, PAD_NAME.to_string(), pad)];

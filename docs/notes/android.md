@@ -46,17 +46,43 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
   `cargo rustc -p birdman64 --lib --crate-type cdylib`. NativeActivity was picked
   because it needs no Java, AndroidX or Gradle. stdout/stderr are piped to logcat
   (tag `birdman64`). Data dir = cwd = the internal files dir. `suspended` pauses
-  through the settings overlay and stops using the surface; `resumed` makes a new
-  one. EEPROM writes are already fsynced. When the activity is destroyed, `run_app`
-  returns and the process exits, so `android_main` is never re-entered.
+  through the overlay, releases all input, drops the surface (`Gpu::surface =
+  None`) and sets `audio::set_suspended`; the game thread (cpal streams are
+  `!Send`) pauses the stream from the OS pause hook (`audio::sync_suspend`).
+  `resumed` makes a new surface and restarts the stream; the overlay stays open.
+  EEPROM writes are fsynced. Activity destroyed → `run_app` returns, the process
+  exits, so `android_main` is never re-entered.
 - **Pads:** `input/android_pad.rs` maps Android keycodes to gilrs `Button`s, so
   bindings, capture and nav are unchanged. Back toggles settings. gilrs and btleplug
   compile on Android but are never started; rfd is replaced by `android/rfd.rs`
   (log only).
 - **Gaps:** winit 0.30 turns joystick MotionEvents into `Touch` (X/Y only), so there
   is no stick or trigger path yet (hook: `android_pad::set_axes`; the d-pad steers
-  meanwhile). Also missing: touch controls (taps only drive menus), SAF picker,
-  dialogs, audio pause, cutouts, pad names.
+  meanwhile). Also missing: SAF picker, dialogs, pad names, a "pad connected"
+  signal (needs `InputManager` via JNI).
+- **Crash handler:** the `.so` range (`dl_iterate_phdr`, not signal-safe) is
+  computed in `install`; the handler only reads the cache (Release/Acquire flag).
+
+## Touch controls (`touch.rs`, compile-checked only)
+
+- Pure part (layout, hit-test, finger state machine) builds everywhere and is
+  unit-tested on desktop; the egui `Painter` is Android-only. Drawn after the
+  toasts and the `PW64_WIN_SHOT` readback, never under the overlay; PNG dumps use
+  the game thread's renderer, so they never show it.
+- **Floating stick:** a finger landing in the left 45% (not on a button) puts the
+  base under it; travel = base radius, fed to `stick_to_n64` (same deadzone/gate
+  as pads). Idle base drawn at a rest spot. Other fingers keep their own role
+  (ids from winit `Touch`); one stick finger at a time.
+- Buttons: A, B, C×4, R, Z (above the stick), Start (bottom centre), menu (top
+  left, opens settings, never reaches the game). L omitted (game reads it only
+  for the demo HUD). A finger slides between A/B/C/R/Z; Start needs its own press.
+- State → `android_pad::set_touch` (N64 bits, not rebindable; merged into the
+  same controller-1 entry). Any pad key press hides the controls and releases
+  them; the next touch shows them again. No "pad connected" check yet.
+- Sizes in dp (winit scale factor = density), scaled to the screen (fit 0.7-1.3),
+  36 dp side / 12 dp top-bottom margins plus NativeActivity's `content_rect`
+  insets (cutouts: the default cutout mode letterboxes landscape windows anyway).
+  Opacity/size are constants (`touch::OPACITY`, `scale` 1.0); sliders: TODO.
 
 ## Build + first device test
 
@@ -66,7 +92,8 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
 - `adb install -r` it, start once, `adb push <rom>.z64
   /sdcard/Android/data/app.birdman64/files/rom/`, restart; `adb logcat -s birdman64`.
 - Test order: platform test binaries via `adb push` + `adb shell` first, then boot to
-  the title, then pad buttons, then home → back.
+  the title, then touch controls, then pad buttons, then home → back (audio stops
+  and resumes, `[audio] stream paused/resumed` in logcat).
 
 ## Building the game module
 
@@ -81,8 +108,6 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
 
 ## Frontend work left
 
-- **Touch controls:** on-screen stick + A/B/Z/R/C/Start overlay (egui or a dedicated
-  pass), hidden while a pad is connected. Needed for phones without a controller.
 - **ROM / files:** pick the ROM through the Storage Access Framework
   (`ACTION_OPEN_DOCUMENT`, JNI), copy it into app storage.
 - **Release APK:** debug-signed APK as a release asset (CI signing); no static game C.

@@ -35,7 +35,7 @@ use winit::keyboard::KeyCode;
 #[cfg(target_os = "android")]
 mod android_pad;
 #[cfg(target_os = "android")]
-pub use android_pad::{AndroidKey, android_key};
+pub use android_pad::{AndroidKey, android_key, set_touch};
 
 // libultra `os_cont.h` button bits.
 pub const CONT_A: u16 = 0x8000;
@@ -1727,8 +1727,12 @@ pub fn overlay_pad() -> Pad {
     *OVERLAY_PAD.lock().unwrap()
 }
 
-/// Window lost focus: release every held key (no stuck buttons).
+/// Window lost focus: release every held key (no stuck buttons). Android:
+/// also the pad keys and touch controls (`android_pad`; its lock is taken
+/// and released first, the order its own publishes use).
 pub fn release_all_keys() {
+    #[cfg(target_os = "android")]
+    android_pad::release_all();
     let mut s = SOURCES.lock().unwrap();
     if !s.held_keys.is_empty() {
         s.held_keys.clear();

@@ -116,6 +116,7 @@ jobs:
         id: ndk
         with:
           ndk-version: r27c
+          local-cache: true
       - name: NDK toolchain env
         run: |
           bin="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -127,6 +128,9 @@ jobs:
           cargo clippy --target aarch64-linux-android --all-targets
           -p birdman64 -p pw64-game -p pw64-platform -p pw64-cbuild -- -D warnings
       - name: app library (cdylib)
+        # Same 16 KB LOAD alignment as build-apk.sh (Android 15+ devices).
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: -C link-arg=-Wl,-z,max-page-size=16384
         run: cargo rustc -p birdman64 --lib --crate-type cdylib --target aarch64-linux-android
 
   # First-run module build (docs/notes/first-run-build.md T12), both release

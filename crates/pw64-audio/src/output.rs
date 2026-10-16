@@ -248,6 +248,21 @@ impl Output {
         }
     }
 
+    /// Pauses (`false`) or resumes (`true`) the device stream, e.g. while an
+    /// Android app is in the background. The virtual device has no stream:
+    /// a no-op. Call on the thread that opened the output (cpal streams are
+    /// not `Send` everywhere).
+    pub fn set_playing(&self, playing: bool) -> Result<(), String> {
+        let Some(s) = &self._stream else {
+            return Ok(());
+        };
+        if playing {
+            s.play().map_err(|e| format!("play: {e}"))
+        } else {
+            s.pause().map_err(|e| format!("pause: {e}"))
+        }
+    }
+
     /// Queues interleaved L/R samples at `rate` Hz (the AI rate).
     pub fn push(&self, interleaved: &[i16], rate: u32) {
         self.ring.lock().unwrap().push(interleaved, rate);

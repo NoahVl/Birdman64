@@ -69,19 +69,49 @@ pub fn exe_image_range() -> (usize, usize) {
 /// Android: the "exe" is the app's `.so` (loaded by the Java side), and
 /// bionic's linker defines no `__executable_start` for it. The range is the
 /// PT_LOAD span of the object holding this function, found once with
-/// `dl_iterate_phdr` (not async-signal-safe: [`install`] primes the cache
-/// before any handler can run).
+/// `dl_iterate_phdr`. That is not async-signal-safe, so only this function
+/// (never the handler) computes it; [`install`] calls it before the handler
+/// exists, and the handler reads [`cached_image_range`] only.
 #[cfg(target_os = "android")]
 pub fn exe_image_range() -> (usize, usize) {
-    static IMAGE: (AtomicUsize, AtomicUsize) = (AtomicUsize::new(0), AtomicUsize::new(0));
-    let start = IMAGE.0.load(Ordering::Relaxed);
-    if start != 0 {
-        return (start, IMAGE.1.load(Ordering::Relaxed));
+    if let Some(r) = cached_image_range() {
+        return r;
     }
     let r = image_containing(exe_image_range as *const () as usize);
-    IMAGE.1.store(r.1, Ordering::Relaxed);
     IMAGE.0.store(r.0, Ordering::Relaxed);
+    IMAGE.1.store(r.1, Ordering::Relaxed);
+    // Release: a reader that sees the flag sees both halves.
+    IMAGE_DONE.store(true, Ordering::Release);
     r
+}
+
+#[cfg(target_os = "android")]
+static IMAGE: (AtomicUsize, AtomicUsize) = (AtomicUsize::new(0), AtomicUsize::new(0));
+#[cfg(target_os = "android")]
+static IMAGE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The image range once computed (plain atomic loads: async-signal-safe).
+#[cfg(target_os = "android")]
+fn cached_image_range() -> Option<(usize, usize)> {
+    IMAGE_DONE.load(Ordering::Acquire).then(|| {
+        (
+            IMAGE.0.load(Ordering::Relaxed),
+            IMAGE.1.load(Ordering::Relaxed),
+        )
+    })
+}
+
+/// The image range as the signal handler may read it: never computes on
+/// Android (an empty range, matching nothing, if `install` didn't run).
+#[cfg(target_os = "android")]
+fn handler_image_range() -> (usize, usize) {
+    cached_image_range().unwrap_or((0, 0))
+}
+
+/// Linker symbols elsewhere: always async-signal-safe.
+#[cfg(not(target_os = "android"))]
+fn handler_image_range() -> (usize, usize) {
+    exe_image_range()
 }
 
 /// PT_LOAD span `(start, end)` of the loaded object containing `addr`, or
@@ -272,7 +302,7 @@ extern "C" fn handler(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
         ((*info).si_addr() as usize, pc_sp(uc))
     };
     let mut buf = Buf { b: [0; 512], n: 0 };
-    let (exe, module) = (exe_image_range(), module_range());
+    let (exe, module) = (handler_image_range(), module_range());
     let _ = write!(buf, "[crash] signal {sig} at {pc_name} ");
     let _ = write_rip(&mut buf, rip, exe, module);
     let _ = write!(buf, " {sp_name} 0x{rsp:x}, fault address 0x{addr:x}\n[crash] ");
@@ -307,7 +337,8 @@ pub fn install() {
     if !prev.is_empty() {
         return;
     }
-    // Android: computes and caches the image range outside any handler.
+    // Android: computes and caches the image range eagerly, before the
+    // handler can run (it only reads the cache).
     let _ = exe_image_range();
     for sig in SIGNALS {
         // SAFETY: plain sigaction setup; SA_ONSTACK uses the alternate stack
