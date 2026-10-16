@@ -38,8 +38,12 @@ fn main() -> Result<(), String> {
         (&pw64_cbuild::ZIG_WINDOWS, "zig.exe")
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         (&pw64_cbuild::ZIG_LINUX, "zig")
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        (&pw64_cbuild::ZIG_LINUX_ARM64, "zig")
     } else {
-        return Err("zig download: only x86_64 Windows and Linux are supported".into());
+        return Err(
+            "zig download: only x86_64 Windows and x86_64/aarch64 Linux are supported".into(),
+        );
     };
     let exe = out.join(exe_name);
     if version_of(&exe).as_deref() == Some(ZIG_VERSION) {

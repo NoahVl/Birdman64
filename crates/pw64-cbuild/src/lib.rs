@@ -52,6 +52,13 @@ pub const ZIG_LINUX: ZigDist = ZigDist {
     exe_in_archive: "zig-x86_64-linux-0.16.0/zig",
 };
 
+/// [`ZIG_VERSION`] for aarch64 Linux (tar.xz; ziglang.org index.json shasum).
+pub const ZIG_LINUX_ARM64: ZigDist = ZigDist {
+    url: "https://ziglang.org/download/0.16.0/zig-aarch64-linux-0.16.0.tar.xz",
+    sha256: "ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17",
+    exe_in_archive: "zig-aarch64-linux-0.16.0/zig",
+};
+
 /// One stage of the first-run build (docs/notes/first-run-build.md, "Steps +
 /// UX"): the launcher (T9) draws the progress window from these. Download and
 /// VerifyExtract are reported by [`fetch`], the rest by [`build`]; `Load`
@@ -180,6 +187,27 @@ pub enum Os {
     Windows,
     /// zig clang, x86_64-unknown-linux-gnu (LP64, SysV bitfields, ELF).
     Linux,
+    /// zig clang, aarch64-unknown-linux-gnu (LP64, AAPCS64 bitfields = the
+    /// SysV layout, ELF). Always relocatable: no fixed module base.
+    LinuxArm64,
+}
+
+impl Os {
+    /// Linux (ELF, `ld.lld`, `.so`) on either architecture.
+    pub fn is_linux(self) -> bool {
+        matches!(self, Os::Linux | Os::LinuxArm64)
+    }
+
+    /// The target the crate is compiled for, from a build script's
+    /// `CARGO_CFG_TARGET_OS`/`CARGO_CFG_TARGET_ARCH`; `None` if unsupported.
+    pub fn from_target(os: &str, arch: &str) -> Option<Os> {
+        match (os, arch) {
+            ("windows", "x86_64") => Some(Os::Windows),
+            ("linux", "x86_64") => Some(Os::Linux),
+            ("linux", "aarch64") => Some(Os::LinuxArm64),
+            _ => None,
+        }
+    }
 }
 
 /// `dylib/spike_build.sh`'s `TGT` (per host).
@@ -195,6 +223,21 @@ pub(crate) const ZIG_TGT_WINDOWS: &[&str] = &[
 ];
 
 const ZIG_TGT_LINUX: &[&str] = &["--target=x86_64-unknown-linux-gnu", "-fPIE"];
+
+/// arm64: [`ZIG_COMMON`] already pins what differs by default from x86_64
+/// (`-funsigned-char`: AAPCS64's default anyway; `-ffp-contract=off`: arm64
+/// has FMA, which would change float results). `-fPIE` code is ADRP-relative
+/// (±4 GB from the PC), valid at any load address.
+const ZIG_TGT_LINUX_ARM64: &[&str] = &["--target=aarch64-unknown-linux-gnu", "-fPIE"];
+
+/// The `TGT` part for `os`.
+fn zig_tgt(os: Os) -> &'static [&'static str] {
+    match os {
+        Os::Windows => ZIG_TGT_WINDOWS,
+        Os::Linux => ZIG_TGT_LINUX,
+        Os::LinuxArm64 => ZIG_TGT_LINUX_ARM64,
+    }
+}
 
 /// `dylib/spike_build.sh`'s `COMMON` (GNU spelling, both hosts; the twin test
 /// below pins it against [`MSVC_FLAGS`]/[`GNU_FLAGS`]).
@@ -222,11 +265,7 @@ const ZIG_COMMON: &[&str] = &[
 /// builder's placeholders. `-include native/pw64_native.h` is the force-
 /// include from the static build's `-FI`.
 pub fn zig_flags(os: Os) -> Vec<String> {
-    let tgt = match os {
-        Os::Windows => ZIG_TGT_WINDOWS,
-        Os::Linux => ZIG_TGT_LINUX,
-    };
-    let mut flags: Vec<String> = tgt
+    let mut flags: Vec<String> = zig_tgt(os)
         .iter()
         .chain(ZIG_COMMON.iter())
         .chain(WARN_FLAGS.iter())
@@ -245,11 +284,8 @@ pub fn zig_flags(os: Os) -> Vec<String> {
 /// compiled with these plus `-DPW64_DLL_ABI=<abi>` and `-I<dylib>` only,
 /// exactly like `spike_build.sh`.
 pub fn zig_tgt_common(os: Os) -> Vec<String> {
-    let tgt = match os {
-        Os::Windows => ZIG_TGT_WINDOWS,
-        Os::Linux => ZIG_TGT_LINUX,
-    };
-    tgt.iter()
+    zig_tgt(os)
+        .iter()
         .chain(ZIG_COMMON.iter())
         .map(|s| s.to_string())
         .collect()
@@ -425,6 +461,12 @@ mod tests {
         assert!(win.iter().any(|g| g == "--target=x86_64-pc-windows-msvc"));
         assert!(win.iter().any(|g| g == "-D_MT") && win.iter().any(|g| g == "-D_DLL"));
         assert!(win.iter().any(|g| g == "-fstack-protector-strong"));
+        // arm64 = x86_64 Linux except the target triple.
+        let arm = zig_flags(Os::LinuxArm64);
+        assert_eq!(arm[0], "--target=aarch64-unknown-linux-gnu");
+        assert_eq!(arm[1..], lin[1..]);
+        assert_eq!(Os::from_target("linux", "aarch64"), Some(Os::LinuxArm64));
+        assert_eq!(Os::from_target("macos", "aarch64"), None);
     }
 
     #[test]
@@ -434,13 +476,11 @@ mod tests {
         for (os, tgt_len) in [
             (Os::Windows, ZIG_TGT_WINDOWS.len()),
             (Os::Linux, ZIG_TGT_LINUX.len()),
+            (Os::LinuxArm64, ZIG_TGT_LINUX_ARM64.len()),
         ] {
             let flags = zig_flags(os);
             let mut i = 0;
-            for t in match os {
-                Os::Windows => ZIG_TGT_WINDOWS,
-                Os::Linux => ZIG_TGT_LINUX,
-            } {
+            for t in zig_tgt(os) {
                 assert_eq!(flags[i], *t);
                 i += 1;
             }

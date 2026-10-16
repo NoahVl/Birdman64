@@ -353,7 +353,10 @@ pub unsafe extern "C" fn uvMat4RotateAxis(dst: *mut Mtx4F, angle: f32, axis: cor
         // SAFETY: all-zeros is a valid f32 bit pattern; every field written
         // below is read from dst first.
         let mut temp: Mtx4F = unsafe { std::mem::zeroed() };
-        match axis as u8 {
+        // `c_char` is i8 on x86_64, u8 on aarch64 (a no-op cast there).
+        #[allow(clippy::unnecessary_cast)]
+        let axis = axis as u8;
+        match axis {
             b'x' => {
                 temp.xx = dst.xx;
                 temp.yx = dst.yx;

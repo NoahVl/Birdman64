@@ -1,5 +1,6 @@
 //! Crash tracer, Linux flavour of `crash.rs` (native-build.md §8): a
-//! SIGSEGV/SIGBUS/SIGILL/SIGFPE handler that prints the faulting RIP/RSP and
+//! SIGSEGV/SIGBUS/SIGILL/SIGFPE handler that prints the faulting RIP/RSP
+//! (aarch64: PC/SP) and
 //! access address in the same `[crash]` format, then puts the previous
 //! handler back and returns, so the fault re-raises into it (Rust's
 //! stack-overflow reporter, or the default core dump). RIPs in the game
@@ -141,21 +142,43 @@ impl core::fmt::Write for Buf {
     }
 }
 
+/// The interrupted PC and SP from the signal's `ucontext_t`, plus their
+/// names for the report (x86_64 `gregs[REG_RIP/REG_RSP]`, aarch64
+/// `mcontext.pc/.sp`).
+///
+/// # Safety
+/// `uc` is the ucontext the kernel passed to an `SA_SIGINFO` handler.
+#[cfg(target_arch = "x86_64")]
+unsafe fn pc_sp(uc: &libc::ucontext_t) -> (u64, u64, &'static str, &'static str) {
+    let g = &uc.uc_mcontext.gregs;
+    (
+        g[libc::REG_RIP as usize] as u64,
+        g[libc::REG_RSP as usize] as u64,
+        "RIP",
+        "RSP",
+    )
+}
+
+/// See the x86_64 twin.
+///
+/// # Safety
+/// `uc` is the ucontext the kernel passed to an `SA_SIGINFO` handler.
+#[cfg(target_arch = "aarch64")]
+unsafe fn pc_sp(uc: &libc::ucontext_t) -> (u64, u64, &'static str, &'static str) {
+    (uc.uc_mcontext.pc, uc.uc_mcontext.sp, "PC", "SP")
+}
+
 extern "C" fn handler(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     // SAFETY: the kernel passes a valid siginfo/ucontext for SA_SIGINFO.
-    let (addr, rip, rsp) = unsafe {
+    let (addr, (rip, rsp, pc_name, sp_name)) = unsafe {
         let uc = &*(ctx as *const libc::ucontext_t);
-        (
-            (*info).si_addr() as usize,
-            uc.uc_mcontext.gregs[libc::REG_RIP as usize] as u64,
-            uc.uc_mcontext.gregs[libc::REG_RSP as usize] as u64,
-        )
+        ((*info).si_addr() as usize, pc_sp(uc))
     };
     let mut buf = Buf { b: [0; 512], n: 0 };
     let (exe, module) = (exe_image_range(), module_range());
-    let _ = write!(buf, "[crash] signal {sig} at RIP ");
+    let _ = write!(buf, "[crash] signal {sig} at {pc_name} ");
     let _ = write_rip(&mut buf, rip, exe, module);
-    let _ = write!(buf, " RSP 0x{rsp:x}, fault address 0x{addr:x}\n[crash] ");
+    let _ = write!(buf, " {sp_name} 0x{rsp:x}, fault address 0x{addr:x}\n[crash] ");
     let _ = write_images(&mut buf, exe, module);
     // Where the module's `.map` is (cache layout: next to the module): with
     // the `pw64game+0x<off>` form above, the faulting function is a lookup.

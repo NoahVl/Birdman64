@@ -36,7 +36,8 @@ pub const MODULE_VBASE: u32 = 0xB000_0000;
 /// (Windows ASLR / Linux PIE) and the game module loads anywhere, so C globals
 /// may lie above 4 GB and only work through the vaddr regions. Such a build
 /// has no fixed-window mode: `PW64_RELOC` unset means `on`, `off` is refused.
-pub const RELOC_BUILD: bool = cfg!(feature = "reloc");
+/// `pw64_reloc` (build.rs) = the feature, or aarch64 (relocatable only).
+pub const RELOC_BUILD: bool = cfg!(pw64_reloc);
 
 /// Relocation mode, `PW64_RELOC` (docs/notes/option-a.md).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -674,9 +675,9 @@ pub fn init() -> String {
     map_rdram_window();
     let stacks = pw64_platform::os::stack::reserve_region();
     // `reloc`: the module has no fixed range (dylib.rs).
-    #[cfg(all(feature = "dylib", not(feature = "reloc")))]
+    #[cfg(all(feature = "dylib", not(pw64_reloc)))]
     let module = crate::dylib::reserve_module_range();
-    #[cfg(not(all(feature = "dylib", not(feature = "reloc"))))]
+    #[cfg(not(all(feature = "dylib", not(pw64_reloc))))]
     let module = false;
     let mut reserved = format!("reserved: stacks {stacks}, module {module}");
     match Reloc::get() {

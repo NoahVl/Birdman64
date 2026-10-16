@@ -134,8 +134,13 @@ pub fn enable() -> Option<usize> {
     if cur != 0 {
         return Some(cur);
     }
-    // 1 TB, 2 TB, ...: far above everything else we map.
-    let base = (1..16).map(|k| k << 40).find(|&a| reserve(a))?;
+    // 1 TB, 2 TB, ...: far above everything else we map. Then 128..384 GB
+    // for 39-bit VA kernels (common aarch64 Linux: user space ends at
+    // 512 GB), still above the RDRAM/stack candidates (< 96 GB).
+    let base = (1..16)
+        .map(|k| k << 40)
+        .chain((2..6).map(|k| k << 36))
+        .find(|&a| reserve(a))?;
     BASE.store(base, Ordering::Release);
     Some(base)
 }
