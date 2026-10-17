@@ -121,6 +121,23 @@
          uvmd = gGfxUnkPtrs->models[temp_s1->modelId];
 
          temp_fs3 = D_80265080[temp_s1->unk2[0]].m[3][0] - arg0->unk110.m[3][0];
+@@ -483,8 +540,15 @@ u8 uvDobjGetLODIndex(ParsedUVMD* uvmd, f32 dist) {
+     lodRadius = uvmd->lodRadius;
+     lodCount = uvmd->lodCount;
+     if (lodRadius[lodCount - 1] <= dist) {
++        // PW64: past its last LOD a model isn't drawn; infinite view
++        // distance keeps it (pw64_visibility.c).
++        if (pw64_infinite_view_distance) {
++            return pw64_infinite_lod ? 0 : lodCount - 1;
++        }
+         return 0xFF;
+     }
++    if (pw64_infinite_lod) { // PW64: most detailed LOD at any distance
++        return 0;
++    }
+
+     for (i = lodCount; i > 0; i--) {
+         if (lodRadius[i - 1] < dist) {
 @@ -510,7 +567,7 @@ void uvDobj_80217B4C(Unk80263780* arg0, ParsedUVMD* uvmd, u8 lodId) {
      s32 temp_v1;
      Mtx4F sp50;

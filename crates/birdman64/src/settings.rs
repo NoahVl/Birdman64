@@ -173,6 +173,8 @@ enum Opt {
     TexturePack,
     Widescreen,
     FillScreen,
+    InfiniteLod,
+    InfiniteViewDistance,
     Fps,
     Vsync,
     DisplayMode,
@@ -248,10 +250,21 @@ const P2_ASSIGN_CONFIRM: Duration = Duration::from_secs(4);
 /// centres it at the real one.
 const FADE_FOLLOW: Duration = Duration::from_millis(500);
 
-/// The navigation footer (U1, weak 13 pt). The pad letters are the U6
-/// family names of South / East once that lands; until then the literal
-/// A / B.
-const FOOTER: &str = "Up/Down: Select   Left/Right: Change   Enter / A: Confirm   Esc / B: Back";
+/// Menu actions use physical positions independently of game rebinding.
+/// Nintendo's south/east buttons are B/A, the reverse of Xbox's A/B.
+fn navigation_footer(family: Option<input::PadFamily>) -> String {
+    let (confirm, back) = match family {
+        Some(input::PadFamily::Generic) => ("South button", "East button"),
+        Some(family) => (
+            input::button_name(Button::South, family),
+            input::button_name(Button::East, family),
+        ),
+        None => return "Up/Down: Select   Left/Right: Change   Enter: Confirm   Esc: Back".into(),
+    };
+    format!(
+        "Up/Down: Select   Left/Right: Change   Enter / {confirm}: Confirm   Esc / {back}: Back"
+    )
+}
 
 /// A binding capture in progress (`Overlay::capture`): which kind + slot
 /// row is being captured, the slot's name (bind target), and when it
@@ -274,6 +287,7 @@ struct P2Capture {
 /// Restart-only options as the running game uses them (env > config >
 /// default; captured once, they can't change until a restart). Frame rate
 /// and V-Sync are live (in `Gpu`), so they are not here any more.
+#[derive(Clone)]
 struct Running {
     msaa: u32,
     widescreen: Option<f32>,
@@ -281,6 +295,8 @@ struct Running {
     /// The config's texture pack name (None = off); what a restart runs
     /// with unless `PW64_TEX_PACKS` overrides it (`opts::texture_pack_env`).
     texture_pack: Option<String>,
+    infinite_lod: bool,
+    infinite_view_distance: bool,
 }
 
 /// The S8b keep-resolution countdown: what to go back to when an applied
@@ -315,14 +331,18 @@ pub struct Overlay {
     /// staged index. Restart-only, exactly like fill screen.
     pack_choices: Vec<Option<String>>,
     texture_pack_sel: usize,
+    /// Staged infinite LOD / view distance (restart-only, read before boot).
+    infinite_lod: bool,
+    infinite_view_distance: bool,
     /// S8: the staged widescreen is the monitor default from "Reset to
     /// defaults": saving removes the key (the file follows the display)
     /// instead of pinning a value. Cleared by any Widescreen row change.
     widescreen_follow: bool,
     /// S7: the restart-only values (MSAA, widescreen aspect, fill screen,
-    /// texture pack) this session last saved; `open` stages these instead of
-    /// the running ones while that restart is pending.
-    saved_restart: Option<(u32, Option<f32>, bool, Option<String>)>,
+    /// texture pack, infinite LOD / view distance) this session last saved;
+    /// `open` stages these instead of the running ones while that restart is
+    /// pending.
+    saved_restart: Option<Running>,
     fps: Vec<opts::Fps>,
     fps_sel: usize,
     vsync: bool,
@@ -449,8 +469,12 @@ impl Overlay {
             widescreen: opts::widescreen(),
             fill_screen: opts::fill_screen(),
             texture_pack: crate::config::get().graphics.texture_pack.clone(),
+            infinite_lod: opts::infinite_lod(),
+            infinite_view_distance: opts::infinite_view_distance(),
         };
         let staged_fill = running.fill_screen;
+        let staged_lod = running.infinite_lod;
+        let staged_distance = running.infinite_view_distance;
         // Staged lists up front so the overlay is consistent before open()
         // (open re-stages from the live values; `staged_settings` reads
         // these in tests).
@@ -475,6 +499,8 @@ impl Overlay {
             fill_screen: staged_fill,
             pack_choices,
             texture_pack_sel,
+            infinite_lod: staged_lod,
+            infinite_view_distance: staged_distance,
             widescreen_follow: false,
             saved_restart: None,
             split: input::split_wanted(),
@@ -654,25 +680,25 @@ impl Overlay {
         }
     }
 
-    /// S7: stages the restart-only rows (MSAA, widescreen, fill screen)
+    /// S7: stages the restart-only rows (MSAA, widescreen, fill screen, ...)
     /// from what this session last saved (that restart is still pending),
     /// else from the running values, so a saved change can be undone before
     /// the restart. The banner and "(restart)" marks keep comparing against
     /// `running`. Split-screen (live) stages the game's state, or a switch
     /// still waiting for a menu (the main menu's item may have changed it).
     fn stage_restart_rows(&mut self) {
-        let (msaa, widescreen, fill, pack) = self.saved_restart.clone().unwrap_or((
-            self.running.msaa,
-            self.running.widescreen,
-            self.running.fill_screen,
-            self.running.texture_pack.clone(),
-        ));
-        self.msaa = msaa;
-        (self.widescreen, self.widescreen_sel) = widescreen_choices(widescreen);
-        self.fill_screen = fill;
+        let saved = self
+            .saved_restart
+            .clone()
+            .unwrap_or_else(|| self.running.clone());
+        self.msaa = saved.msaa;
+        (self.widescreen, self.widescreen_sel) = widescreen_choices(saved.widescreen);
+        self.fill_screen = saved.fill_screen;
         // Re-read the packs folder on every open: the player opens it from
         // here, drops a pack in and comes back to pick it.
-        (self.pack_choices, self.texture_pack_sel) = pack_choices(&pack);
+        (self.pack_choices, self.texture_pack_sel) = pack_choices(&saved.texture_pack);
+        self.infinite_lod = saved.infinite_lod;
+        self.infinite_view_distance = saved.infinite_view_distance;
         self.split = input::split_wanted();
         self.widescreen_follow = false;
         // The Player-2 controller row stages the routing as it stands: the
@@ -693,12 +719,14 @@ impl Overlay {
             match config::save_settings(changed_since(staged, &self.snapshot)) {
                 Ok(()) => {
                     // S7: the next open stages these, not the running ones.
-                    self.saved_restart = Some((
-                        self.msaa,
-                        choice_aspect(&self.widescreen[self.widescreen_sel]),
-                        self.fill_screen,
-                        self.pack_choices[self.texture_pack_sel].clone(),
-                    ));
+                    self.saved_restart = Some(Running {
+                        msaa: self.msaa,
+                        widescreen: choice_aspect(&self.widescreen[self.widescreen_sel]),
+                        fill_screen: self.fill_screen,
+                        texture_pack: self.pack_choices[self.texture_pack_sel].clone(),
+                        infinite_lod: self.infinite_lod,
+                        infinite_view_distance: self.infinite_view_distance,
+                    });
                     let pending = self.pending_restart();
                     if !pending.is_empty() {
                         self.saved_toast = Some(format!(
@@ -1250,6 +1278,8 @@ impl Overlay {
                     Row::Opt(Opt::TexturePack),
                     Row::OpenPacksFolder,
                     Row::Opt(Opt::Msaa),
+                    Row::Opt(Opt::InfiniteLod),
+                    Row::Opt(Opt::InfiniteViewDistance),
                     // OLED care (O3): live, no restart.
                     Row::Opt(Opt::OledDrift),
                     Row::Opt(Opt::OledBrightness),
@@ -1357,7 +1387,7 @@ impl Overlay {
                     ui.colored_label(
                         egui::Color32::YELLOW,
                         format!(
-                            "Keep this resolution? A = keep, reverting in {} s",
+                            "Keep this resolution? Confirm to keep, reverting in {} s",
                             ms.div_ceil(1000)
                         ),
                     );
@@ -1401,7 +1431,13 @@ impl Overlay {
                 // missing on confirm), like "Open save folder" on Main.
                 // Drawn in `rows` order: right under the Texture pack row.
                 self.text_row(ui, at(Row::OpenPacksFolder), "Open texture packs folder");
-                for o in [Opt::Msaa, Opt::OledDrift, Opt::OledBrightness] {
+                for o in [
+                    Opt::Msaa,
+                    Opt::InfiniteLod,
+                    Opt::InfiniteViewDistance,
+                    Opt::OledDrift,
+                    Opt::OledBrightness,
+                ] {
                     self.opt_row(ui, at(Row::Opt(o)), o);
                 }
                 self.text_row(ui, at(Row::ResetGraphics), "Reset to defaults");
@@ -1501,7 +1537,10 @@ impl Overlay {
         ui.weak(egui::RichText::new(help(rows[self.sel])).size(14.0));
         // Footer (U1): how to navigate, then the version line.
         ui.add_space(6.0);
-        ui.weak(egui::RichText::new(FOOTER).size(13.0));
+        ui.weak(
+            egui::RichText::new(navigation_footer(input::active_pad().map(|p| p.family)))
+                .size(13.0),
+        );
         ui.weak(egui::RichText::new(crate::version_line()).small());
         // Consume the follow only once the fade-in is done (FADE_FOLLOW):
         // while it runs the scroll re-applies at the growing panel's real
@@ -1728,6 +1767,21 @@ impl Overlay {
                 if self.fill_screen { "On" } else { "Off" }.into(),
                 restart(self.fill_screen != self.running.fill_screen),
             ),
+            Opt::InfiniteLod => (
+                "Infinite LOD",
+                if self.infinite_lod { "On" } else { "Off" }.into(),
+                restart(self.infinite_lod != self.running.infinite_lod),
+            ),
+            Opt::InfiniteViewDistance => (
+                "Infinite view distance",
+                if self.infinite_view_distance {
+                    "On"
+                } else {
+                    "Off"
+                }
+                .into(),
+                restart(self.infinite_view_distance != self.running.infinite_view_distance),
+            ),
             Opt::Fps if self.vsync => ("Frame rate", "Set by V-Sync".into(), ""),
             Opt::Fps => {
                 let staged = self.fps[self.fps_sel];
@@ -1842,6 +1896,12 @@ impl Overlay {
         if self.pack_choices[self.texture_pack_sel] != self.running.texture_pack {
             out.push("Texture pack");
         }
+        if self.infinite_lod != self.running.infinite_lod {
+            out.push("Infinite LOD");
+        }
+        if self.infinite_view_distance != self.running.infinite_view_distance {
+            out.push("Infinite view distance");
+        }
         // Live rows staged but not confirmed yet: Save writes them, so a
         // restart applies them.
         if self.display_mode_choice() != self.running_mode {
@@ -1883,6 +1943,21 @@ impl Overlay {
                     .clone()
                     .unwrap_or_else(|| "Off".into()),
                 self.pack_choices[self.texture_pack_sel] != self.running.texture_pack,
+            ),
+            Opt::InfiniteLod => (
+                "Infinite LOD",
+                if self.infinite_lod { "On" } else { "Off" }.into(),
+                self.infinite_lod != self.running.infinite_lod,
+            ),
+            Opt::InfiniteViewDistance => (
+                "Infinite view distance",
+                if self.infinite_view_distance {
+                    "On"
+                } else {
+                    "Off"
+                }
+                .into(),
+                self.infinite_view_distance != self.running.infinite_view_distance,
             ),
             _ => return None,
         };
@@ -2076,6 +2151,10 @@ impl Overlay {
                     self.texture_pack_sel =
                         (self.texture_pack_sel as i32 + d).rem_euclid(n) as usize;
                 }
+                Opt::InfiniteLod => self.infinite_lod = !self.infinite_lod,
+                Opt::InfiniteViewDistance => {
+                    self.infinite_view_distance = !self.infinite_view_distance
+                }
                 // The Player-2 controller row is disabled while the staged
                 // Split value is off (greyed, like Frame rate under V-Sync).
                 Opt::P2Input if !self.split => {}
@@ -2165,6 +2244,8 @@ impl Overlay {
     /// widescreen, fill screen) become pending as usual.
     fn reset_graphics(&mut self) {
         self.msaa = 1;
+        self.infinite_lod = false;
+        self.infinite_view_distance = false;
         // S8: the D3 default is the monitor's aspect (Off on a 4:3 one);
         // saved by removing the key, so the file keeps following the display.
         let widescreen = opts::widescreen_default();
@@ -2241,6 +2322,8 @@ impl Overlay {
             texture_pack: Some(self.pack_choices[self.texture_pack_sel].clone()),
             fps: Some(self.fps[self.fps_sel].to_config()),
             vsync: Some(self.vsync),
+            infinite_lod: Some(self.infinite_lod),
+            infinite_view_distance: Some(self.infinite_view_distance),
             display_mode: Some(self.display_mode_choice().as_str()),
             fullscreen_resolution: Some(self.res_choice().map(|r| r.to_config())),
             volume: Some(self.volume as f32 / 1000.0),
@@ -2600,6 +2683,8 @@ fn changed_since(s: config::SavedSettings, snap: &config::SavedSettings) -> conf
         widescreen: keep(s.widescreen, &snap.widescreen),
         fps: keep(s.fps, &snap.fps),
         vsync: keep(s.vsync, &snap.vsync),
+        infinite_lod: keep(s.infinite_lod, &snap.infinite_lod),
+        infinite_view_distance: keep(s.infinite_view_distance, &snap.infinite_view_distance),
         fill_screen: if fill_changed { s.fill_screen } else { None },
         texture_pack: keep(s.texture_pack, &snap.texture_pack),
         display_mode: keep(s.display_mode, &snap.display_mode),
@@ -2767,6 +2852,14 @@ fn help(row: Row) -> &'static str {
             Opt::FillScreen => {
                 "Draws flights to the screen edges instead of with the original black bars. \
                  Needs a restart."
+            }
+            Opt::InfiniteLod => {
+                "Draws every model at full detail, however far away. Off = original look. \
+                 Needs a restart."
+            }
+            Opt::InfiniteViewDistance => {
+                "Lets you see the whole island instead of the haze about 2 km out. Can lower \
+                 the frame rate, more so with split-screen. Needs a restart."
             }
             Opt::Fps => {
                 "How smoothly the game runs. Match display is best; pick 60 if the game \
@@ -3250,6 +3343,84 @@ mod tests {
         assert_eq!(rows[i_w + 1], Row::Opt(Opt::FillScreen));
     }
 
+    #[test]
+    fn visibility_options_toggle_independently_and_request_restart() {
+        let mut o = Overlay::new();
+        o.page = Page::Graphics;
+        for label in ["Infinite LOD", "Infinite view distance"] {
+            let index = o
+                .rows()
+                .iter()
+                .position(|row| match row {
+                    Row::Opt(opt) => o.row_text(*opt).0 == label,
+                    _ => false,
+                })
+                .expect("visibility option must be in the graphics menu");
+            o.sel = index;
+            o.confirm();
+            // Toggling creates a restart-banner row, so locate the option
+            // again instead of relying on its previous navigation index.
+            let opt = o
+                .rows()
+                .into_iter()
+                .find_map(|row| match row {
+                    Row::Opt(opt) if o.row_text(opt).0 == label => Some(opt),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(o.row_text(opt).1, "On");
+            assert!(o.pending_restart().contains(&label));
+        }
+        assert_eq!(
+            o.pending_restart(),
+            vec!["Infinite LOD", "Infinite view distance"]
+        );
+        o.reset_graphics();
+        assert!(!o.pending_restart().contains(&"Infinite LOD"));
+        assert!(!o.pending_restart().contains(&"Infinite view distance"));
+    }
+
+    #[test]
+    fn visibility_changes_are_saved_and_restaged_before_restart() {
+        let mut o = Overlay::new();
+        let snapshot = o.staged_settings();
+        o.infinite_lod = true;
+        let changes = changed_since(o.staged_settings(), &snapshot);
+        assert_eq!(changes.infinite_lod, Some(true));
+        assert_eq!(changes.infinite_view_distance, None);
+        o.saved_restart = Some(Running {
+            infinite_lod: true,
+            infinite_view_distance: true,
+            ..o.running.clone()
+        });
+        o.stage_restart_rows();
+        assert!(o.infinite_lod);
+        assert!(o.infinite_view_distance);
+        assert_eq!(
+            o.pending_restart(),
+            vec!["Infinite LOD", "Infinite view distance"]
+        );
+        o.infinite_lod = false;
+        o.infinite_view_distance = false;
+        assert!(o.pending_restart().is_empty());
+    }
+
+    #[test]
+    fn graphics_navigation_names_match_physical_controller_buttons() {
+        use input::PadFamily::*;
+        assert!(navigation_footer(Some(Xbox)).contains("Enter / A: Confirm   Esc / B: Back"));
+        assert!(navigation_footer(Some(Nintendo)).contains("Enter / B: Confirm   Esc / A: Back"));
+        assert!(
+            navigation_footer(Some(PlayStation))
+                .contains("Enter / Cross: Confirm   Esc / Circle: Back")
+        );
+        assert!(navigation_footer(Some(Generic)).contains("South button: Confirm"));
+        assert_eq!(
+            navigation_footer(None),
+            "Up/Down: Select   Left/Right: Change   Enter: Confirm   Esc: Back"
+        );
+    }
+
     /// D2 auto-save writes only what changed since open; a widescreen
     /// change also writes fill screen (its saved form depends on it).
     #[test]
@@ -3290,6 +3461,8 @@ mod tests {
             vsync: Some(true),
             fill_screen: Some(Some(true)),
             texture_pack: Some(Some("hd".into())),
+            infinite_lod: Some(true),
+            infinite_view_distance: Some(true),
             display_mode: Some("exclusive"),
             fullscreen_resolution: Some(Some("640x480".into())),
             volume: Some(0.35),
@@ -3325,6 +3498,8 @@ mod tests {
             vsync: Some(false),
             fill_screen: Some(None),
             texture_pack: Some(None),
+            infinite_lod: Some(false),
+            infinite_view_distance: Some(false),
             display_mode: Some("windowed"),
             fullscreen_resolution: Some(None),
             volume: Some(1.0),
@@ -3446,19 +3621,21 @@ mod tests {
         o.confirm();
         assert_eq!(o.page, Page::Graphics);
         let rows = o.rows();
-        assert_eq!(rows.len(), 17);
+        assert_eq!(rows.len(), 19);
         assert_eq!(rows[0], Row::Opt(Opt::DisplayMode));
         assert_eq!(rows[6], Row::Opt(Opt::ShowFps));
         assert_eq!(rows[12], Row::Opt(Opt::Msaa));
-        assert_eq!(rows[13], Row::Opt(Opt::OledDrift));
-        assert_eq!(rows[14], Row::Opt(Opt::OledBrightness));
-        assert_eq!(rows[15], Row::ResetGraphics);
-        assert_eq!(rows[16], Row::Back);
+        assert_eq!(rows[13], Row::Opt(Opt::InfiniteLod));
+        assert_eq!(rows[14], Row::Opt(Opt::InfiniteViewDistance));
+        assert_eq!(rows[15], Row::Opt(Opt::OledDrift));
+        assert_eq!(rows[16], Row::Opt(Opt::OledBrightness));
+        assert_eq!(rows[17], Row::ResetGraphics);
+        assert_eq!(rows[18], Row::Back);
         // Stage a restart-only change: the banner's "Restart now" row (U16)
         // appears first, right under the banner.
         o.msaa = 4;
         let rows = o.rows();
-        assert_eq!(rows.len(), 18);
+        assert_eq!(rows.len(), 20);
         assert_eq!(rows[0], Row::RestartNow);
         // Back (B / Escape / the Back row) returns to Main, selection on
         // the row that opened it.
@@ -3467,13 +3644,13 @@ mod tests {
         assert_eq!(o.rows()[o.sel], Row::Graphics);
         // Confirm on Controls opens the Controls page with the two binding
         // grids in the U9 order (game controls first, unused slots last:
-        // 18 keyboard + reset, 11 gamepad + reset), the Switch 2 (BLE) row
+        // 18 keyboard + reset, 15 gamepad + reset), the Switch 2 (BLE) row
         // and Back.
         o.sel = 1;
         o.confirm();
         assert_eq!(o.page, Page::Controls);
         let rows = o.rows();
-        assert_eq!(rows.len(), 18 + 1 + 11 + 1 + 1 + 1);
+        assert_eq!(rows.len(), 18 + 1 + 15 + 1 + 1 + 1);
         assert_eq!(rows[0], Row::Bind(Kind::Keyboard, 0));
         // The unused keyboard slots (L, the D-pad) moved last, after the
         // stick rows.
@@ -3482,12 +3659,15 @@ mod tests {
         assert_eq!(rows[17], Row::Bind(Kind::Keyboard, 13));
         assert_eq!(rows[18], Row::Reset(Kind::Keyboard));
         assert_eq!(rows[19], Row::Bind(Kind::Gamepad, 0));
-        assert_eq!(rows[25], Row::Bind(Kind::Gamepad, 3));
-        assert_eq!(rows[29], Row::Bind(Kind::Gamepad, 10));
-        assert_eq!(rows[30], Row::Reset(Kind::Gamepad));
-        assert_eq!(rows[31], Row::Opt(Opt::Ble));
-        assert_eq!(rows[32], Row::Back);
-        o.sel = 32;
+        // Gamepad: the stick rows (d-pad by default) after the game's
+        // buttons, then L and the N64 d-pad.
+        assert_eq!(rows[25], Row::Bind(Kind::Gamepad, 11));
+        assert_eq!(rows[29], Row::Bind(Kind::Gamepad, 3));
+        assert_eq!(rows[33], Row::Bind(Kind::Gamepad, 10));
+        assert_eq!(rows[34], Row::Reset(Kind::Gamepad));
+        assert_eq!(rows[35], Row::Opt(Opt::Ble));
+        assert_eq!(rows[36], Row::Back);
+        o.sel = 36;
         o.confirm();
         assert_eq!(o.page, Page::Main);
         assert_eq!(o.rows()[o.sel], Row::Controls);
@@ -4045,6 +4225,7 @@ mod tests {
     /// stays open.
     #[test]
     fn restart_now_failure_keeps_the_banner() {
+        let _g = DATA_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut o = Overlay::new();
         o.page = Page::Graphics;
         o.msaa = 4;
@@ -4076,7 +4257,14 @@ mod tests {
             o.running.widescreen
         );
         assert_eq!(o.fill_screen, o.running.fill_screen);
-        o.saved_restart = Some((8, Some(21.0 / 9.0), true, Some("hd".into())));
+        o.saved_restart = Some(Running {
+            msaa: 8,
+            widescreen: Some(21.0 / 9.0),
+            fill_screen: true,
+            texture_pack: Some("hd".into()),
+            infinite_lod: false,
+            infinite_view_distance: false,
+        });
         o.stage_restart_rows();
         assert_eq!(o.msaa, 8);
         assert_eq!(o.widescreen[o.widescreen_sel].as_deref(), Some("21:9"));
@@ -4085,7 +4273,14 @@ mod tests {
         // The saved pack keeps its row even when the folder is gone
         // (`pack_choices` appends it), Off stays row 0.
         assert_eq!(o.pack_choices[o.texture_pack_sel].as_deref(), Some("hd"));
-        o.saved_restart = Some((8, Some(21.0 / 9.0), true, None));
+        o.saved_restart = Some(Running {
+            msaa: 8,
+            widescreen: Some(21.0 / 9.0),
+            fill_screen: true,
+            texture_pack: None,
+            infinite_lod: false,
+            infinite_view_distance: false,
+        });
         o.stage_restart_rows();
         assert_eq!(o.texture_pack_sel, 0);
     }

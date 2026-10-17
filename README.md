@@ -189,7 +189,8 @@ picks up where the last one stopped.
 **Settings screen:** press F10, Esc (or pad Select) to pause the game and
 change options. Changes are saved when you close the screen; volume and
 most graphics options apply immediately, a few (MSAA, widescreen, fill
-screen) are marked "(restart)" and need the game restarted to apply. Reset
+screen, infinite LOD, infinite view distance) are marked "(restart)" and need
+the game restarted to apply. Reset
 rows restore the defaults.
 
 `pw64.toml` example (all keys optional, the same options exist as
@@ -206,7 +207,10 @@ fps = "monitor"            # "monitor", 30..1000, or 0 (uncapped)
 vsync = false              # display-paced pacing (less judder, more latency)
 display_mode = "windowed"  # "windowed", "borderless" or "exclusive"
 fullscreen_resolution = "1920x1080@60" # exclusive video mode WxH[@Hz]
+linux_window = "auto"      # Linux: "auto", "wayland" or "x11"
 show_fps = false           # frame rate in the window title
+infinite_lod = false       # models at full detail at any distance (restart)
+infinite_view_distance = false # see the whole island (restart; costs frame time)
 no_audio = true            # no audio output device
 volume = 0.8               # 0.0..1.0
 
@@ -274,10 +278,13 @@ when both are set:
 | `PW64_FILTER=<bilinear\|n64>` | texture filter (the N64 look is `n64`) |
 | `PW64_WIDESCREEN=<1\|w:h\|0>` | widescreen aspect; the default is your monitor's aspect when it is wider than 4:3 (up to 21:9) |
 | `PW64_FILL_SCREEN=<0\|1>` | no letterbox bars around world views (default: follows widescreen) |
+| `PW64_INFINITE_LOD=<0\|1>` | models at full detail at any distance (restart) |
+| `PW64_INFINITE_VIEW_DISTANCE=<0\|1>` | see the whole island instead of fading out after ~2 km (restart) |
 | `PW64_FPS=<monitor\|N\|0>` | frame rate (uncapped with 0) |
 | `PW64_VSYNC=<0\|1>` | display-paced pacing (V-Sync) |
 | `PW64_DISPLAY_MODE=<windowed\|borderless\|exclusive>` | window, borderless fullscreen or exclusive fullscreen |
 | `PW64_FULLSCREEN_RES=WxH[@Hz]` | the exclusive fullscreen video mode |
+| `PW64_LINUX_WINDOW=<auto\|wayland\|x11>` | Linux: native Wayland or X11 (XWayland) window; `auto` uses X11 on hybrid NVIDIA laptops |
 | `PW64_OLED=<0\|1>` | HUD drift and dimming for OLED screens |
 | `PW64_BLE=<1\|0>` | Switch 2 controllers over Bluetooth LE |
 | `PW64_ROM=<path>` | which ROM file to use |
@@ -339,6 +346,13 @@ so back up `pw64.eep` first if you want to keep them.
 - **Linux: the AppImage does not start:** it needs `libfuse2`, which recent
   distributions (Ubuntu 22.04 and newer) no longer install by default. Either
   install `libfuse2` or run it with `--appimage-extract-and-run`.
+- **Linux: the picture freezes before the main menu (music keeps playing):**
+  seen on Wayland with hybrid graphics (an NVIDIA GPU next to an AMD or Intel
+  one). On such laptops the game opens its window through X11 (XWayland)
+  automatically; if your setup isn't detected, set
+  `linux_window = "x11"` under `[graphics]` in `pw64.toml` (or start the
+  game with `PW64_LINUX_WINDOW=x11`). `linux_window = "wayland"` turns the
+  workaround off.
 - **Verify a download:** every release file carries a build provenance
   attestation. With the GitHub `gh` CLI:
   `gh attestation verify <file> --repo <owner>/<repo>`.

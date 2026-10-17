@@ -31,7 +31,7 @@ use std::time::Duration;
 use crate::config;
 use crate::input::{
     CONT_A, CONT_B, CONT_C_UP, CONT_DOWN, CONT_L, CONT_LEFT, CONT_R, CONT_RIGHT, CONT_START,
-    CONT_UP, CONT_Z, Pad, c_stick_buttons, stick_to_n64,
+    CONT_UP, CONT_Z, Pad, c_stick_buttons, digital_stick, stick_to_n64,
 };
 use crate::opts;
 use uuid::Uuid;
@@ -227,7 +227,8 @@ impl StickCal {
 /// Switch 2 button mask → N64 bit, one table per device kind.
 type ButtonMap = &'static [(u32, u16)];
 
-/// Joy-Con L: arrow buttons → D-pad, L and the rail SL/SR → L, ZL → Z.
+/// Joy-Con L: arrow buttons → D-pad (which `virtual_pad` turns into the
+/// stick), L and the rail SL/SR → L, ZL → Z.
 /// Minus is a settings button (`SETTINGS_BUTTONS`), not Start.
 const JOYCON_L_MAP: ButtonMap = &[
     (B_L | B_SL_L | B_SR_L, CONT_L),
@@ -302,7 +303,17 @@ pub fn virtual_pad(state: &Slots) -> Pad {
         }
         pad = pad.merge(p);
     }
-    pad
+    // The d-pad moves the stick, like the gilrs default (`STICK_*` slots):
+    // the game never reads the N64 d-pad, and menus only follow the stick.
+    let dir =
+        |pos: u16, neg: u16| i32::from(pad.button & pos != 0) - i32::from(pad.button & neg != 0);
+    let (stick_x, stick_y) = digital_stick(dir(CONT_RIGHT, CONT_LEFT), dir(CONT_UP, CONT_DOWN));
+    pad.button &= !(CONT_UP | CONT_DOWN | CONT_LEFT | CONT_RIGHT);
+    pad.merge(Pad {
+        button: 0,
+        stick_x,
+        stick_y,
+    })
 }
 
 /// Stores one device's latest report. While BLE is switched off a late
@@ -1107,18 +1118,8 @@ mod tests {
         let pad = virtual_pad(&state);
         assert_eq!(
             pad.button,
-            CONT_A
-                | CONT_B
-                | CONT_C_UP
-                | CONT_L
-                | CONT_Z
-                | CONT_R
-                | CONT_START
-                | CONT_UP
-                | CONT_DOWN
-                | CONT_LEFT
-                | CONT_RIGHT
-                | CONT_C_DOWN
+            CONT_A | CONT_B | CONT_C_UP | CONT_L | CONT_Z | CONT_R | CONT_START | CONT_C_DOWN,
+            "the d-pad becomes the stick, all four cancel out"
         );
         assert_eq!(pad.stick_x, -80, "left stick → main stick");
         assert_eq!(pad.stick_y, 0);
@@ -1135,10 +1136,13 @@ mod tests {
             state[slot] = parse_report(&report(B_Y, 2048, 2048, 2048, 2048));
             assert_eq!(virtual_pad(&state).button, CONT_B);
         }
-        // The L Joy-Con's arrow buttons are the D-pad.
+        // The L Joy-Con's arrow buttons are the D-pad, which moves the
+        // stick (a full diagonal at the gate corner).
         let mut state: Slots = [None; 3];
         state[SLOT_L] = parse_report(&report(B_UP | B_LEFT, 2048, 2048, 2048, 2048));
-        assert_eq!(virtual_pad(&state).button, CONT_UP | CONT_LEFT);
+        let pad = virtual_pad(&state);
+        assert_eq!(pad.button, 0);
+        assert!(pad.stick_x < -60 && pad.stick_y > 60, "{pad:?}");
     }
 
     #[test]

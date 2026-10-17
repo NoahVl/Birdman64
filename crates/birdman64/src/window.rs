@@ -115,6 +115,12 @@ const MAX_QUEUED_OPS: usize = 32;
 pub(crate) struct Gpu {
     pub(crate) window: Arc<Window>,
     surface: wgpu::Surface<'static>,
+    /// Kept for the surface capability check before each reconfigure.
+    adapter: wgpu::Adapter,
+    /// The last reconfigure was skipped (`configure_surface`): log once.
+    surface_unsupported: bool,
+    /// Failed `get_current_texture` calls so far (`log_surface_error`).
+    surface_errors: u32,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     pub(crate) config: wgpu::SurfaceConfiguration,
@@ -340,20 +346,72 @@ impl Gpu {
         let tearing = opts::allows_tearing(self.fps, mhz);
         let mode = opts::present_mode(self.vsync, rate.is_some(), tearing, &self.present_modes);
         if self.config.present_mode != mode {
-            eprintln!(
-                "[window] present mode {:?} → {mode:?}",
-                self.config.present_mode
-            );
-            self.config.present_mode = mode;
+            let was = std::mem::replace(&mut self.config.present_mode, mode);
+            eprintln!("[window] present mode {was:?} → {mode:?}");
+            // AutoVsync is Fifo: no reconfigure for a change that changes
+            // nothing. On Wayland + NVIDIA every reconfigure after the first
+            // one froze the picture (game and audio kept running).
+            if opts::same_present_mode(was, mode) {
+                return rate;
+            }
             // wgpu's `Surface::configure` waits for the GPU to come idle and
             // panics (fatal error sink) when submissions are still in flight,
             // which this frame's own just-queued work always is. Drain first
             // (ms): the only device users are this thread (the game thread's
             // dump renderer is gated off when no dump env vars are set).
             let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-            self.surface.configure(&self.device, &self.config);
+            self.configure_surface();
         }
         rate
+    }
+
+    /// `Surface::configure`, skipped while the adapter can't present to the
+    /// surface. wgpu panics (uncaptured validation error "Surface does not
+    /// support the adapter's queue family") when the capability query fails,
+    /// which happens transiently on hybrid-GPU laptops (iGPU drives the
+    /// panel, dGPU renders) even though the first configure succeeded. A
+    /// skipped configure is retried by `surface_ready` before each redraw
+    /// (Wayland never reports the old configuration as outdated).
+    fn configure_surface(&mut self) {
+        if self
+            .surface
+            .get_capabilities(&self.adapter)
+            .formats
+            .is_empty()
+        {
+            if !self.surface_unsupported {
+                eprintln!(
+                    "[window] surface not presentable by {} right now; retrying",
+                    self.adapter.get_info().name
+                );
+            }
+            self.surface_unsupported = true;
+            return;
+        }
+        self.surface_unsupported = false;
+        eprintln!(
+            "[window] surface configure {}x{} {:?}",
+            self.config.width, self.config.height, self.config.present_mode
+        );
+        self.surface.configure(&self.device, &self.config);
+    }
+
+    /// Logs a failed `get_current_texture` (the first few, then every 600th):
+    /// a stuck surface otherwise freezes the picture without a trace.
+    fn log_surface_error(&mut self, e: &wgpu::SurfaceError) {
+        self.surface_errors += 1;
+        let n = self.surface_errors;
+        if n <= 5 || n.is_multiple_of(600) {
+            eprintln!("[window] get_current_texture: {e:?} (#{n})");
+        }
+    }
+
+    /// Before a redraw: retries a skipped configure; false = skip this frame.
+    fn surface_ready(&mut self) -> bool {
+        if self.surface_unsupported {
+            self.configure_surface();
+        }
+        !self.surface_unsupported
     }
 }
 
@@ -485,6 +543,26 @@ struct App {
     settings_shot_frame: u8,
 }
 
+/// PCI vendor ids of the DRM devices (`/sys/class/drm/cardN/device/vendor`,
+/// connector entries like `card0-HDMI-A-1` skipped) for
+/// `opts::hybrid_nvidia`. Empty when sysfs is unreadable.
+#[cfg(target_os = "linux")]
+fn drm_vendors() -> Vec<u32> {
+    let Ok(dir) = std::fs::read_dir("/sys/class/drm") else {
+        return Vec::new();
+    };
+    dir.flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.strip_prefix("card")
+                .is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .filter_map(|e| std::fs::read_to_string(e.path().join("device/vendor")).ok())
+        .filter_map(|s| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok())
+        .collect()
+}
+
 /// Opens the window and runs the game in it. `setup`: the game module still
 /// has to be built (first-run feature; always false otherwise): the window
 /// shows the setup screen first. `ask_rom`: no ROM is loaded yet (no file
@@ -492,7 +570,23 @@ struct App {
 pub fn run(setup: bool, ask_rom: bool) -> ! {
     #[cfg(not(feature = "first-run"))]
     let _ = setup;
-    let el = match EventLoop::<UserEvent>::with_user_event().build() {
+    #[allow(unused_mut)]
+    let mut builder = EventLoop::<UserEvent>::with_user_event();
+    #[cfg(target_os = "linux")]
+    if opts::prefer_x11(
+        std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        std::env::var_os("DISPLAY").is_some(),
+        opts::hybrid_nvidia(&drm_vendors()),
+        opts::linux_window(),
+    ) {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        eprintln!(
+            "[window] using X11 (XWayland) instead of Wayland; \
+             [graphics] linux_window = \"wayland\" to change"
+        );
+        builder.with_x11();
+    }
+    let el = match builder.build() {
         Ok(el) => el,
         Err(e) => {
             eprintln!("error: no window system ({e}); set PW64_HEADLESS=1");
@@ -707,7 +801,15 @@ impl App {
                         adapter.get_info().name
                     ))
                 });
-        let caps = surface.get_capabilities(&adapter);
+        let mut caps = surface.get_capabilities(&adapter);
+        let wayland = {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            window
+                .window_handle()
+                .is_ok_and(|h| matches!(h.as_raw(), RawWindowHandle::Wayland(_)))
+        };
+        caps.present_modes =
+            opts::usable_present_modes(caps.present_modes, wayland, adapter.get_info().vendor);
         // The N64 outputs gamma-space colors: prefer a non-sRGB format.
         let format = caps
             .formats
@@ -797,6 +899,9 @@ impl App {
         self.gpu = Some(Gpu {
             window,
             surface,
+            adapter,
+            surface_unsupported: false,
+            surface_errors: 0,
             device,
             queue,
             config,
@@ -967,11 +1072,17 @@ impl App {
         let (Some(g), Some(s)) = (&mut self.gpu, &mut self.rom_screen) else {
             return;
         };
+        if !g.surface_ready() {
+            g.window.request_redraw();
+            return;
+        }
         let tex = match g.surface.get_current_texture() {
             Ok(t) => t,
-            Err(wgpu::SurfaceError::Timeout) => return,
-            Err(_) => {
-                g.surface.configure(&g.device, &g.config);
+            Err(e) => {
+                g.log_surface_error(&e);
+                if !matches!(e, wgpu::SurfaceError::Timeout) {
+                    g.configure_surface();
+                }
                 return;
             }
         };
@@ -1003,11 +1114,17 @@ impl App {
         let (Some(g), Some(s)) = (&mut self.gpu, &mut self.setup) else {
             return true;
         };
+        if !g.surface_ready() {
+            g.window.request_redraw();
+            return true;
+        }
         let tex = match g.surface.get_current_texture() {
             Ok(t) => t,
-            Err(wgpu::SurfaceError::Timeout) => return true,
-            Err(_) => {
-                g.surface.configure(&g.device, &g.config);
+            Err(e) => {
+                g.log_surface_error(&e);
+                if !matches!(e, wgpu::SurfaceError::Timeout) {
+                    g.configure_surface();
+                }
                 return true;
             }
         };
@@ -1125,11 +1242,18 @@ impl App {
             settings_shot |= self.settings_shot_frame > 0 && !settings::is_open();
         }
         let Some(g) = &mut self.gpu else { return };
+        if !g.surface_ready() {
+            if settings::is_open() {
+                g.window.request_redraw();
+            }
+            return;
+        }
         let tex = match g.surface.get_current_texture() {
             Ok(t) => t,
             Err(e) => {
+                g.log_surface_error(&e);
                 if !matches!(e, wgpu::SurfaceError::Timeout) {
-                    g.surface.configure(&g.device, &g.config);
+                    g.configure_surface();
                 }
                 // W2: while the overlay is open the game is paused (no
                 // Frame events), so only this keeps the overlay alive.
@@ -1426,9 +1550,14 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Resized(s) => {
                 if let Some(g) = &mut self.gpu {
-                    g.config.width = s.width.max(1);
-                    g.config.height = s.height.max(1);
-                    g.surface.configure(&g.device, &g.config);
+                    let size = (s.width.max(1), s.height.max(1));
+                    // Wayland repeats Resized with an unchanged size; each
+                    // reconfigure risks the Wayland + NVIDIA freeze.
+                    if size == (g.config.width, g.config.height) {
+                        return;
+                    }
+                    (g.config.width, g.config.height) = size;
+                    g.configure_surface();
                     g.window.request_redraw();
                 }
             }

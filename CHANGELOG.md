@@ -13,6 +13,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `packs` folder (Settings > Display & graphics > "Open texture packs
   folder"), pick it under "Texture pack" and restart.
 
+## [1.2.0] - 2026-10-14
+
+### Added
+
+- Linux: `linux_window` setting in `pw64.toml` (`auto`, `wayland` or `x11`)
+  to choose between a native Wayland window and X11 (XWayland).
+- Two new Display & graphics options, both off by default and applied after a
+  restart: Infinite LOD draws every model at full detail however far away, and
+  Infinite view distance lets you see the whole island instead of the haze
+  about 2 km out (it can lower the frame rate, more so in split-screen).
+  Contributed by djultra64.
+
+### Changed
+
+- The controller's D-pad now moves the stick, so it works in menus and can steer. Rebind any
+  D-pad direction to another button (C buttons, A, ...) under Settings > Controls.
+
+### Fixed
+
+- Linux (Wayland) on laptops with an NVIDIA GPU next to an AMD or Intel one:
+  the picture no longer freezes before the main menu, and the game no longer
+  crashes right after choosing Start game. The game now opens its window
+  through X11 (XWayland) on these laptops.
+- Linux: the first-start ROM tip now names the AppImage (or the birdman64
+  program) instead of Birdman64.exe.
+
 ## [1.1.0] - 2026-10-13
 
 ### Added
@@ -93,7 +119,9 @@ First public release.
   tar.gz, with checksums and build provenance attestations.
 - `--version`, and crash reports written to `crash.log` in the data folder.
 
-[Unreleased]: https://github.com/NoahVl/Birdman64/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/NoahVl/Birdman64/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/NoahVl/Birdman64/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/NoahVl/Birdman64/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/NoahVl/Birdman64/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/NoahVl/Birdman64/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/NoahVl/Birdman64/releases/tag/v1.0.0

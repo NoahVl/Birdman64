@@ -9,7 +9,8 @@
 +// PW64: per-frame budgets (was 0x15E / 0x1E), shared by every world pass of
 +// a frame: split-screen draws two (one per player), which overflowed the
 +// matrix stack (pushes past it are dropped: garbage matrices in pass 2).
-+#define UV_GFX_NUM_MATRICES 0x400
++// Infinite view distance needs more still (PW64_MATRIX_LEN, pw64_native.h).
++#define UV_GFX_NUM_MATRICES PW64_MATRIX_LEN
 +#define UV_GFX_NUM_LOOKS 0x60
  
  #define GFX_STATE_GOURAUD       (1 << 17) // gouraud / smooth shading
