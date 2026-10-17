@@ -263,6 +263,9 @@ pub fn link_args(os: Os) -> Vec<String> {
             .chain(&["-z", "noexecstack", "-z", "max-page-size=16384"])
             .map(|s| s.to_string())
             .collect(),
+        // Mach-O: no module path yet (`build_module` refuses); a placeholder
+        // keeps `flags_hash` total.
+        Os::MacArm64 | Os::Ios | Os::IosSim => vec!["ld64.lld".to_string()],
     }
 }
 
@@ -286,6 +289,12 @@ pub fn build_module(
     opts: &Opts,
     progress: &mut (dyn FnMut(Progress) + Send),
 ) -> Result<Module, BuildError> {
+    if host_os().is_apple() {
+        return Err(BuildError::Toolchain(
+            "the first-run game module is not ported to Mach-O (macOS/iOS use the static build)"
+                .into(),
+        ));
+    }
     (progress)(Progress {
         step: Step::FindZig,
         fraction: 0.0,
@@ -371,7 +380,7 @@ pub fn build_module(
     // 3. Compile every decomp C + our native C in parallel.
     let ext = match host_os() {
         Os::Windows => "obj",
-        Os::Linux | Os::LinuxArm64 | Os::Android => "o",
+        Os::Linux | Os::LinuxArm64 | Os::Android | Os::MacArm64 | Os::Ios | Os::IosSim => "o",
     };
     let mut jobs = Vec::new();
     for dir in SRC_DIRS {
@@ -492,6 +501,7 @@ pub fn build_module(
             link_args.push(format!("-map:{}", slash(&map)));
             link_args.push(format!("-out:{}", slash(&library)));
         }
+        Os::MacArm64 | Os::Ios | Os::IosSim => unreachable!("refused at the top"),
         Os::Linux | Os::LinuxArm64 | Os::Android => {
             // -Bsymbolic + version script: every C symbol binds locally, so
             // the -fPIE objects (identical code to the static Linux build)
@@ -612,6 +622,7 @@ fn library_name() -> &'static str {
     match host_os() {
         Os::Windows => "pw64game.dll",
         Os::Linux | Os::LinuxArm64 | Os::Android => "libpw64game.so",
+        Os::MacArm64 | Os::Ios | Os::IosSim => "libpw64game.dylib",
     }
 }
 
@@ -728,6 +739,11 @@ const LINUX_VERSION_SCRIPT: &str = "\
 fn host_os() -> Os {
     if cfg!(windows) {
         Os::Windows
+    } else if cfg!(target_os = "macos") {
+        Os::MacArm64
+    } else if cfg!(target_os = "ios") {
+        // The launcher never builds on iOS (cfg'd out there).
+        Os::Ios
     } else if cfg!(target_os = "android") {
         Os::Android
     } else if cfg!(target_arch = "aarch64") {

@@ -75,9 +75,13 @@ fn main() -> Result<(), String> {
         (&pw64_cbuild::ZIG_LINUX, "zig")
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
         (&pw64_cbuild::ZIG_LINUX_ARM64, "zig")
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        (&pw64_cbuild::ZIG_MACOS_ARM64, "zig")
     } else {
         return Err(
-            "zig download: only x86_64 Windows and x86_64/aarch64 Linux are supported".into(),
+            "zig download: only x86_64 Windows, x86_64/aarch64 Linux and aarch64 macOS are \
+             supported"
+                .into(),
         );
     };
     let exe = out.join(exe_name);

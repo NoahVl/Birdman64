@@ -1,6 +1,9 @@
 //! `PW64_RELOC=strict` (docs/notes/option-a.md S5) in its own process:
 //! vaddr regions are once-only per process.
 
+#![cfg(not(target_vendor = "apple"))]
+// (Strict mode audits the low windows, which Darwin can't map: refused there.)
+
 use pw64_game::memmap::{self, RDRAM_SIZE, Reloc};
 use pw64_platform::{os::stack, vaddr};
 

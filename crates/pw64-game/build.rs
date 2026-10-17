@@ -76,18 +76,23 @@ enum Flavor {
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    let os = pw64_cbuild::Os::from_target(&target_os, &target_arch).unwrap_or_else(|| {
-        panic!(
-            "pw64-game: the native C build supports x86_64 Windows, x86_64 Linux, \
-             aarch64 Linux and aarch64 Android only, not {target_arch}-{target_os} (macOS: see \
-             docs/notes/option-a.md \"Flipping the default\")"
-        )
-    });
+    let target_abi = std::env::var("CARGO_CFG_TARGET_ABI").unwrap_or_default();
+    let os = pw64_cbuild::Os::from_target_abi(&target_os, &target_arch, &target_abi)
+        .unwrap_or_else(|| {
+            panic!(
+                "pw64-game: the native C build supports x86_64 Windows, x86_64 Linux, \
+                 aarch64 Linux, aarch64 Android and aarch64 macOS/iOS only, not \
+                 {target_arch}-{target_os}"
+            )
+        });
     let flavor = match os {
         pw64_cbuild::Os::Windows => Flavor::Msvc,
-        pw64_cbuild::Os::Linux | pw64_cbuild::Os::LinuxArm64 | pw64_cbuild::Os::Android => {
-            Flavor::Gnu
-        }
+        pw64_cbuild::Os::Linux
+        | pw64_cbuild::Os::LinuxArm64
+        | pw64_cbuild::Os::Android
+        | pw64_cbuild::Os::MacArm64
+        | pw64_cbuild::Os::Ios
+        | pw64_cbuild::Os::IosSim => Flavor::Gnu,
     };
     // Crash diagnosis: when set, write a link map so a RIP from the
     // pw64-platform crash log resolves to a C symbol. It must be part of
@@ -97,6 +102,8 @@ fn main() {
             println!("cargo:rerun-if-env-changed=PW64_MAP");
             vec![match flavor {
                 Flavor::Msvc => format!("/MAP:{map}"),
+                // ld64 spells it `-map <file>`.
+                Flavor::Gnu if os.is_apple() => format!("-Wl,-map,{map}"),
                 Flavor::Gnu => format!("-Wl,-Map={map}"),
             }]
         })
@@ -110,9 +117,12 @@ fn main() {
     // linker is the system `cc`/GNU ld, which has no `--image-base`). The
     // `pw64_reloc` cfg is what the crate's code tests (feature or arm64).
     // Android likewise: the app is a `.so` loaded by the Java side, at
-    // whatever address the bionic linker picks.
+    // whatever address the bionic linker picks. Apple arm64 likewise (dyld
+    // slides the image; Mach-O has no `--image-base`, and the low 4 GB is
+    // __PAGEZERO on arm64, so a low base is impossible).
     let reloc = std::env::var_os("CARGO_FEATURE_RELOC").is_some()
-        || matches!(os, pw64_cbuild::Os::LinuxArm64 | pw64_cbuild::Os::Android);
+        || matches!(os, pw64_cbuild::Os::LinuxArm64 | pw64_cbuild::Os::Android)
+        || os.is_apple();
     println!("cargo::rustc-check-cfg=cfg(pw64_reloc)");
     if reloc {
         println!("cargo:rustc-cfg=pw64_reloc");
@@ -138,6 +148,10 @@ fn main() {
         is_static != is_dylib,
         "pw64-game: enable exactly one of the features `static` (default) and `dylib` \
          (for dylib: --no-default-features --features dylib)"
+    );
+    assert!(
+        !(is_dylib && os.is_apple()),
+        "pw64-game: the `dylib` (first-run module) flavour is not ported to Mach-O"
     );
     if is_dylib {
         // No C here: the game module is built on the player's machine

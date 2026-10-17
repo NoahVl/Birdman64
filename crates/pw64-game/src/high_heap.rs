@@ -90,9 +90,9 @@ fn reserve(base: usize) -> bool {
         };
         p as usize == base
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
     // SAFETY: anonymous PROT_NONE mapping that never clobbers (old kernels
-    // take NOREPLACE as a hint, hence the check).
+    // and Darwin take NOREPLACE as a hint, hence the check).
     unsafe {
         let p = libc::mmap(
             base as *mut libc::c_void,
@@ -121,7 +121,7 @@ fn commit(addr: usize, len: usize) -> bool {
             unsafe { sys::VirtualAlloc(addr as *mut _, len, sys::MEM_COMMIT, sys::PAGE_READWRITE) };
         !p.is_null()
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
     // SAFETY: pages inside our own reservation.
     unsafe {
         libc::mprotect(

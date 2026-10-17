@@ -76,7 +76,18 @@ impl Reloc {
 impl Reloc {
     /// Parses a `PW64_RELOC` value for this build ([`RELOC_BUILD`]). Pure.
     pub fn parse(v: Option<&str>) -> Result<Reloc, String> {
-        Self::parse_for(v, RELOC_BUILD)
+        let mode = Self::parse_for(v, RELOC_BUILD)?;
+        // Darwin: the low 4 GB is `__PAGEZERO`, so the fixed windows (off,
+        // alias, strict's no-access audit of them) can't exist, and there is
+        // no memfd for alias.
+        if cfg!(target_vendor = "apple") && mode != Reloc::On {
+            return Err(format!(
+                "PW64_RELOC={}: Apple targets support only `on` (nothing can be mapped \
+                 below 4 GB there)",
+                v.unwrap_or("")
+            ));
+        }
+        Ok(mode)
     }
 
     /// [`Self::parse`] for a fixed-base (`reloc_build` false) or a `reloc`
@@ -219,9 +230,17 @@ pub fn map_rdram_window() {
             std::io::Error::last_os_error()
         );
     }
-    // macOS/arm64 forbids low mappings (`__PAGEZERO`): native-build.md §10.
-    #[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
-    compile_error!("RDRAM window mapping is implemented for Windows, Linux and Android only");
+    // Darwin forbids low mappings (`__PAGEZERO`): `Reloc::parse` refuses
+    // `Off`, so this is unreachable.
+    #[cfg(target_vendor = "apple")]
+    unreachable!("the fixed RDRAM window cannot exist on Apple targets");
+    #[cfg(not(any(
+        windows,
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple"
+    )))]
+    compile_error!("RDRAM window mapping is implemented for Windows, Linux, Android and Darwin");
 }
 
 /// [`Reloc::Alias`]: one zeroed shared-memory block of [`RDRAM_SIZE`],
@@ -229,6 +248,7 @@ pub fn map_rdram_window() {
 /// address; returns the high view. Both views are the same pages, so C
 /// sites that still use a window literal see what the translated sites
 /// wrote. Panics if either view can't be mapped.
+#[cfg(not(target_vendor = "apple"))]
 fn map_rdram_alias() -> usize {
     #[cfg(windows)]
     let high = {
@@ -312,6 +332,12 @@ fn map_rdram_alias() -> usize {
     high.expect("RDRAM alias: no free high address for the second view")
 }
 
+/// Darwin has no memfd and no low window: `Reloc::parse` refuses `alias`.
+#[cfg(target_vendor = "apple")]
+fn map_rdram_alias() -> usize {
+    unreachable!("RDRAM alias is not available on Apple targets")
+}
+
 /// High candidates for the stack window in [`Reloc::On`]/[`Reloc::Strict`]: like
 /// [`alias_candidates`], with low 32 bits 0x4000_0000.. (bit 31 clear, apart
 /// from RDRAM's; the 504 MB window ends below 0x6000_0000).
@@ -335,9 +361,9 @@ fn reserve_noaccess(base: usize, len: usize) -> bool {
         };
         p as usize == base
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
     // SAFETY: anonymous PROT_NONE mapping, MAP_FIXED_NOREPLACE (never
-    // clobbers; old kernels take it as a hint, hence the check).
+    // clobbers; old kernels, and Darwin, take it as a hint, hence the check).
     unsafe {
         let p = libc::mmap(
             base as *mut c_void,
@@ -365,9 +391,12 @@ fn reserve_noaccess(base: usize, len: usize) -> bool {
 /// either fails.
 fn relocate_stacks(audit: bool) {
     use pw64_platform::os::stack::{self, SEARCH_START, WINDOW_SIZE};
-    stack_candidates()
-        .find(|&a| stack::reserve_region_at(a))
-        .expect("stack window: no free high address");
+    let fixed = stack_candidates().find(|&a| stack::reserve_region_at(a));
+    // Darwin (iOS especially): the fixed candidates may lie beyond the
+    // process's address space; the vaddr layer takes any base above 4 GB.
+    #[cfg(target_vendor = "apple")]
+    let fixed = fixed.or_else(stack::reserve_region_anywhere);
+    fixed.expect("stack window: no free high address");
     assert!(
         !audit || reserve_noaccess(SEARCH_START, WINDOW_SIZE),
         "could not reserve the old stack window at {SEARCH_START:#x}: {}",
@@ -392,11 +421,12 @@ fn map_rdram_high(audit: bool) -> usize {
         let high = alias_candidates().find(|&a| alloc(a, rw, sys::PAGE_READWRITE) == a);
         (high, !audit || reserve_noaccess(RDRAM_BASE, RDRAM_SIZE))
     };
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
     let (high, low) = {
         let map = |base: usize, prot: i32| {
             // SAFETY: anonymous mapping, MAP_FIXED_NOREPLACE (never
-            // clobbers; old kernels take it as a hint, hence the check).
+            // clobbers; old kernels and Darwin, where it is a plain hint,
+            // are covered by the address check).
             unsafe {
                 let p = libc::mmap(
                     base as *mut c_void,
@@ -413,6 +443,11 @@ fn map_rdram_high(audit: bool) -> usize {
             }
         };
         let high = alias_candidates().find(|&a| map(a, libc::PROT_READ | libc::PROT_WRITE) == a);
+        // Darwin: kernel-chosen when no candidate fits (see `relocate_stacks`).
+        #[cfg(target_vendor = "apple")]
+        let high = high.or_else(|| {
+            pw64_platform::mmap_anywhere(RDRAM_SIZE, libc::PROT_READ | libc::PROT_WRITE)
+        });
         (high, !audit || reserve_noaccess(RDRAM_BASE, RDRAM_SIZE))
     };
     assert!(
@@ -495,6 +530,13 @@ pub fn image_regions(
 /// `(start, end)` of the app `.so`'s loaded image (no `__executable_start`
 /// on Android; the crash tracer finds it with `dl_iterate_phdr`).
 #[cfg(target_os = "android")]
+fn exe_image_range() -> (usize, usize) {
+    pw64_platform::os::crash::exe_image_range()
+}
+
+/// `(start, end)` of this exe's loaded image: the Mach-O segments (dyld
+/// slides it), found by the platform crate's header walk.
+#[cfg(target_vendor = "apple")]
 fn exe_image_range() -> (usize, usize) {
     pw64_platform::os::crash::exe_image_range()
 }

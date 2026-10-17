@@ -1,6 +1,9 @@
 //! `PW64_RELOC=alias` (docs/notes/option-a.md S4) in its own process:
 //! vaddr regions are once-only per process.
 
+#![cfg(not(target_vendor = "apple"))]
+// (Darwin has no memfd and no low window: alias mode is refused there.)
+
 use pw64_game::memmap::{self, RDRAM_BASE, RDRAM_SIZE, Reloc};
 use pw64_platform::vaddr;
 

@@ -59,6 +59,13 @@ pub const ZIG_LINUX_ARM64: ZigDist = ZigDist {
     exe_in_archive: "zig-aarch64-linux-0.16.0/zig",
 };
 
+/// [`ZIG_VERSION`] for aarch64 macOS (tar.xz; ziglang.org index.json shasum).
+pub const ZIG_MACOS_ARM64: ZigDist = ZigDist {
+    url: "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz",
+    sha256: "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489",
+    exe_in_archive: "zig-aarch64-macos-0.16.0/zig",
+};
+
 /// One stage of the first-run build (docs/notes/first-run-build.md, "Steps +
 /// UX"): the launcher (T9) draws the progress window from these. Download and
 /// VerifyExtract are reported by [`fetch`], the rest by [`build`]; `Load`
@@ -196,9 +203,22 @@ pub enum Os {
     /// so neither the compile nor the module link needs one; only rustc's
     /// final link of the app `.so` needs the NDK (docs/notes/android.md).
     Android,
+    /// zig clang, aarch64-apple-macos11 (Mach-O; same LP64/AAPCS64 layout,
+    /// `va_list` is `char*`). Relocatable only. Static build only: the
+    /// first-run module path is not ported to Mach-O.
+    MacArm64,
+    /// zig clang, aarch64-apple-ios15 (device). As [`Os::MacArm64`].
+    Ios,
+    /// zig clang, aarch64-apple-ios15-simulator. As [`Os::MacArm64`].
+    IosSim,
 }
 
 impl Os {
+    /// Mach-O targets (macOS and iOS).
+    pub fn is_apple(self) -> bool {
+        matches!(self, Os::MacArm64 | Os::Ios | Os::IosSim)
+    }
+
     /// ELF + `ld.lld` + `.so` (Linux on either architecture, and Android).
     pub fn is_linux(self) -> bool {
         matches!(self, Os::Linux | Os::LinuxArm64 | Os::Android)
@@ -212,7 +232,18 @@ impl Os {
             ("linux", "x86_64") => Some(Os::Linux),
             ("linux", "aarch64") => Some(Os::LinuxArm64),
             ("android", "aarch64") => Some(Os::Android),
+            ("macos", "aarch64") => Some(Os::MacArm64),
+            ("ios", "aarch64") => Some(Os::Ios),
             _ => None,
+        }
+    }
+
+    /// [`Os::from_target`] plus `CARGO_CFG_TARGET_ABI` (`"sim"` selects the
+    /// iOS simulator, which has its own triple).
+    pub fn from_target_abi(os: &str, arch: &str, abi: &str) -> Option<Os> {
+        match Os::from_target(os, arch) {
+            Some(Os::Ios) if abi == "sim" => Some(Os::IosSim),
+            other => other,
         }
     }
 }
@@ -247,9 +278,32 @@ const ZIG_TGT_ANDROID: &[&str] = &[
     "-mno-outline-atomics",
 ];
 
+/// Apple arm64. Same flags as arm64 Linux: `-mno-outline-atomics` keeps the
+/// objects free of compiler-rt helper calls (as on Android). Darwin code is
+/// position independent by default; `-fPIE` is harmless and keeps the list
+/// parallel to the ELF ones.
+const ZIG_TGT_MACOS_ARM64: &[&str] = &[
+    "--target=aarch64-apple-macos11",
+    "-fPIE",
+    "-mno-outline-atomics",
+];
+const ZIG_TGT_IOS: &[&str] = &[
+    "--target=aarch64-apple-ios15",
+    "-fPIE",
+    "-mno-outline-atomics",
+];
+const ZIG_TGT_IOS_SIM: &[&str] = &[
+    "--target=aarch64-apple-ios15-simulator",
+    "-fPIE",
+    "-mno-outline-atomics",
+];
+
 /// The `TGT` part for `os`.
 fn zig_tgt(os: Os) -> &'static [&'static str] {
     match os {
+        Os::MacArm64 => ZIG_TGT_MACOS_ARM64,
+        Os::Ios => ZIG_TGT_IOS,
+        Os::IosSim => ZIG_TGT_IOS_SIM,
         Os::Windows => ZIG_TGT_WINDOWS,
         Os::Linux => ZIG_TGT_LINUX,
         Os::LinuxArm64 => ZIG_TGT_LINUX_ARM64,
@@ -484,7 +538,14 @@ mod tests {
         assert_eq!(arm[0], "--target=aarch64-unknown-linux-gnu");
         assert_eq!(arm[1..], lin[1..]);
         assert_eq!(Os::from_target("linux", "aarch64"), Some(Os::LinuxArm64));
-        assert_eq!(Os::from_target("macos", "aarch64"), None);
+        assert_eq!(Os::from_target("macos", "aarch64"), Some(Os::MacArm64));
+        assert_eq!(
+            Os::from_target_abi("ios", "aarch64", "sim"),
+            Some(Os::IosSim)
+        );
+        let mac = zig_flags(Os::MacArm64);
+        assert_eq!(mac[0], "--target=aarch64-apple-macos11");
+        assert_eq!(mac[ZIG_TGT_MACOS_ARM64.len()..], lin[ZIG_TGT_LINUX.len()..]);
         // Android = x86_64 Linux except the TGT part (triple + no outline atomics).
         let android = zig_flags(Os::Android);
         assert_eq!(android[0], "--target=aarch64-linux-android26");
@@ -502,6 +563,9 @@ mod tests {
             (Os::Linux, ZIG_TGT_LINUX.len()),
             (Os::LinuxArm64, ZIG_TGT_LINUX_ARM64.len()),
             (Os::Android, ZIG_TGT_ANDROID.len()),
+            (Os::MacArm64, ZIG_TGT_MACOS_ARM64.len()),
+            (Os::Ios, ZIG_TGT_IOS.len()),
+            (Os::IosSim, ZIG_TGT_IOS_SIM.len()),
         ] {
             let flags = zig_flags(os);
             let mut i = 0;
