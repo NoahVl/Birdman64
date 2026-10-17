@@ -38,6 +38,7 @@ mod perf;
 mod rfd;
 mod rom_screen;
 mod rom_setup;
+mod save_transfer;
 mod settings;
 mod sys;
 mod toast;

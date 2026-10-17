@@ -22,17 +22,31 @@ public class PwActivity extends NativeActivity {
      *  (rom_picker.rs ROM_PICK_REQUEST). */
     static final int ROM_PICK_REQUEST = 4001;
 
+    /** Save export (create a document) and import (open one) requests
+     *  (android/save_picker.rs). */
+    static final int SAVE_EXPORT_REQUEST = 4002;
+    static final int SAVE_IMPORT_REQUEST = 4003;
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != ROM_PICK_REQUEST) {
+        if (requestCode != ROM_PICK_REQUEST
+                && requestCode != SAVE_EXPORT_REQUEST
+                && requestCode != SAVE_IMPORT_REQUEST) {
             return;
         }
         String uri = resultCode == RESULT_OK && data != null && data.getData() != null
                 ? data.getData().toString()
                 : "";
-        nativeRomPicked(uri);
+        if (requestCode == ROM_PICK_REQUEST) {
+            nativeRomPicked(uri);
+        } else {
+            nativeSavePicked(requestCode, uri);
+        }
     }
+
+    /** Implemented in libbirdman64.so (save_picker.rs). "" = cancelled. */
+    static native void nativeSavePicked(int request, String uri);
 
     /** Implemented in libbirdman64.so (rom_picker.rs). "" = cancelled. The
      *  static block above has loaded the library, so this resolves. */

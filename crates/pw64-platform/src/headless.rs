@@ -519,6 +519,52 @@ static EEP_BACKED_UP: AtomicBool = AtomicBool::new(false);
 /// The "couldn't save" toast was shown this session (S6): once, not per save.
 static SAVE_FAIL_TOASTED: AtomicBool = AtomicBool::new(false);
 
+/// A save was imported this session ([`import_eep`]): the game still holds
+/// the old one in RAM, so its next write would put it back over the import.
+/// While this stands, game writes are dropped; the host restarts right after.
+static EEP_IMPORTED: AtomicBool = AtomicBool::new(false);
+
+/// The current save image (the whole `EEP_SIZE`), for an export. `Err` when
+/// the file could not be read this session: the image is then blank, and
+/// exporting it would hand the player an empty "backup".
+pub fn export_eep() -> Result<Vec<u8>, String> {
+    let data = eep_data().lock().unwrap();
+    if EEP_READ_FAILED.load(Ordering::Relaxed) {
+        return Err("Birdman64 couldn't read your save file this session.".to_string());
+    }
+    Ok(data.to_vec())
+}
+
+/// Replaces the save with `bytes` (a `.eep` from another Birdman64 or an
+/// emulator: exactly 0x200 or 0x800 bytes, not blank). The old file is kept
+/// as `<eep>.before-import`. The host must restart afterwards: the running
+/// game keeps its old save in RAM, and further game writes are dropped.
+pub fn import_eep(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() != 0x200 && bytes.len() != EEP_SIZE {
+        return Err(format!(
+            "That file is {} bytes; a Pilotwings 64 save (.eep) is 2048 bytes.",
+            bytes.len()
+        ));
+    }
+    if bytes.iter().all(|&b| b == 0) {
+        return Err("That save file is empty.".to_string());
+    }
+    let image = eep_image(bytes);
+    let mut data = eep_data().lock().unwrap();
+    let path = eep_path();
+    let mut old = path.as_os_str().to_owned();
+    old.push(".before-import");
+    if let Err(e) = std::fs::copy(&path, &old)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(format!("Couldn't back up your current save: {e}"));
+    }
+    write_atomic(&path, &image).map_err(|e| format!("Couldn't write the save: {e}"))?;
+    *data = image;
+    EEP_IMPORTED.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
 /// Sets the fallback EEPROM path for when `PW64_EEP` is unset. Call before
 /// the EEPROM is first used (i.e. before `os::boot`); later calls are
 /// ignored. `PW64_EEP` keeps priority over this.
@@ -632,6 +678,9 @@ pub unsafe extern "C-unwind" fn osEepromLongWrite(
     let (off, len) = (address as usize * 8, length.max(0) as usize);
     if off + len > EEP_SIZE {
         return -1;
+    }
+    if EEP_IMPORTED.load(Ordering::Relaxed) {
+        return 0; // an imported save is waiting for the restart
     }
     // SAFETY: the C passes a buffer of `length` bytes.
     let src = unsafe { std::slice::from_raw_parts(buffer, len) };
@@ -902,8 +951,33 @@ mod tests {
         bak.push(".bak");
         let bak = std::path::PathBuf::from(bak);
         assert_eq!(std::fs::read(&bak).unwrap(), vec![0u8; EEP_SIZE]);
+
+        // Export hands out the image; import rejects odd sizes and blank
+        // files, keeps the old save, pads a 0x200 file and then freezes
+        // game writes (the same cache, so it lives in this test).
+        let exported = export_eep().unwrap();
+        assert_eq!(exported, on_disk);
+        assert!(import_eep(&[1; 100]).is_err());
+        assert!(import_eep(&[0; EEP_SIZE]).is_err());
+        let mut other = vec![0u8; 0x200];
+        other[0] = b'x';
+        import_eep(&other).unwrap();
+        let mut before = tmp.as_os_str().to_owned();
+        before.push(".before-import");
+        let before = std::path::PathBuf::from(before);
+        assert_eq!(std::fs::read(&before).unwrap(), on_disk);
+        let now = std::fs::read(&tmp).unwrap();
+        assert_eq!(now.len(), EEP_SIZE);
+        assert_eq!(now[0], b'x');
+        assert_eq!(export_eep().unwrap(), now);
+        // SAFETY: as above; the block buffer is valid for 0x100 bytes.
+        let r = unsafe { osEepromLongWrite(std::ptr::null_mut(), 0, block.as_mut_ptr(), 0x100) };
+        assert_eq!(r, 0);
+        assert_eq!(std::fs::read(&tmp).unwrap()[0], b'x', "writes are dropped");
+
         std::fs::remove_file(&tmp).unwrap();
         std::fs::remove_file(&bak).unwrap();
+        std::fs::remove_file(&before).unwrap();
     }
 
     /// S5: with the read-failure guard standing, nothing is written: no

@@ -140,7 +140,12 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
   app couldn't list; the app now creates both `rom/` folders at start.
 - Saves (`pw64.eep`, `pw64.toml`) are in internal storage (`files/`): kept by
   `adb install -r`, wiped by an uninstall (as is the external `rom/`).
-- Pause menu rows that mean nothing on Android yet: "Open save folder", "Quit".
+- Pause menu rows that mean nothing on Android yet: "Quit". "Open save folder" is
+  replaced by "Export save…" / "Import save…" (`save_transfer.rs`): SAF create /
+  open document via `android/save_picker.rs` (request codes 4002/4003 in
+  `PwActivity`). Import replaces `pw64.eep` and drops further game writes (the
+  game holds the old save in RAM); the app then asks to be closed
+  (`process::exit`), desktop restarts itself. Untested on a device.
 
 ## Building the game module on the device (release flavour)
 

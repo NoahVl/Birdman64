@@ -13,6 +13,7 @@
 //! handle the Android lifecycle, `input/android_pad.rs` the pads.
 
 pub(crate) mod rom_picker;
+pub(crate) mod save_picker;
 
 use jni::objects::JObject;
 use jni::{Env, JValue, jni_sig, jni_str};
