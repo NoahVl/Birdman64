@@ -23,6 +23,7 @@
     <application
         android:label="Birdman64"
         android:hasCode="false"
+        android:hasFragileUserData="true"
         android:extractNativeLibs="true">
         <!-- Landscape only; a pad connecting (keyboard|navigation) or any
              other listed change must not restart the activity: the game
