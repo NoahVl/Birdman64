@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Android: choose the ROM with the system file picker. On first start, tap
+  "Choose a game file" and pick your Pilotwings 64 (USA) file from anywhere
+  the Files app can reach (Downloads, Drive, USB); it is copied into the
+  app's storage and remembered, so every later launch starts straight away.
+
 ## [1.4.0] - 2026-10-17
 
 ### Added

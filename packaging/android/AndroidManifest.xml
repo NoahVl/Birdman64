@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Birdman64 for Android: a NativeActivity (no Java code) that loads
+  Birdman64 for Android: a NativeActivity (with one small Java subclass,
+  PwActivity: the SAF ROM picker result forwarding) that loads
   libbirdman64.so and calls its android_main. build-apk.sh packages it;
   docs/notes/android.md has the details. The package id is a placeholder
   until the first release. versionName and versionCode come from the
@@ -24,18 +25,18 @@
          panel) that classification brought a 60 fps game frame-rate
          override for the app, which held even with a requested rate
          (ANativeWindow_setFrameRate). Hiding the system bars is done in code. -->
+    <!-- hasCode is true (the default): PwActivity is real Java. -->
     <application
         android:label="Birdman64"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:hasCode="false"
         android:hasFragileUserData="true"
         android:extractNativeLibs="true">
         <!-- Landscape only; a pad connecting (keyboard|navigation) or any
              other listed change must not restart the activity: the game
              thread and its OS core live for the whole process. -->
         <activity
-            android:name="android.app.NativeActivity"
+            android:name="app.birdman64.PwActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="sensorLandscape"

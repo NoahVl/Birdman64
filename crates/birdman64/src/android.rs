@@ -2,14 +2,17 @@
 //! NativeActivity glue (through winit's `android-native-activity` backend)
 //! on its own thread once the activity is created.
 //!
-//! NativeActivity rather than GameActivity: it needs no Java/AndroidX code
-//! and no Gradle, so the APK is a manifest plus this library; pad keys
-//! arrive through winit either way. GameActivity (IME, insets) can replace
-//! it once a Java side exists anyway (the SAF ROM picker needs JNI).
+//! NativeActivity rather than GameActivity: it needs no AndroidX or Gradle,
+//! so the APK is a manifest, one small Java class and this library; pad keys
+//! arrive through winit either way. The Java class (`PwActivity`,
+//! packaging/android/java) extends `NativeActivity` only to forward the SAF
+//! ROM picker's `onActivityResult` (android/rom_picker.rs).
 //!
 //! Everything after the paths runs the desktop code unchanged
 //! (`crate::start` → `window::run`); the window's `resumed`/`suspended`
 //! handle the Android lifecycle, `input/android_pad.rs` the pads.
+
+pub(crate) mod rom_picker;
 
 use jni::objects::JObject;
 use jni::{Env, JValue, jni_sig, jni_str};
@@ -40,15 +43,24 @@ fn android_main(app: AndroidApp) {
         crate::paths::set_data_dir(dir.clone());
         let _ = std::env::set_current_dir(dir);
     }
-    // Temporary ROM source until the SAF picker exists (TODO(android)):
-    // `<external files dir>/rom/` (writable with plain `adb push`, see
-    // docs/notes/android.md), then `<internal files dir>/rom/`.
+    // ROM sources, in order: the remembered pick (`[rom] path` — written by
+    // the SAF ROM picker, whose copy lands in the internal `rom/` folder)
+    // beats the folders, like the desktop's remembered pick beats its scan
+    // (rom_setup.rs). The folders themselves are the manual path
+    // (`adb push`, docs/notes/android.md): `<external files dir>/rom/`
+    // first (writable from the shell), then `<internal files dir>/rom/`.
     let dirs: Vec<PathBuf> = [app.external_data_path(), internal]
         .into_iter()
         .flatten()
         .map(|d| d.join("rom"))
         .collect();
-    let rom = dirs.iter().find_map(|d| first_rom_in(d));
+    let remembered = crate::config::get()
+        .rom
+        .path
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|p| p.is_file());
+    let rom = remembered.or_else(|| dirs.iter().find_map(|d| first_rom_in(d)));
     // Created by the app, not by `adb shell mkdir`: on a fresh install the
     // app couldn't list a shell-made folder there (scoped storage).
     for d in &dirs {
@@ -56,7 +68,8 @@ fn android_main(app: AndroidApp) {
     }
     if rom.is_none() {
         eprintln!(
-            "[android] no ROM in {}: push one there (adb push <rom>.z64 <dir>/)",
+            "[android] no ROM in {} yet: the window's ROM screen offers the \
+             system file picker (android/rom_picker.rs)",
             dirs.iter()
                 .map(|d| d.display().to_string())
                 .collect::<Vec<_>>()

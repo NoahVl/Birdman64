@@ -170,6 +170,12 @@ fn pick_and_remember(stale_rom: bool) -> anyhow::Result<Option<PathBuf>> {
     if std::env::var_os("PW64_NO_FILE_DIALOG").is_some() {
         return Ok(None);
     }
+    // Android: the welcome box and the picker below are log-only rfd
+    // stand-ins (android/rfd.rs) — invisible. The ROM screen's SAF picker
+    // (android/rom_picker.rs) does this job, so send it there at once.
+    if cfg!(target_os = "android") {
+        return Ok(None);
+    }
     if !welcome_to_birdman64(stale_rom) {
         no_rom_chosen();
     }
@@ -313,8 +319,10 @@ enum Pick {
 /// Native open dialog filtered to N64 ROM files (any byte order). Only
 /// reached from [`pick_and_remember`], i.e. never in tests or CI.
 fn pick_rom(title: &str) -> Pick {
-    // Android: no picker yet (TODO: SAF `ACTION_OPEN_DOCUMENT` via JNI); the
-    // in-window ROM screen explains where to put the file instead.
+    // Android: the SAF picker needs an onActivityResult the framework's
+    // NativeActivity can't deliver before a window exists — it is offered
+    // from the ROM screen instead (android/rom_picker.rs), which this
+    // "no dialog" return leads to.
     #[cfg(target_os = "android")]
     {
         let _ = title;

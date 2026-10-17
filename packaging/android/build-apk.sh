@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds a debug-signed arm64-v8a APK of Birdman64: the birdman64 library as
-# a cdylib (libbirdman64.so) behind a NativeActivity manifest. No Gradle, no
-# Java code: only the SDK build-tools (aapt2, aapt, zipalign, apksigner) and
-# keytool. See docs/notes/android.md.
+# a cdylib (libbirdman64.so) behind a NativeActivity manifest. No Gradle;
+# one small Java class (PwActivity, the SAF ROM picker result) is compiled
+# with javac + d8; otherwise only the SDK build-tools (aapt2, aapt, zipalign,
+# apksigner) and keytool. See docs/notes/android.md.
 #
 # Needs: `rustup target add aarch64-linux-android`; zig in tools/zig (get_zig
 # example); ANDROID_NDK_HOME (NDK r27+); ANDROID_HOME (build-tools + one
@@ -185,6 +186,25 @@ mkdir -p "$OUT/stage/lib/arm64-v8a"
 cp "target/aarch64-linux-android/$PROFILE/libbirdman64.so" "$OUT/stage/lib/arm64-v8a/"
 LIBS=(lib/arm64-v8a/libbirdman64.so)
 LINK_FLAGS=()
+
+# The one Java class (PwActivity): NativeActivity subclass forwarding the
+# SAF ROM picker result into rom_picker.rs (crates/birdman64/src/android).
+# javac needs a JDK on PATH (keytool/apksigner already need one); d8
+# (build-tools) dexes it into classes.dex at the APK root. The manifest
+# activity is that class, so hasCode must be true (the default).
+command -v javac > /dev/null || {
+    echo "error: needs a JDK with javac on PATH (the keystore tools need one anyway)" >&2
+    exit 1
+}
+CLASSES="$OUT/classes"
+rm -rf "$CLASSES"
+mkdir -p "$CLASSES"
+javac --release 8 -classpath "$PLATFORM/android.jar" -d "$CLASSES" \
+    packaging/android/java/app/birdman64/PwActivity.java
+"$BT/d8$BAT" --min-api "$API" --output "$CLASSES" \
+    "$CLASSES/app/birdman64/PwActivity.class"
+cp "$CLASSES/classes.dex" "$OUT/stage/classes.dex"
+LIBS+=(classes.dex)
 if [ "$FLAVOUR" = release ]; then
     # Debug info is ~3/4 of the library; crash reports symbolize offline.
     "$BIN/llvm-strip$EXE" --strip-debug "$OUT/stage/lib/arm64-v8a/libbirdman64.so"

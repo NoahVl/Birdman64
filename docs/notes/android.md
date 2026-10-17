@@ -57,11 +57,16 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
 - **Pads:** `input/android_pad.rs` maps Android keycodes to gilrs `Button`s, so
   bindings, capture and nav are unchanged. Back toggles settings. gilrs and btleplug
   compile on Android but are never started; rfd is replaced by `android/rfd.rs`
-  (log only).
+  (log only). ROM picking: SAF `ACTION_OPEN_DOCUMENT` through JNI
+  (`android/rom_picker.rs`); the one Java class (`PwActivity`) only forwards its
+  `onActivityResult` (NativeActivity can't) and needs `System.loadLibrary` in a
+  static block (NativeActivity's own dlopen isn't registered with the JVM —
+  without it the callback throws UnsatisfiedLinkError). javac + d8 in
+  build-apk.sh; manifest `hasCode` true.
 - **Gaps:** winit 0.30 turns joystick MotionEvents into `Touch` (X/Y only), so there
   is no stick or trigger path yet (hook: `android_pad::set_axes`; the d-pad steers
-  meanwhile). Also missing: SAF picker, dialogs, pad names, a "pad connected"
-  signal (needs `InputManager` via JNI).
+  meanwhile). Also missing: dialogs (rfd boxes are log-only), pad names, a "pad
+  connected" signal (needs `InputManager` via JNI).
 - **Crash handler:** the `.so` range (`dl_iterate_phdr`, not signal-safe) is
   computed in `install`; the handler only reads the cache (Release/Acquire flag).
 
@@ -154,7 +159,8 @@ checks, cache key, `find_cached`). Works on the test device end to end.
 - **Module:** zig target `aarch64-linux-android26`, link adds `-z max-page-size=16384`
   (16 KB-page devices); written to `files/cache/game/<key>/libpw64game.so` and
   `dlopen`ed from there: SELinux allows mmap-exec of app data, only exec is blocked.
-  Cached start: module loaded 2 ms after the ROM step.
+  Cached start: module loaded 2 ms after the ROM step. Device-tested end to end
+  (Pixel 9): setup screen, 7.3 s build, then the SAF ROM picker and a flight.
 - **Download:** same ureq/rustls code; the platform verifier needs a Java part the
   APK lacks, so Android reads the system CA dir (`/apex/com.android.conscrypt/cacerts`,
   else `/system/etc/security/cacerts`, PEM) into `RootCerts::Specific` (fetch.rs).
@@ -187,13 +193,12 @@ checks, cache key, `find_cached`). Works on the test device end to end.
 
 ## Frontend work left
 
-- **ROM / files:** pick the ROM through the Storage Access Framework
-  (`ACTION_OPEN_DOCUMENT`, JNI), copy it into app storage.
 - **Release APK:** built by CI (`android-apk` job, release.yml `android`); left:
   suspend/resume during the setup screen (untested). `--sign-only` with
   `ANDROID_CERT_SHA256` set (release.yml pins the release cert) fails unless
   `apksigner verify --print-certs` reports that signer: a wrong key would make an APK
   phones refuse to install over the previous release.
+- Dialogs beyond the ROM picker (pad names, "pad connected") still need JNI.
 
 ## Order
 
@@ -202,5 +207,7 @@ checks, cache key, `find_cached`). Works on the test device end to end.
 3. **Android, pad only:** groundwork done and device-tested (above); next is the
    pad stick path. A module built on desktop: `Os::Android` exists in pw64-cbuild,
    but the builder only targets its host so far.
-4. **On-device build, touch controls, SAF ROM picker:** usable by beginners. The
-   first two are done; the SAF picker is next.
+4. **On-device build, touch controls, SAF ROM picker:** usable by beginners. All
+   three done (picker: android/rom_picker.rs, device-tested end to end in both
+   flavours: dev build boots a zip picked from Downloads; release flavour builds
+   the module on the device in 7.3 s, then the same picker).

@@ -1,10 +1,8 @@
 //! Android stand-in for the parts of `rfd` the app uses (rfd has no Android
 //! backend). Message boxes go to the log (stderr → logcat, android.rs) and
-//! answer like a cancelled box. No file picker (`rom_setup::pick_rom` says
-//! "no dialog"), so the ROM comes from the app's `rom/` folders or the
-//! in-window ROM screen.
-//! TODO(android): real dialogs and the Storage Access Framework picker
-//! (`ACTION_OPEN_DOCUMENT` through JNI), docs/notes/android.md.
+//! answer like a cancelled box. There is no file dialog here either
+//! (`rom_setup::pick_rom` says "no dialog"): the ROM pick goes through the
+//! SAF picker from the ROM screen (android/rom_picker.rs).
 
 #[derive(Clone, Copy, Debug)]
 pub enum MessageLevel {

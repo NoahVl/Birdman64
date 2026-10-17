@@ -37,13 +37,23 @@ pub struct Screen {
     check: bool,
     quit: bool,
     shot: bool,
+    /// Android: the system file picker is up (a pick or cancel hasn't
+    /// arrived yet, android/rom_picker.rs).
+    #[cfg(target_os = "android")]
+    picking: bool,
 }
 
 /// The folder the `pi::load_rom(None)` scan covers that a player can put a
 /// file into: the AppImage's own folder (the exe dir is the read-only mount),
-/// else the exe's folder.
+/// else the exe's folder. None on Android: there is no exe folder (the
+/// process is the system's app process), the ROM screen has its own advice.
+#[cfg_attr(target_os = "android", allow(clippy::needless_return))] // see above
 fn rom_folder() -> Option<PathBuf> {
+    #[cfg(target_os = "android")]
+    return None;
+    #[cfg(not(target_os = "android"))]
     let beside = |p: PathBuf| p.parent().map(PathBuf::from);
+    #[cfg(not(target_os = "android"))]
     std::env::var_os("APPIMAGE")
         .map(PathBuf::from)
         .and_then(beside)
@@ -66,6 +76,8 @@ impl Screen {
             check: false,
             quit: false,
             shot: false,
+            #[cfg(target_os = "android")]
+            picking: false,
         }
     }
 
@@ -99,8 +111,22 @@ impl Screen {
         });
     }
 
-    /// Acts on a dropped file / "Check again" from the previous frame.
+    /// Acts on a dropped file / "Check again" from the previous frame, and
+    /// (Android) on a file-picker result.
     fn try_load(&mut self) -> bool {
+        #[cfg(target_os = "android")]
+        if let Some(picked) = crate::android::rom_picker::take_picked() {
+            self.picking = false;
+            if let Some(uri) = picked {
+                match crate::android::rom_picker::install_picked(&uri) {
+                    Ok(p) => {
+                        eprintln!("ROM: {}", p.display());
+                        return true;
+                    }
+                    Err((_, text)) => self.error = Some(text),
+                }
+            }
+        }
         if let Some(path) = self.dropped.take() {
             match crate::rom_setup::use_rom_file(&path) {
                 Ok(p) => {
@@ -200,32 +226,37 @@ impl Screen {
                      containing one. Only the US version works.",
                 );
                 ui.add_space(12.0);
-                ui.label(
-                    egui::RichText::new("Drag the file onto this window.")
-                        .size(17.0)
-                        .strong(),
-                );
-                ui.add_space(8.0);
-                match &self.folder {
-                    Some(dir) => {
-                        ui.label("Or copy it into this folder and choose Check again:");
-                        ui.label(egui::RichText::new(dir.display().to_string()).monospace());
+                #[cfg(target_os = "android")]
+                self.ui_android(ui);
+                #[cfg(not(target_os = "android"))]
+                {
+                    ui.label(
+                        egui::RichText::new("Drag the file onto this window.")
+                            .size(17.0)
+                            .strong(),
+                    );
+                    ui.add_space(8.0);
+                    match &self.folder {
+                        Some(dir) => {
+                            ui.label("Or copy it into this folder and choose Check again:");
+                            ui.label(egui::RichText::new(dir.display().to_string()).monospace());
+                        }
+                        None => {
+                            ui.label(
+                                "Or copy it next to the Birdman64 program and choose Check again.",
+                            );
+                        }
                     }
-                    None => {
-                        ui.label(
-                            "Or copy it next to the Birdman64 program and choose Check again.",
-                        );
-                    }
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "(This system has no file chooser Birdman64 can open; installing \
+                             xdg-desktop-portal, zenity or kdialog brings it back.)",
+                        )
+                        .weak()
+                        .size(12.0),
+                    );
                 }
-                ui.add_space(8.0);
-                ui.label(
-                    egui::RichText::new(
-                        "(This system has no file chooser Birdman64 can open; installing \
-                         xdg-desktop-portal, zenity or kdialog brings it back.)",
-                    )
-                    .weak()
-                    .size(12.0),
-                );
                 if let Some(e) = &self.error {
                     ui.add_space(12.0);
                     ui.label(egui::RichText::new(e).color(egui::Color32::from_rgb(255, 140, 120)));
@@ -257,6 +288,7 @@ impl Screen {
                     }
                 });
                 ui.add_space(8.0);
+                #[cfg(not(target_os = "android"))]
                 ui.label(
                     egui::RichText::new("Enter = Check again, Esc = Quit")
                         .weak()
@@ -264,5 +296,45 @@ impl Screen {
                 );
             });
         });
+    }
+
+    /// Android body: the ROM comes from the system file picker (touch play
+    /// has no drag and drop, and the app folders aren't user-visible).
+    /// The pick is copied into the app's rom folder, so the pick survives.
+    #[cfg(target_os = "android")]
+    fn ui_android(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .add_sized(egui::vec2(240.0, 40.0), egui::Button::new("Choose a game file"))
+            .clicked()
+        {
+            // Non-blocking: the result lands in try_load via take_picked.
+            // Reopening (the button stays live) replaces the old picker.
+            crate::android::rom_picker::start_pick();
+            self.picking = true;
+        }
+        if self.picking {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("Waiting for the file picker…").weak(),
+            );
+        }
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(
+                "The file is copied into the app's storage, so the pick is \
+                 remembered.",
+            )
+            .weak()
+            .size(12.0),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(
+                "Or put a ROM into the app's rom/ folder (adb push) and \
+                 choose Check again.",
+            )
+            .weak()
+            .size(12.0),
+        );
     }
 }
