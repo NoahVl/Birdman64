@@ -33,6 +33,13 @@ fn range_free(base: usize, len: usize) -> bool {
         );
         p as usize == base
     }
+    // Darwin can't map below 4 GB at all (`__PAGEZERO`): the old windows are
+    // trivially unreserved.
+    #[cfg(target_vendor = "apple")]
+    {
+        let _ = (base, len);
+        true
+    }
 }
 
 #[test]

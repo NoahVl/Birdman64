@@ -17,8 +17,9 @@
 //!
 //! End-to-end unverified — see the "unverified" list in docs/notes/input.md.
 
-// Android: never started (btleplug's Android backend needs JNI setup).
-#![cfg_attr(target_os = "android", allow(dead_code))]
+// Android: never started (btleplug's Android backend needs JNI setup); iOS:
+// never started (btleplug would touch CoreBluetooth without a usage string).
+#![cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))]
 
 use btleplug::api::{
     Central, CentralEvent, Characteristic, Manager as _, Peripheral as _, ScanFilter,

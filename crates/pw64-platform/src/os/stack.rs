@@ -124,12 +124,19 @@ mod sys {
     pub const PAGE_GUARD: u32 = 0x100;
 }
 
-// macOS/arm64 can't map anything below 4 GB (`__PAGEZERO`): native-build.md §10.
-#[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
+// Darwin/arm64 can't map anything below 4 GB (`__PAGEZERO`): the stack window
+// is always relocated there (`reserve_region_at` / `reserve_region_anywhere`,
+// reloc builds only), never at `SEARCH_START`.
+#[cfg(not(any(
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_vendor = "apple"
+)))]
 compile_error!(
-    "pw64-platform: the OS core needs thread stacks at fixed addresses in \
-     0x80800000..0xA0000000 (below 4 GB, bit 31 set); implemented for Windows (VirtualAlloc) \
-     and Linux/Android (mmap MAP_FIXED_NOREPLACE) only — see docs/notes/native-build.md §10"
+    "pw64-platform: the OS core needs thread stacks in 0x80800000..0xA0000000 (or a \
+     relocated window); implemented for Windows (VirtualAlloc), Linux/Android (mmap \
+     MAP_FIXED_NOREPLACE) and Darwin (mmap hint) only — see docs/notes/native-build.md §10"
 );
 
 /// Windows: reserves (MEM_RESERVE, no commit) the whole stack window, so
@@ -188,7 +195,7 @@ pub fn reserve_region_at(base: usize) -> bool {
         ) as usize
             == base
     };
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
     let ok = linux_reserve(base, WINDOW_SIZE, crate::MAP_FIXED_NOREPLACE);
     if ok {
         BASE.store(base, Ordering::Relaxed);
@@ -197,10 +204,27 @@ pub fn reserve_region_at(base: usize) -> bool {
     ok
 }
 
-/// Linux: a PROT_NONE, uncommitted mapping of `[base, base + len)` (`flag`:
+/// Darwin: [`reserve_region_at`] with a kernel-chosen base, for when none of
+/// the fixed high candidates fits (iOS has only a few GB above 4 GB). Returns
+/// the base. Same contract otherwise (once, before the first stack).
+#[cfg(target_vendor = "apple")]
+pub fn reserve_region_anywhere() -> Option<usize> {
+    assert_eq!(
+        CURSOR.load(Ordering::Relaxed),
+        0,
+        "stack window relocated after a stack was created"
+    );
+    let base = crate::mmap_anywhere(WINDOW_SIZE, libc::PROT_NONE)?;
+    BASE.store(base, Ordering::Relaxed);
+    RESERVED.store(true, Ordering::Release);
+    Some(base)
+}
+
+/// Unix: a PROT_NONE, uncommitted mapping of `[base, base + len)` (`flag`:
 /// MAP_FIXED_NOREPLACE for a fresh reservation, MAP_FIXED to return a slot
-/// to it). True if it landed at `base`.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+/// to it). True if it landed at `base`. Darwin: the fresh flag is 0, a hint
+/// that is checked (and unmapped when the kernel put it elsewhere).
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 fn linux_reserve(base: usize, len: usize, flag: i32) -> bool {
     // SAFETY: anonymous mapping; NOREPLACE never clobbers (old kernels take
     // it as a hint, hence the check), MAP_FIXED only over our own reservation.
@@ -232,6 +256,18 @@ pub struct LowStack {
 
 impl LowStack {
     pub fn new() -> Self {
+        // Darwin can't map the default window (below 4 GB): unless the
+        // process relocated it (memmap, reloc mode), take a kernel-chosen
+        // one on first use. Makes the OS core's unit tests work on a Mac.
+        #[cfg(target_vendor = "apple")]
+        {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| {
+                if !RESERVED.load(Ordering::Acquire) {
+                    reserve_region_anywhere().expect("no address range for the stack window");
+                }
+            });
+        }
         loop {
             let off = CURSOR.fetch_add(SLOT_SIZE, Ordering::Relaxed);
             assert!(
@@ -334,8 +370,10 @@ fn set_teb_stack_limit(v: usize) {
     unsafe { core::arch::asm!("mov gs:[0x10], {}", in(reg) v, options(nostack)) };
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 fn map_fixed(slot: usize, in_reservation: bool) -> bool {
+    // Darwin: MAP_FIXED_NOREPLACE is 0 (a hint, checked below); MAP_FIXED
+    // only over our own reservation, where clobbering is the point.
     // MAP_FIXED_NOREPLACE (Linux 4.17+) fails with EEXIST instead of
     // clobbering an existing mapping; older kernels treat it as a hint, so
     // the address is checked too. Inside our own reservation
@@ -389,7 +427,7 @@ impl Drop for LowStack {
                 sys::VirtualFree(self.slot as *mut _, 0, sys::MEM_RELEASE);
             }
         }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
         if self.in_reservation {
             // Back to PROT_NONE: the window stays reserved.
             assert!(linux_reserve(self.slot, SLOT_SIZE, libc::MAP_FIXED));

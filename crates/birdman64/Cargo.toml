@@ -56,9 +56,14 @@ egui-wgpu.workspace = true
 resvg.workspace = true
 
 # First-run ROM picker (rom_setup.rs): native dialog, no winit/wgpu coupling.
-# No Android backend (src/android/rfd.rs stands in there).
-[target.'cfg(not(target_os = "android"))'.dependencies]
+# No Android or iOS backend (src/android/rfd.rs / src/ios/rfd.rs stand in there).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 rfd.workspace = true
+
+# iOS (paths.rs): the app's Documents folder via Foundation. That folder is
+# the data dir, the ROM scan root and what the Files app shows the player.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-foundation.workspace = true
 
 # Android (src/android.rs): winit's NativeActivity backend (android-activity,
 # re-exported as `winit::platform::android::activity`); libc (cfg(unix)

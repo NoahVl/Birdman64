@@ -67,6 +67,8 @@ png = "0.18"
 btleplug = "0.11"
 # block_on + notification streams for btleplug (no async runtime wanted here).
 futures = "0.3"
+# iOS app storage (crates/birdman64/src/paths.rs): the Documents folder.
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSPathUtilities"] }
 # GATT characteristic UUIDs (btleplug doesn't re-export its uuid).
 uuid = "1"
 cc = "1.2"

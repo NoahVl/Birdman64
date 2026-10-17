@@ -33,8 +33,9 @@ use winit::window::{Fullscreen, Icon, Window, WindowId};
 /// the 60 Hz VI path).
 pub(crate) type PendingRate = Arc<Mutex<Option<Option<os::vi::PresentRate>>>>;
 
-// Android: no input thread sends Toast / Pause (yet).
-#[cfg_attr(target_os = "android", allow(dead_code))]
+// Android/iOS: no input thread runs there (no gilrs backend), so no input
+// source sends Toast / Pause.
+#[cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))]
 enum UserEvent {
     /// New framebuffer work is in the slot.
     Frame,
@@ -67,7 +68,7 @@ pub fn notify_settings() {
 
 /// Called by the input thread for a controller toast (U7): shows `text`
 /// for 6 s in the window's bottom-left corner.
-#[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))]
 pub fn notify_toast(text: String) {
     if let Some(p) = PROXY.get() {
         let _ = p.send_event(UserEvent::Toast(text));
@@ -77,7 +78,7 @@ pub fn notify_toast(text: String) {
 /// Called by the input thread when the last controller disconnected (U26).
 /// Same route as [`notify_toast`]: the decision (the player's setting, a
 /// running game, no automation) is made on the window thread.
-#[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))]
 pub fn request_pause() {
     if let Some(p) = PROXY.get() {
         let _ = p.send_event(UserEvent::Pause);
@@ -1063,9 +1064,11 @@ impl App {
         // U14: a running.lock left by the previous run means that one never
         // got to a clean quit (crash, power loss): say so once, over the
         // first frames, before this run's marker is created below.
-        // Not on Android: there a process is normally ended by a kill (swiped
-        // away, memory, an update), so the marker is nearly always stale.
-        let stale_lock = !cfg!(target_os = "android") && paths::running_lock().is_file();
+        // Not on Android/iOS: there a process is normally ended by a kill
+        // (swiped away, memory, an update), so the marker is nearly always
+        // stale.
+        let stale_lock =
+            !cfg!(any(target_os = "android", target_os = "ios")) && paths::running_lock().is_file();
         let Some(g) = &self.gpu else { return };
         let (slot, proxy) = (self.slot.clone(), self.proxy.clone());
         let stop_proxy = self.proxy.clone();

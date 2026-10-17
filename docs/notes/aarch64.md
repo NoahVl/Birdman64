@@ -38,3 +38,14 @@ qemu-user, cross-built on x86_64 Linux. Not yet run on arm64 hardware or with a 
     as a success.
 
 - The arm64 thunks have no `bti c` landing pad: building the exe or module with `-mbranch-protection` (BTI) would make `br x16` fault; add the pad first if that is ever enabled.
+
+## Darwin (macOS/iOS)
+
+- Compile-checked only from Windows (`cargo clippy --target aarch64-apple-{darwin,ios,ios-sim}` works: zig compiles the C to Mach-O, no SDK needed for check). Never run yet: the macOS CI job is the first real test.
+- `pw64_reloc` is forced on for every apple target (build.rs); `PW64_RELOC` other than `on` is refused (`Reloc::parse`): no low windows (`__PAGEZERO` = low 4 GB), no memfd, so off/alias/strict can't exist.
+- Darwin has no `MAP_FIXED_NOREPLACE` and `MAP_FIXED` clobbers: `pw64_platform::MAP_FIXED_NOREPLACE` is 0 there, so every "fresh reservation" is an mmap hint plus the existing `address == hint` check. Re-mapping a slot inside our own reservation still uses `MAP_FIXED`.
+- iOS has only a few GB above 4 GB: when the fixed RDRAM/stack candidates (0x7_2000_0000+) fail, `pw64_platform::mmap_anywhere` takes a kernel-chosen block (64 KB aligned by over-reserving and trimming). The vaddr layer needs only host > 4 GB, no particular base.
+- `LowStack::new` on apple lazily relocates the window (kernel-chosen) if memmap didn't, so the OS-core unit tests run on a Mac without init.
+- Exe image range = Mach-O load-command walk from `_mh_execute_header` (`os/crash_apple.rs::image_extent`, skips `__PAGEZERO`/`__LINKEDIT`); the crash tracer there is a no-op.
+- pw64-cbuild: `Os::{MacArm64, Ios, IosSim}` (`aarch64-apple-macos11`, `-ios15`, `-ios15-simulator`, + `-mno-outline-atomics`); `Os::from_target_abi` picks the simulator by `CARGO_CFG_TARGET_ABI=sim`. The first-run module (`build_module`, `dylib` feature) refuses apple until T10 (Mach-O shim thunks).
+- Still to verify on a Mac: the layout diff vs aarch64 Linux (only `va_list` may differ), `cargo test --workspace`, and that `_mh_execute_header` resolves in test binaries.

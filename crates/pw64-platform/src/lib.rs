@@ -34,6 +34,54 @@ pub mod vaddr;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub const MAP_FIXED_NOREPLACE: core::ffi::c_int = 0x10_0000;
 
+/// Darwin has no `MAP_FIXED_NOREPLACE`, and its `MAP_FIXED` silently
+/// replaces existing mappings, so a fresh reservation is a plain hint (0
+/// flag) that every caller checks (`address == hint`, else munmap and fail).
+/// Re-mapping a slot of our own reservation still uses `MAP_FIXED`.
+#[cfg(target_vendor = "apple")]
+pub const MAP_FIXED_NOREPLACE: core::ffi::c_int = 0;
+
+/// Darwin: maps `len` bytes of fresh anonymous memory at an address the
+/// kernel picks, 64 KB aligned (the stack window base must be), above 4 GB
+/// (always true on arm64: the low 4 GB is `__PAGEZERO`; checked anyway).
+/// Fallback for when the fixed high candidates don't fit the process's
+/// address space (iOS without the extended-VA entitlement has only a few
+/// GB above 4 GB). The vaddr layer accepts any host base above 4 GB, so the
+/// block needs no particular address. Over-reserves 64 KB and trims.
+#[cfg(target_vendor = "apple")]
+pub fn mmap_anywhere(len: usize, prot: core::ffi::c_int) -> Option<usize> {
+    const ALIGN: usize = 0x1_0000;
+    // SAFETY: fresh anonymous mapping; the kernel picks the address, failure
+    // is checked, and only parts of that mapping are unmapped again.
+    unsafe {
+        let p = libc::mmap(
+            core::ptr::null_mut(),
+            len + ALIGN,
+            prot,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        );
+        if p == libc::MAP_FAILED {
+            return None;
+        }
+        let start = p as usize;
+        let at = start.next_multiple_of(ALIGN);
+        if at > start {
+            libc::munmap(p, at - start);
+        }
+        let tail = start + len + ALIGN - (at + len);
+        if tail > 0 {
+            libc::munmap((at + len) as *mut libc::c_void, tail);
+        }
+        if at >> 32 == 0 {
+            libc::munmap(at as *mut libc::c_void, len);
+            return None;
+        }
+        Some(at)
+    }
+}
+
 /// Logs the first call of a placeholder implementation (once per name).
 pub(crate) fn first_call(name: &'static str) {
     use std::collections::HashSet;

@@ -10,7 +10,7 @@
 //! The picker call is gated behind [`is_interactive`], so tests never open one.
 
 use crate::config;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::rfd;
 use pw64_platform::pi;
 use std::path::{Path, PathBuf};
@@ -170,10 +170,11 @@ fn pick_and_remember(stale_rom: bool) -> anyhow::Result<Option<PathBuf>> {
     if std::env::var_os("PW64_NO_FILE_DIALOG").is_some() {
         return Ok(None);
     }
-    // Android: the welcome box and the picker below are log-only rfd
-    // stand-ins (android/rfd.rs) — invisible. The ROM screen's SAF picker
-    // (android/rom_picker.rs) does this job, so send it there at once.
-    if cfg!(target_os = "android") {
+    // Android/iOS: the welcome box and the picker below are log-only rfd
+    // stand-ins (android/rfd.rs, ios/rfd.rs) — invisible. The ROM screen
+    // handles the choice (Android: the SAF picker; iOS: the Documents-folder
+    // scan), so send it there at once.
+    if cfg!(any(target_os = "android", target_os = "ios")) {
         return Ok(None);
     }
     if !welcome_to_birdman64(stale_rom) {
@@ -306,13 +307,16 @@ fn no_rom_chosen() -> ! {
 }
 
 /// What the file dialog gave.
-#[cfg_attr(target_os = "android", allow(dead_code))] // no dialog there yet
+#[cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))] // no dialog there yet
 enum Pick {
     File(PathBuf),
     Cancel,
     /// No dialog could be shown at all (Linux without the portal, zenity or
     /// kdialog).
-    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "android", target_os = "ios")),
+        allow(dead_code)
+    )]
     NoDialog,
 }
 
@@ -323,16 +327,16 @@ fn pick_rom(title: &str) -> Pick {
     // NativeActivity can't deliver before a window exists — it is offered
     // from the ROM screen instead (android/rom_picker.rs), which this
     // "no dialog" return leads to.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let _ = title;
         Pick::NoDialog
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pick_rom_dialog(title)
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn pick_rom_dialog(title: &str) -> Pick {
     // rfd: the native dialog (Linux: the xdg desktop portal, then zenity on
     // a portal error). `None` is either a cancel (portal or zenity) or no
