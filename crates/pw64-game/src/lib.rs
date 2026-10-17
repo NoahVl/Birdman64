@@ -52,6 +52,30 @@ unsafe extern "C" {
     /// native/src/pw64_split.c: 1 = player 2's controller isn't connected
     /// (the main menu shows a hint).
     static mut pw64_split_hint: i32;
+    /// native/src/pw64_visibility.c: most detailed model LOD, 0 = off.
+    static mut pw64_infinite_lod: i32;
+    /// native/src/pw64_visibility.c: whole-island view distance, 0 = off.
+    static mut pw64_infinite_view_distance: i32;
+}
+
+/// Infinite LOD (models always at their most detailed level) and infinite
+/// view distance (far plane covering the whole island, no distance haze)
+/// for the C side (pw64_visibility.c). Call before `bootproc`, on the
+/// thread that runs the game.
+pub fn set_visibility(infinite_lod: bool, infinite_view_distance: bool) {
+    // SAFETY: plain C globals; the game (the only reader) runs on this
+    // thread and hasn't started yet.
+    #[cfg(feature = "static")]
+    unsafe {
+        pw64_infinite_lod = infinite_lod as i32;
+        pw64_infinite_view_distance = infinite_view_distance as i32;
+    }
+    // SAFETY: same globals, exported by the loaded game module.
+    #[cfg(feature = "dylib")]
+    unsafe {
+        *dylib::game().infinite_lod = infinite_lod as i32;
+        *dylib::game().infinite_view_distance = infinite_view_distance as i32;
+    }
 }
 
 /// Hor+ widescreen for the C side: widens the CPU culling frustum of the

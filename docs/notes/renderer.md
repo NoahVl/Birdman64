@@ -572,6 +572,24 @@ identity tests (`interp_identity`, `render_identity`, all existing placement ass
   MSAA 4; fill off 16:9 + 4:3 control. No bars/stale rows in world views at any aspect; HUD at the true
   edges, nothing clipped; fades stretch full height; photos/album unchanged; fill off = the old look.
 
+## Infinite LOD / view distance (`PW64_INFINITE_LOD`, `PW64_INFINITE_VIEW_DISTANCE`)
+- C side only (`native/src/pw64_visibility.c`); both off = the ROM's code paths.
+- **LOD:** `uvDobjGetLODIndex`/`uvSobjGetLODIndex` return 0. Past the last LOD radius a model is
+  culled (0xFF) unless view distance is on, so LOD alone doesn't widen the view. Texture mips stay.
+- **Far plane:** the game's world far is `camera->clipFar` = 2000. `uvChan_80204FE4` swaps the
+  channel's far for one reaching every terrain-bbox corner from the camera (+ `unk24` + 1000)
+  for the draw only and puts the game's back after, so game-logic checks (`uvChan_80204EC0`)
+  keep 2000. Setting it once in `uvChan_80204C94` instead made it grow every frame.
+- **Sea + haze:** the sea is a camera-following UVEN model clipped by that far plane; at 2000 its
+  edge sits well below eye level and `env_802E0CF0`'s fog-coloured band hides it. Removing the
+  band left a hard sea edge and the sea painted over the lower sky; the band now uses the
+  extended far (so it sits at the new horizon), which also keeps the 0.996 fog-factor two-pass
+  terrain split. From ~600 m the far sea now covers what used to be sky: expected.
+- **Budgets** (`pw64_native.h`): worst measured (split, both on, a:rb:1 hovering at 670 m and
+  spinning): 25045 commands, 1247 matrices (over the split-screen 0x400), 73 sort entries.
+- **Cost** (CPU per retrace, same flight, p95): off 0.74 ms, LOD 0.73, distance 4.8, both 9.1;
+  split + both ≈ 16 ms (DL interpretation 2.4 ms/task avg).
+
 ## OLED care (`RenderOptions::oled`)
 - `Oled { brightness: f32, drift: [f32; 2] }`, default (1.0, [0, 0]) =
   output-bit-identical (×1.0 in the shader, [0,0] shift, `u.lod[1] = 0`).
@@ -590,6 +608,9 @@ identity tests (`interp_identity`, `render_identity`, all existing placement ass
   `stretch_y`/`vanchor`; `interp_identity`/`render_identity` unchanged.
 
 ## Texture packs (`PW64_TEX_PACKS=<dir>`, `crates/birdman64/src/packs.rs`)
+- Which pack runs: `PW64_TEX_PACKS=<dir>` wins; else `[graphics] texture_pack` names a folder of the data dir's
+  `packs/` (the settings screen's "Texture pack" row picks it, "Open texture packs folder" creates/opens that
+  folder). A config change needs a restart — the index is built once at startup.
 - Key-named files: `<dir>/<16-hex-key>.png` (any case) — the keys are the F3D TMEM content hashes `PW64_DUMP_TEX`
   writes (FNV-1a of format, size, covered TMEM bytes + TLUT per bound tile, "Textures" above). Any PNG colour
   type (expanded to RGBA8), ≤ 8192 per side (renderer also drops mips past the device limit); UVs are normalized.

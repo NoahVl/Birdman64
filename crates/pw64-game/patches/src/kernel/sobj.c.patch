@@ -1,0 +1,18 @@
+--- a/src/kernel/sobj.c
++++ b/src/kernel/sobj.c
+@@ -86,8 +86,15 @@ u8 uvSobjGetLODIndex(ParsedUVMD* uvmd, f32 dist) {
+     lodRadius = uvmd->lodRadius;
+     lodCount = uvmd->lodCount;
+     if (lodRadius[lodCount - 1] <= dist) {
++        // PW64: as uvDobjGetLODIndex (dobj.c.patch)
++        if (pw64_infinite_view_distance) {
++            return pw64_infinite_lod ? 0 : lodCount - 1;
++        }
+         return 0xFF;
+     }
++    if (pw64_infinite_lod) {
++        return 0;
++    }
+ 
+     for (i = lodCount; i > 0; i--) {
+         if (lodRadius[i - 1] < dist) {

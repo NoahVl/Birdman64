@@ -122,6 +122,8 @@ enum Row {
     Resume,
     /// Main: open the Graphics page.
     Graphics,
+    /// Main: open the Performance overlay page.
+    PerfPage,
     /// Graphics: stage the built-in defaults and apply the live ones.
     ResetGraphics,
     /// Open the Controls page (Main page).
@@ -132,6 +134,9 @@ enum Row {
     Back,
     /// Main: open the save/data folder in the file manager (U15).
     OpenSaveFolder,
+    /// Graphics: open (creating if missing) the texture packs folder in the
+    /// file manager — where the Texture pack row's choices come from.
+    OpenPacksFolder,
     /// Main: quit the game (two confirms, U3).
     Quit,
     /// Graphics: the restart banner's "Restart now" row (U16). Only on the
@@ -160,16 +165,32 @@ enum Page {
     Graphics,
     Controls,
     Split,
+    /// The performance overlay (`perf.rs`): what it shows and where.
+    Perf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Opt {
+    /// Performance overlay page: frame time, graph, 1% lows, CPU, GPU, corner
+    /// (all live; `perf::set_cfg` from `apply_live`).
+    PerfFrametime,
+    PerfGraph,
+    PerfLows,
+    PerfCpu,
+    PerfGpu,
+    PerfCorner,
     Msaa,
     Scale,
     Filter,
     TexFilter,
+    /// Texture pack (`[graphics] texture_pack`): the pack folder the game
+    /// replaces decoded textures from (`packs.rs`). Restart-only, exactly
+    /// like Fill screen. Overridden by `PW64_TEX_PACKS` (disabled row).
+    TexturePack,
     Widescreen,
     FillScreen,
+    InfiniteLod,
+    InfiniteViewDistance,
     Fps,
     Vsync,
     DisplayMode,
@@ -245,10 +266,21 @@ const P2_ASSIGN_CONFIRM: Duration = Duration::from_secs(4);
 /// centres it at the real one.
 const FADE_FOLLOW: Duration = Duration::from_millis(500);
 
-/// The navigation footer (U1, weak 13 pt). The pad letters are the U6
-/// family names of South / East once that lands; until then the literal
-/// A / B.
-const FOOTER: &str = "Up/Down: Select   Left/Right: Change   Enter / A: Confirm   Esc / B: Back";
+/// Menu actions use physical positions independently of game rebinding.
+/// Nintendo's south/east buttons are B/A, the reverse of Xbox's A/B.
+fn navigation_footer(family: Option<input::PadFamily>) -> String {
+    let (confirm, back) = match family {
+        Some(input::PadFamily::Generic) => ("South button", "East button"),
+        Some(family) => (
+            input::button_name(Button::South, family),
+            input::button_name(Button::East, family),
+        ),
+        None => return "Up/Down: Select   Left/Right: Change   Enter: Confirm   Esc: Back".into(),
+    };
+    format!(
+        "Up/Down: Select   Left/Right: Change   Enter / {confirm}: Confirm   Esc / {back}: Back"
+    )
+}
 
 /// A binding capture in progress (`Overlay::capture`): which kind + slot
 /// row is being captured, the slot's name (bind target), and when it
@@ -271,10 +303,16 @@ struct P2Capture {
 /// Restart-only options as the running game uses them (env > config >
 /// default; captured once, they can't change until a restart). Frame rate
 /// and V-Sync are live (in `Gpu`), so they are not here any more.
+#[derive(Clone)]
 struct Running {
     msaa: u32,
     widescreen: Option<f32>,
     fill_screen: bool,
+    /// The config's texture pack name (None = off); what a restart runs
+    /// with unless `PW64_TEX_PACKS` overrides it (`opts::texture_pack_env`).
+    texture_pack: Option<String>,
+    infinite_lod: bool,
+    infinite_view_distance: bool,
 }
 
 /// The S8b keep-resolution countdown: what to go back to when an applied
@@ -304,14 +342,23 @@ pub struct Overlay {
     widescreen_sel: usize,
     /// Staged fill screen (restart-only, like widescreen).
     fill_screen: bool,
+    /// Texture pack choices — Off first, then the pack folders in the data
+    /// dir's `packs/` (`packs::list_packs`, read once at creation) — and the
+    /// staged index. Restart-only, exactly like fill screen.
+    pack_choices: Vec<Option<String>>,
+    texture_pack_sel: usize,
+    /// Staged infinite LOD / view distance (restart-only, read before boot).
+    infinite_lod: bool,
+    infinite_view_distance: bool,
     /// S8: the staged widescreen is the monitor default from "Reset to
     /// defaults": saving removes the key (the file follows the display)
     /// instead of pinning a value. Cleared by any Widescreen row change.
     widescreen_follow: bool,
-    /// S7: the restart-only values (MSAA, widescreen aspect, fill screen)
-    /// this session last saved; `open` stages these instead of the running
-    /// ones while that restart is pending.
-    saved_restart: Option<(u32, Option<f32>, bool)>,
+    /// S7: the restart-only values (MSAA, widescreen aspect, fill screen,
+    /// texture pack, infinite LOD / view distance) this session last saved;
+    /// `open` stages these instead of the running ones while that restart is
+    /// pending.
+    saved_restart: Option<Running>,
     fps: Vec<opts::Fps>,
     fps_sel: usize,
     vsync: bool,
@@ -350,8 +397,11 @@ pub struct Overlay {
     /// OLED care (O3, live): the HUD drifts and dims by these.
     oled_drift: bool,
     oled_brightness: f32,
-    /// U25 (live): the window title shows the frame rate.
+    /// U25 (live): the performance overlay's FPS counter (and the frame rate
+    /// in the window title).
     show_fps: bool,
+    /// The overlay's extras (live); `fps` mirrors `show_fps` in `perf_cfg`.
+    perf: crate::perf::Cfg,
     /// U26 (live): pause when the window loses focus / the last pad
     /// disconnects (Main page row).
     pause_background: bool,
@@ -439,13 +489,20 @@ impl Overlay {
             msaa: opts::msaa(),
             widescreen: opts::widescreen(),
             fill_screen: opts::fill_screen(),
+            texture_pack: crate::config::get().graphics.texture_pack.clone(),
+            infinite_lod: opts::infinite_lod(),
+            infinite_view_distance: opts::infinite_view_distance(),
         };
         let staged_fill = running.fill_screen;
+        let staged_lod = running.infinite_lod;
+        let staged_distance = running.infinite_view_distance;
         // Staged lists up front so the overlay is consistent before open()
         // (open re-stages from the live values; `staged_settings` reads
         // these in tests).
         let (widescreen, widescreen_sel) = widescreen_choices(running.widescreen);
         let (fps, fps_sel) = fps_choices(opts::Fps::Monitor);
+        // The Texture pack row: Off first, then the packs folder's folders.
+        let (pack_choices, texture_pack_sel) = pack_choices(&running.texture_pack);
         // The Player-2 controller row: the configured routing (the live one
         // while split-screen runs) and the connected pads.
         let saved_p2 = input::p2_current();
@@ -461,6 +518,10 @@ impl Overlay {
             widescreen,
             widescreen_sel,
             fill_screen: staged_fill,
+            pack_choices,
+            texture_pack_sel,
+            infinite_lod: staged_lod,
+            infinite_view_distance: staged_distance,
             widescreen_follow: false,
             saved_restart: None,
             split: input::split_wanted(),
@@ -490,6 +551,7 @@ impl Overlay {
             oled_drift: opts::oled_drift(),
             oled_brightness: opts::oled_brightness(),
             show_fps: opts::show_fps(),
+            perf: crate::perf::cfg(),
             pause_background: opts::pause_in_background(),
             ble: crate::ble::is_on(),
             saved_toast: None,
@@ -544,6 +606,7 @@ impl Overlay {
         self.oled_brightness = gpu.oled_brightness;
         // U25/U26 live rows stage from the window too.
         self.show_fps = gpu.show_fps;
+        self.perf = crate::perf::cfg();
         self.pause_background = gpu.pause_background;
         // BLE pads (live): the switch as it stands.
         self.ble = crate::ble::is_on();
@@ -639,21 +702,25 @@ impl Overlay {
         }
     }
 
-    /// S7: stages the restart-only rows (MSAA, widescreen, fill screen)
+    /// S7: stages the restart-only rows (MSAA, widescreen, fill screen, ...)
     /// from what this session last saved (that restart is still pending),
     /// else from the running values, so a saved change can be undone before
     /// the restart. The banner and "(restart)" marks keep comparing against
     /// `running`. Split-screen (live) stages the game's state, or a switch
     /// still waiting for a menu (the main menu's item may have changed it).
     fn stage_restart_rows(&mut self) {
-        let (msaa, widescreen, fill) = self.saved_restart.unwrap_or((
-            self.running.msaa,
-            self.running.widescreen,
-            self.running.fill_screen,
-        ));
-        self.msaa = msaa;
-        (self.widescreen, self.widescreen_sel) = widescreen_choices(widescreen);
-        self.fill_screen = fill;
+        let saved = self
+            .saved_restart
+            .clone()
+            .unwrap_or_else(|| self.running.clone());
+        self.msaa = saved.msaa;
+        (self.widescreen, self.widescreen_sel) = widescreen_choices(saved.widescreen);
+        self.fill_screen = saved.fill_screen;
+        // Re-read the packs folder on every open: the player opens it from
+        // here, drops a pack in and comes back to pick it.
+        (self.pack_choices, self.texture_pack_sel) = pack_choices(&saved.texture_pack);
+        self.infinite_lod = saved.infinite_lod;
+        self.infinite_view_distance = saved.infinite_view_distance;
         self.split = input::split_wanted();
         self.widescreen_follow = false;
         // The Player-2 controller row stages the routing as it stands: the
@@ -674,11 +741,14 @@ impl Overlay {
             match config::save_settings(changed_since(staged, &self.snapshot)) {
                 Ok(()) => {
                     // S7: the next open stages these, not the running ones.
-                    self.saved_restart = Some((
-                        self.msaa,
-                        choice_aspect(&self.widescreen[self.widescreen_sel]),
-                        self.fill_screen,
-                    ));
+                    self.saved_restart = Some(Running {
+                        msaa: self.msaa,
+                        widescreen: choice_aspect(&self.widescreen[self.widescreen_sel]),
+                        fill_screen: self.fill_screen,
+                        texture_pack: self.pack_choices[self.texture_pack_sel].clone(),
+                        infinite_lod: self.infinite_lod,
+                        infinite_view_distance: self.infinite_view_distance,
+                    });
                     let pending = self.pending_restart();
                     if !pending.is_empty() {
                         self.saved_toast = Some(format!(
@@ -1112,6 +1182,7 @@ impl Overlay {
         gpu.oled_brightness = self.oled_brightness;
         // U25/U26: live rows the window reads itself.
         gpu.show_fps = self.show_fps;
+        crate::perf::set_cfg(self.perf_cfg());
         gpu.pause_background = self.pause_background;
         // Frame rate and V-Sync are live: the window recomputes the present
         // rate + mode (`present_dirty` → `App::apply_present`).
@@ -1119,6 +1190,15 @@ impl Overlay {
             gpu.fps = self.fps[self.fps_sel];
             gpu.vsync = self.vsync;
             gpu.present_dirty = true;
+        }
+    }
+
+    /// The staged overlay options as `perf` reads them (the counter is the
+    /// separate `show_fps` row).
+    fn perf_cfg(&self) -> crate::perf::Cfg {
+        crate::perf::Cfg {
+            fps: self.show_fps,
+            ..self.perf
         }
     }
 
@@ -1136,6 +1216,7 @@ impl Overlay {
             Page::Controls => "Controls",
             Page::Graphics => "Display & graphics",
             Page::Split => "Split-screen",
+            Page::Perf => "Performance overlay",
         };
         // The wide Controls page (U9): with room for both, the binding list
         // scrolls on the left and the controller drawing sits fixed on the
@@ -1215,6 +1296,7 @@ impl Overlay {
                     Row::Controls,
                     Row::SplitScreen,
                     Row::Graphics,
+                    Row::PerfPage,
                     Row::Opt(Opt::Volume),
                     // U26: pause when the window goes to the background.
                     Row::Opt(Opt::PauseBackground),
@@ -1237,12 +1319,15 @@ impl Overlay {
                     Row::Opt(Opt::FillScreen),
                     Row::Opt(Opt::Fps),
                     Row::Opt(Opt::Vsync),
-                    // U25: the frame rate in the window title.
-                    Row::Opt(Opt::ShowFps),
                     Row::Opt(Opt::Scale),
                     Row::Opt(Opt::Filter),
                     Row::Opt(Opt::TexFilter),
+                    // Restart-only, exactly like Fill screen.
+                    Row::Opt(Opt::TexturePack),
+                    Row::OpenPacksFolder,
                     Row::Opt(Opt::Msaa),
+                    Row::Opt(Opt::InfiniteLod),
+                    Row::Opt(Opt::InfiniteViewDistance),
                     // OLED care (O3): live, no restart.
                     Row::Opt(Opt::OledDrift),
                     Row::Opt(Opt::OledBrightness),
@@ -1292,6 +1377,18 @@ impl Overlay {
                 Row::Opt(Opt::ShareScores),
                 Row::Back,
             ],
+            // Performance overlay: the counter first (the simple case), then
+            // the opt-in extras.
+            Page::Perf => vec![
+                Row::Opt(Opt::ShowFps),
+                Row::Opt(Opt::PerfFrametime),
+                Row::Opt(Opt::PerfLows),
+                Row::Opt(Opt::PerfGraph),
+                Row::Opt(Opt::PerfCpu),
+                Row::Opt(Opt::PerfGpu),
+                Row::Opt(Opt::PerfCorner),
+                Row::Back,
+            ],
         }
     }
 
@@ -1336,6 +1433,7 @@ impl Overlay {
                 }
                 self.text_row(ui, at(Row::SplitScreen), "Split-screen \u{203a}");
                 self.text_row(ui, at(Row::Graphics), "Display & graphics \u{203a}");
+                self.text_row(ui, at(Row::PerfPage), "Performance overlay \u{203a}");
                 self.opt_row(ui, at(Row::Opt(Opt::Volume)), Opt::Volume);
                 self.opt_row(ui, at(Row::Opt(Opt::PauseBackground)), Opt::PauseBackground);
                 self.text_row(ui, at(Row::OpenSaveFolder), "Open save folder");
@@ -1359,7 +1457,7 @@ impl Overlay {
                     ui.colored_label(
                         egui::Color32::YELLOW,
                         format!(
-                            "Keep this resolution? A = keep, reverting in {} s",
+                            "Keep this resolution? Confirm to keep, reverting in {} s",
                             ms.div_ceil(1000)
                         ),
                     );
@@ -1391,11 +1489,21 @@ impl Overlay {
                     Opt::FillScreen,
                     Opt::Fps,
                     Opt::Vsync,
-                    Opt::ShowFps,
                     Opt::Scale,
                     Opt::Filter,
                     Opt::TexFilter,
+                    Opt::TexturePack,
+                ] {
+                    self.opt_row(ui, at(Row::Opt(o)), o);
+                }
+                // Where the Texture pack row's folders live (created when
+                // missing on confirm), like "Open save folder" on Main.
+                // Drawn in `rows` order: right under the Texture pack row.
+                self.text_row(ui, at(Row::OpenPacksFolder), "Open texture packs folder");
+                for o in [
                     Opt::Msaa,
+                    Opt::InfiniteLod,
+                    Opt::InfiniteViewDistance,
                     Opt::OledDrift,
                     Opt::OledBrightness,
                 ] {
@@ -1491,6 +1599,15 @@ impl Overlay {
                 ui.add_space(4.0);
                 self.text_row(ui, at(Row::Back), "\u{2039} Back");
             }
+            Page::Perf => {
+                for row in self.rows() {
+                    if let Row::Opt(o) = row {
+                        self.opt_row(ui, at(row), o);
+                    }
+                }
+                ui.add_space(4.0);
+                self.text_row(ui, at(Row::Back), "\u{2039} Back");
+            }
         }
         // U5: one weak, wrapped help line for the selected row, above the
         // footer.
@@ -1498,7 +1615,10 @@ impl Overlay {
         ui.weak(egui::RichText::new(help(rows[self.sel])).size(14.0));
         // Footer (U1): how to navigate, then the version line.
         ui.add_space(6.0);
-        ui.weak(egui::RichText::new(FOOTER).size(13.0));
+        ui.weak(
+            egui::RichText::new(navigation_footer(input::active_pad().map(|p| p.family)))
+                .size(13.0),
+        );
         ui.weak(egui::RichText::new(crate::version_line()).small());
         // Consume the follow only once the fade-in is done (FADE_FOLLOW):
         // while it runs the scroll re-applies at the growing panel's real
@@ -1523,7 +1643,10 @@ impl Overlay {
             // Pilot collisions only matter in split-screen: same greying.
             || (o == Opt::Collisions && !self.split)
             || (o == Opt::ShareScores && !self.split)
-            || (o == Opt::SplitLayout && !self.split);
+            || (o == Opt::SplitLayout && !self.split)
+            // Set by the PW64_TEX_PACKS env var: the config choice has no
+            // effect until it is unset (like Frame rate under V-Sync).
+            || (o == Opt::TexturePack && opts::texture_pack_env());
         if disabled {
             let (name, value, hint) = self.row_text(o);
             let text = format!("{name}: {value}  {hint}");
@@ -1697,6 +1820,18 @@ impl Overlay {
                 },
                 "",
             ),
+            // The env override wins and can't be changed here (row disabled,
+            // like Frame rate under V-Sync).
+            Opt::TexturePack if opts::texture_pack_env() => {
+                ("Texture pack", "Set by PW64_TEX_PACKS".into(), "")
+            }
+            Opt::TexturePack => (
+                "Texture pack",
+                self.pack_choices[self.texture_pack_sel]
+                    .clone()
+                    .unwrap_or_else(|| "Off".into()),
+                "",
+            ),
             Opt::Widescreen => {
                 let staged = &self.widescreen[self.widescreen_sel];
                 (
@@ -1709,6 +1844,21 @@ impl Overlay {
                 "Fill screen",
                 if self.fill_screen { "On" } else { "Off" }.into(),
                 restart(self.fill_screen != self.running.fill_screen),
+            ),
+            Opt::InfiniteLod => (
+                "Infinite LOD",
+                if self.infinite_lod { "On" } else { "Off" }.into(),
+                restart(self.infinite_lod != self.running.infinite_lod),
+            ),
+            Opt::InfiniteViewDistance => (
+                "Infinite view distance",
+                if self.infinite_view_distance {
+                    "On"
+                } else {
+                    "Off"
+                }
+                .into(),
+                restart(self.infinite_view_distance != self.running.infinite_view_distance),
             ),
             Opt::Fps if self.vsync => ("Frame rate", "Set by V-Sync".into(), ""),
             Opt::Fps => {
@@ -1760,10 +1910,16 @@ impl Overlay {
                 "",
             ),
             Opt::ShowFps => (
-                "Show FPS",
+                "FPS counter",
                 if self.show_fps { "On" } else { "Off" }.into(),
                 "",
             ),
+            Opt::PerfFrametime => ("Frame time", on_off(self.perf.frametime), ""),
+            Opt::PerfLows => ("1% lows", on_off(self.perf.lows), ""),
+            Opt::PerfGraph => ("Frame-time graph", on_off(self.perf.graph), ""),
+            Opt::PerfCpu => ("CPU core load", on_off(self.perf.cpu), ""),
+            Opt::PerfGpu => ("GPU load", on_off(self.perf.gpu), ""),
+            Opt::PerfCorner => ("Position", self.perf.corner.label().into(), ""),
             Opt::PauseBackground => (
                 "Pause when in the background",
                 if self.pause_background { "On" } else { "Off" }.into(),
@@ -1821,6 +1977,15 @@ impl Overlay {
         if self.fill_screen != self.running.fill_screen {
             out.push("Fill screen");
         }
+        if self.pack_choices[self.texture_pack_sel] != self.running.texture_pack {
+            out.push("Texture pack");
+        }
+        if self.infinite_lod != self.running.infinite_lod {
+            out.push("Infinite LOD");
+        }
+        if self.infinite_view_distance != self.running.infinite_view_distance {
+            out.push("Infinite view distance");
+        }
         // Live rows staged but not confirmed yet: Save writes them, so a
         // restart applies them.
         if self.display_mode_choice() != self.running_mode {
@@ -1855,6 +2020,28 @@ impl Overlay {
                 "Fill screen",
                 if self.fill_screen { "On" } else { "Off" }.into(),
                 self.fill_screen != self.running.fill_screen,
+            ),
+            Opt::TexturePack => (
+                "Texture pack",
+                self.pack_choices[self.texture_pack_sel]
+                    .clone()
+                    .unwrap_or_else(|| "Off".into()),
+                self.pack_choices[self.texture_pack_sel] != self.running.texture_pack,
+            ),
+            Opt::InfiniteLod => (
+                "Infinite LOD",
+                if self.infinite_lod { "On" } else { "Off" }.into(),
+                self.infinite_lod != self.running.infinite_lod,
+            ),
+            Opt::InfiniteViewDistance => (
+                "Infinite view distance",
+                if self.infinite_view_distance {
+                    "On"
+                } else {
+                    "Off"
+                }
+                .into(),
+                self.infinite_view_distance != self.running.infinite_view_distance,
             ),
             _ => return None,
         };
@@ -1921,8 +2108,18 @@ impl Overlay {
             Row::Controls => self.enter_page(Page::Controls, Row::Controls),
             Row::SplitScreen => self.enter_page(Page::Split, Row::SplitScreen),
             Row::Graphics => self.enter_page(Page::Graphics, Row::Graphics),
+            Row::PerfPage => self.enter_page(Page::Perf, Row::PerfPage),
             // U15: the save/data folder in the OS file manager.
             Row::OpenSaveFolder => crate::paths::open_in_file_manager(crate::paths::data_dir()),
+            // The texture packs folder: created when missing (the Texture
+            // pack row's choices come from it), then opened like above.
+            Row::OpenPacksFolder => {
+                let dir = crate::paths::packs_dir();
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    eprintln!("[settings] could not create {}: {e}", dir.display());
+                }
+                crate::paths::open_in_file_manager(&dir);
+            }
             // U16: the restart banner's row: save, spawn, quit.
             Row::RestartNow => self.restart_now(),
             // Quit (U3): the first confirm arms "Press again to quit" for
@@ -2044,6 +2241,18 @@ impl Overlay {
                 }
                 Opt::Vsync => self.vsync = !self.vsync,
                 Opt::FillScreen => self.fill_screen = !self.fill_screen,
+                // Restart-only, like Fill screen; left/right and confirm
+                // both cycle with wrap. Set by PW64_TEX_PACKS: disabled.
+                Opt::TexturePack if opts::texture_pack_env() => {}
+                Opt::TexturePack => {
+                    let n = self.pack_choices.len() as i32;
+                    self.texture_pack_sel =
+                        (self.texture_pack_sel as i32 + d).rem_euclid(n) as usize;
+                }
+                Opt::InfiniteLod => self.infinite_lod = !self.infinite_lod,
+                Opt::InfiniteViewDistance => {
+                    self.infinite_view_distance = !self.infinite_view_distance
+                }
                 // The Player-2 controller row is disabled while the staged
                 // Split value is off (greyed, like Frame rate under V-Sync).
                 Opt::P2Input if !self.split => {}
@@ -2093,6 +2302,12 @@ impl Overlay {
                 }
                 Opt::OledDrift => self.oled_drift = !self.oled_drift,
                 Opt::ShowFps => self.show_fps = !self.show_fps,
+                Opt::PerfFrametime => self.perf.frametime = !self.perf.frametime,
+                Opt::PerfLows => self.perf.lows = !self.perf.lows,
+                Opt::PerfGraph => self.perf.graph = !self.perf.graph,
+                Opt::PerfCpu => self.perf.cpu = !self.perf.cpu,
+                Opt::PerfGpu => self.perf.gpu = !self.perf.gpu,
+                Opt::PerfCorner => self.perf.corner = self.perf.corner.step(d),
                 Opt::PauseBackground => self.pause_background = !self.pause_background,
                 // Set by an env var, or no controller input at all: the row
                 // is disabled and shows why (`ble_status_lines`).
@@ -2122,9 +2337,11 @@ impl Overlay {
             | Row::OpenSaveFolder
             | Row::TouchLayout
             | Row::TouchHidden
+            | Row::OpenPacksFolder
             | Row::RestartNow => {}
             // Neither do Resume / the page-open rows / Reset to defaults.
-            Row::Resume | Row::Graphics | Row::SplitScreen | Row::ResetGraphics => {}
+            Row::Resume | Row::Graphics | Row::PerfPage | Row::SplitScreen | Row::ResetGraphics => {
+            }
         }
     }
 
@@ -2134,12 +2351,17 @@ impl Overlay {
     /// widescreen, fill screen) become pending as usual.
     fn reset_graphics(&mut self) {
         self.msaa = 1;
+        self.infinite_lod = false;
+        self.infinite_view_distance = false;
         // S8: the D3 default is the monitor's aspect (Off on a 4:3 one);
         // saved by removing the key, so the file keeps following the display.
         let widescreen = opts::widescreen_default();
         self.widescreen_sel = select_aspect(&mut self.widescreen, widescreen);
         self.widescreen_follow = true;
         self.fill_screen = opts::fill_default(widescreen);
+        // The texture pack default is Off (row 0; the choices list starts
+        // with it).
+        self.texture_pack_sel = 0;
         let fps_default = if opts::low_end() {
             opts::Fps::Hz(60)
         } else {
@@ -2155,8 +2377,6 @@ impl Overlay {
         // OLED care (O3): the built-in defaults.
         self.oled_drift = false;
         self.oled_brightness = 1.0;
-        // U25: the built-in default (plain title).
-        self.show_fps = false;
         // Display mode Window (the built-in default): applying it leaves an
         // exclusive fullscreen, so the resolution goes back to the desktop
         // choice too (staged; applying it would start the keep-it countdown).
@@ -2202,8 +2422,13 @@ impl Overlay {
                 self.fill_screen,
                 choice_aspect(&self.widescreen[self.widescreen_sel]),
             )),
+            // Off (None) removes the key, a pack name writes it
+            // (`config::apply`'s `Some(None)` sentinel).
+            texture_pack: Some(self.pack_choices[self.texture_pack_sel].clone()),
             fps: Some(self.fps[self.fps_sel].to_config()),
             vsync: Some(self.vsync),
+            infinite_lod: Some(self.infinite_lod),
+            infinite_view_distance: Some(self.infinite_view_distance),
             display_mode: Some(self.display_mode_choice().as_str()),
             fullscreen_resolution: Some(self.res_choice().map(|r| r.to_config())),
             volume: Some(self.volume as f32 / 1000.0),
@@ -2211,6 +2436,7 @@ impl Overlay {
             oled_brightness: Some(self.oled_brightness),
             // U25/U26: the live rows the window keeps (`apply_live`).
             show_fps: Some(self.show_fps),
+            perf: Some(self.perf),
             pause_in_background: Some(self.pause_background),
             // BLE pads (live). An env-set value can't change here, so it is
             // never saved (`changed_since`).
@@ -2523,6 +2749,32 @@ fn p2_select(choices: &[P2Choice], pads: &[String], saved: &input::P2Input) -> u
     choices.iter().position(|c| c.input == *saved).unwrap_or(0)
 }
 
+fn on_off(v: bool) -> String {
+    if v { "On" } else { "Off" }.into()
+}
+
+/// Texture pack choices — Off, then the pack folders in the data dir's
+/// `packs/` folder (`packs::list_packs`, read once at creation) — and the
+/// index of the running one. A configured pack that isn't in the folder
+/// (moved away, renamed) keeps its row, so cycling doesn't lose it (like a
+/// saved-but-unconnected pad).
+fn pack_choices(running: &Option<String>) -> (Vec<Option<String>>, usize) {
+    let mut list: Vec<Option<String>> = vec![None];
+    list.extend(
+        crate::packs::list_packs(&crate::paths::packs_dir())
+            .into_iter()
+            .map(Some),
+    );
+    let sel = match list.iter().position(|c| c.as_deref() == running.as_deref()) {
+        Some(i) => i,
+        None => {
+            list.push(running.clone());
+            list.len() - 1
+        }
+    };
+    (list, sel)
+}
+
 /// The D2 auto-save update: only the fields that differ from the snapshot
 /// taken at open (None = leave the key as-is), so values the player never
 /// touched (env-var overrides, the low-end preset, hand-edited keys) are not
@@ -2541,13 +2793,17 @@ fn changed_since(s: config::SavedSettings, snap: &config::SavedSettings) -> conf
         widescreen: keep(s.widescreen, &snap.widescreen),
         fps: keep(s.fps, &snap.fps),
         vsync: keep(s.vsync, &snap.vsync),
+        infinite_lod: keep(s.infinite_lod, &snap.infinite_lod),
+        infinite_view_distance: keep(s.infinite_view_distance, &snap.infinite_view_distance),
         fill_screen: if fill_changed { s.fill_screen } else { None },
+        texture_pack: keep(s.texture_pack, &snap.texture_pack),
         display_mode: keep(s.display_mode, &snap.display_mode),
         fullscreen_resolution: keep(s.fullscreen_resolution, &snap.fullscreen_resolution),
         volume: keep(s.volume, &snap.volume),
         oled_drift: keep(s.oled_drift, &snap.oled_drift),
         oled_brightness: keep(s.oled_brightness, &snap.oled_brightness),
         show_fps: keep(s.show_fps, &snap.show_fps),
+        perf: keep(s.perf, &snap.perf),
         pause_in_background: keep(s.pause_in_background, &snap.pause_in_background),
         ble: keep(s.ble, &snap.ble),
         splitscreen_enabled: keep(s.splitscreen_enabled, &snap.splitscreen_enabled),
@@ -2708,6 +2964,14 @@ fn help(row: Row) -> &'static str {
                 "Draws flights to the screen edges instead of with the original black bars. \
                  Needs a restart."
             }
+            Opt::InfiniteLod => {
+                "Draws every model at full detail, however far away. Off = original look. \
+                 Needs a restart."
+            }
+            Opt::InfiniteViewDistance => {
+                "Lets you see the whole island instead of the haze about 2 km out. Can lower \
+                 the frame rate, more so with split-screen. Needs a restart."
+            }
             Opt::Fps => {
                 "How smoothly the game runs. Match display is best; pick 60 if the game \
                  stutters."
@@ -2722,6 +2986,10 @@ fn help(row: Row) -> &'static str {
                 "Smooth is the modern look; N64 original copies the console's texture \
                  filtering."
             }
+            Opt::TexturePack => {
+                "Replaces the game's textures with a pack you put in the texture packs \
+                 folder. Needs a restart."
+            }
             Opt::Msaa => {
                 "Smooths jagged edges. 4\u{d7} is a good choice; 8\u{d7} needs a strong \
                  graphics card. Needs a restart."
@@ -2735,7 +3003,24 @@ fn help(row: Row) -> &'static str {
                 "Dims the flight HUD so an OLED screen wears less. Full brightness is the \
                  original look."
             }
-            Opt::ShowFps => "Shows the frame rate in the window title.",
+            Opt::ShowFps => "A small frame-rate counter in the corner of the screen.",
+            Opt::PerfFrametime => "Adds how long the last frame took, in milliseconds.",
+            Opt::PerfLows => {
+                "Adds the 1% low: the frame rate of the slowest frames. Low numbers mean \
+                 stutter even when the average looks fine."
+            }
+            Opt::PerfGraph => {
+                "A tiny graph of recent frame times. Spikes are stutters; green is smooth."
+            }
+            Opt::PerfCpu => {
+                "How busy the game's busiest thread keeps one processor core. Near 100% means \
+                 the processor is the limit, however many cores you have."
+            }
+            Opt::PerfGpu => {
+                "An estimate of how busy your graphics card is. At 100% the graphics card \
+                 is the limit."
+            }
+            Opt::PerfCorner => "Which corner of the screen the overlay sits in.",
             Opt::PauseBackground => {
                 "Pauses the game when you switch to another window or your last controller \
                  disconnects."
@@ -2769,6 +3054,7 @@ fn help(row: Row) -> &'static str {
         }
         Row::Resume => "Back to the game.",
         Row::Graphics => "Fullscreen, widescreen, frame rate and picture quality.",
+        Row::PerfPage => "A frame-rate counter with optional graph, CPU and GPU load.",
         Row::ResetGraphics => "Puts every option on this page back to its default.",
         Row::Controls => "See and change keyboard and controller buttons.",
         Row::SplitScreen => "Two players on one screen: player 2's controller, layout and rules.",
@@ -2777,6 +3063,10 @@ fn help(row: Row) -> &'static str {
         Row::OpenSaveFolder => {
             "Your save (pw64.eep), settings and crash reports. Copy pw64.eep to back up \
              your progress."
+        }
+        Row::OpenPacksFolder => {
+            "The folder texture packs live in: one folder per pack. Opened here after \
+             dropping one in, pick it on the Texture pack row."
         }
         Row::RestartNow => "Saves your changes and starts Birdman64 again so they take effect.",
         Row::TouchLayout => "Drag the on-screen buttons and stick to where your thumbs want them.",
@@ -3187,6 +3477,84 @@ mod tests {
         assert_eq!(rows[i_w + 1], Row::Opt(Opt::FillScreen));
     }
 
+    #[test]
+    fn visibility_options_toggle_independently_and_request_restart() {
+        let mut o = Overlay::new();
+        o.page = Page::Graphics;
+        for label in ["Infinite LOD", "Infinite view distance"] {
+            let index = o
+                .rows()
+                .iter()
+                .position(|row| match row {
+                    Row::Opt(opt) => o.row_text(*opt).0 == label,
+                    _ => false,
+                })
+                .expect("visibility option must be in the graphics menu");
+            o.sel = index;
+            o.confirm();
+            // Toggling creates a restart-banner row, so locate the option
+            // again instead of relying on its previous navigation index.
+            let opt = o
+                .rows()
+                .into_iter()
+                .find_map(|row| match row {
+                    Row::Opt(opt) if o.row_text(opt).0 == label => Some(opt),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(o.row_text(opt).1, "On");
+            assert!(o.pending_restart().contains(&label));
+        }
+        assert_eq!(
+            o.pending_restart(),
+            vec!["Infinite LOD", "Infinite view distance"]
+        );
+        o.reset_graphics();
+        assert!(!o.pending_restart().contains(&"Infinite LOD"));
+        assert!(!o.pending_restart().contains(&"Infinite view distance"));
+    }
+
+    #[test]
+    fn visibility_changes_are_saved_and_restaged_before_restart() {
+        let mut o = Overlay::new();
+        let snapshot = o.staged_settings();
+        o.infinite_lod = true;
+        let changes = changed_since(o.staged_settings(), &snapshot);
+        assert_eq!(changes.infinite_lod, Some(true));
+        assert_eq!(changes.infinite_view_distance, None);
+        o.saved_restart = Some(Running {
+            infinite_lod: true,
+            infinite_view_distance: true,
+            ..o.running.clone()
+        });
+        o.stage_restart_rows();
+        assert!(o.infinite_lod);
+        assert!(o.infinite_view_distance);
+        assert_eq!(
+            o.pending_restart(),
+            vec!["Infinite LOD", "Infinite view distance"]
+        );
+        o.infinite_lod = false;
+        o.infinite_view_distance = false;
+        assert!(o.pending_restart().is_empty());
+    }
+
+    #[test]
+    fn graphics_navigation_names_match_physical_controller_buttons() {
+        use input::PadFamily::*;
+        assert!(navigation_footer(Some(Xbox)).contains("Enter / A: Confirm   Esc / B: Back"));
+        assert!(navigation_footer(Some(Nintendo)).contains("Enter / B: Confirm   Esc / A: Back"));
+        assert!(
+            navigation_footer(Some(PlayStation))
+                .contains("Enter / Cross: Confirm   Esc / Circle: Back")
+        );
+        assert!(navigation_footer(Some(Generic)).contains("South button: Confirm"));
+        assert_eq!(
+            navigation_footer(None),
+            "Up/Down: Select   Left/Right: Change   Enter: Confirm   Esc: Back"
+        );
+    }
+
     /// D2 auto-save writes only what changed since open; a widescreen
     /// change also writes fill screen (its saved form depends on it).
     #[test]
@@ -3226,6 +3594,9 @@ mod tests {
             fps: Some("60".into()),
             vsync: Some(true),
             fill_screen: Some(Some(true)),
+            texture_pack: Some(Some("hd".into())),
+            infinite_lod: Some(true),
+            infinite_view_distance: Some(true),
             display_mode: Some("exclusive"),
             fullscreen_resolution: Some(Some("640x480".into())),
             volume: Some(0.35),
@@ -3239,6 +3610,12 @@ mod tests {
             splitscreen_collisions: Some(true),
             splitscreen_share: Some(true),
             split_layout: Some("left_right"),
+            perf: Some(crate::perf::Cfg {
+                graph: true,
+                cpu: true,
+                corner: crate::perf::Corner::BottomLeft,
+                ..Default::default()
+            }),
             keyboard: Some(
                 [("A".to_string(), "KeyX".to_string())]
                     .into_iter()
@@ -3260,6 +3637,9 @@ mod tests {
             fps: Some("monitor".into()),
             vsync: Some(false),
             fill_screen: Some(None),
+            texture_pack: Some(None),
+            infinite_lod: Some(false),
+            infinite_view_distance: Some(false),
             display_mode: Some("windowed"),
             fullscreen_resolution: Some(None),
             volume: Some(1.0),
@@ -3273,6 +3653,7 @@ mod tests {
             splitscreen_collisions: Some(false),
             splitscreen_share: Some(false),
             split_layout: Some("top_bottom"),
+            perf: Some(crate::perf::Cfg::default()),
             keyboard: Some(std::collections::BTreeMap::new()),
             gamepad: Some(std::collections::BTreeMap::new()),
         };
@@ -3281,7 +3662,7 @@ mod tests {
             "[graphics]\nmsaa = 4\nscale = 2.0\nscale_filter = \"nearest\"\nfilter = \"n64\"\n\
              widescreen = \"16:9\"\nfps = 60\nvsync = true\nfill_screen = true\n\
              display_mode = \"exclusive\"\nfullscreen_resolution = \"640x480\"\nvolume = 0.35\n\
-             show_fps = true\n\
+             texture_pack = \"hd\"\nshow_fps = true\n\
              \n[oled]\ndrift = true\nbrightness = 0.7\n\
              \n[ui]\npause_in_background = false\n\
              \n[input.keyboard]\nA = \"KeyX\"\n\n[input.gamepad]\nA = \"East\"\n\
@@ -3301,6 +3682,7 @@ mod tests {
             "fps",
             "vsync",
             "fill_screen",
+            "texture_pack",
             "display_mode",
             "fullscreen_resolution",
             "volume",
@@ -3363,36 +3745,51 @@ mod tests {
         // Main: Resume, the three sub-pages, Volume, the background-pause
         // row, Open save folder, Quit (U2, U3, U15, U26).
         let rows = o.rows();
-        assert_eq!(rows.len(), 8);
+        assert_eq!(rows.len(), 9);
         assert_eq!(rows[0], Row::Resume);
         assert_eq!(rows[1], Row::Controls);
         assert_eq!(rows[2], Row::SplitScreen);
         assert_eq!(rows[3], Row::Graphics);
-        assert_eq!(rows[4], Row::Opt(Opt::Volume));
-        assert_eq!(rows[5], Row::Opt(Opt::PauseBackground));
-        assert_eq!(rows[6], Row::OpenSaveFolder);
-        assert_eq!(rows[7], Row::Quit);
+        assert_eq!(rows[4], Row::PerfPage);
+        assert_eq!(rows[5], Row::Opt(Opt::Volume));
+        assert_eq!(rows[6], Row::Opt(Opt::PauseBackground));
+        assert_eq!(rows[7], Row::OpenSaveFolder);
+        assert_eq!(rows[8], Row::Quit);
+        // The performance overlay page: the counter, the opt-in extras, Back.
+        o.sel = 4;
+        o.confirm();
+        assert_eq!(o.page, Page::Perf);
+        let rows = o.rows();
+        assert_eq!(rows.len(), 8);
+        assert_eq!(rows[0], Row::Opt(Opt::ShowFps));
+        assert_eq!(rows[6], Row::Opt(Opt::PerfCorner));
+        assert_eq!(rows[7], Row::Back);
+        o.back();
+        assert_eq!(o.rows()[o.sel], Row::PerfPage);
         // Confirm on Display & graphics opens the Graphics page: the
-        // eleven graphics options (incl. Show FPS, U25), the two OLED care
-        // rows, Reset to defaults, and Back (no restart-pending change yet,
-        // so no banner row, U16).
+        // ten graphics options, the texture-pack rows (pack + folder), the two
+        // OLED care rows, Reset to defaults, and Back (no restart-pending
+        // change yet, so no banner row, U16).
         o.sel = 3;
         o.confirm();
         assert_eq!(o.page, Page::Graphics);
         let rows = o.rows();
-        assert_eq!(rows.len(), 15);
+        assert_eq!(rows.len(), 18);
         assert_eq!(rows[0], Row::Opt(Opt::DisplayMode));
-        assert_eq!(rows[6], Row::Opt(Opt::ShowFps));
-        assert_eq!(rows[10], Row::Opt(Opt::Msaa));
-        assert_eq!(rows[11], Row::Opt(Opt::OledDrift));
-        assert_eq!(rows[12], Row::Opt(Opt::OledBrightness));
-        assert_eq!(rows[13], Row::ResetGraphics);
-        assert_eq!(rows[14], Row::Back);
+        assert_eq!(rows[9], Row::Opt(Opt::TexturePack));
+        assert_eq!(rows[10], Row::OpenPacksFolder);
+        assert_eq!(rows[11], Row::Opt(Opt::Msaa));
+        assert_eq!(rows[12], Row::Opt(Opt::InfiniteLod));
+        assert_eq!(rows[13], Row::Opt(Opt::InfiniteViewDistance));
+        assert_eq!(rows[14], Row::Opt(Opt::OledDrift));
+        assert_eq!(rows[15], Row::Opt(Opt::OledBrightness));
+        assert_eq!(rows[16], Row::ResetGraphics);
+        assert_eq!(rows[17], Row::Back);
         // Stage a restart-only change: the banner's "Restart now" row (U16)
         // appears first, right under the banner.
         o.msaa = 4;
         let rows = o.rows();
-        assert_eq!(rows.len(), 16);
+        assert_eq!(rows.len(), 19);
         assert_eq!(rows[0], Row::RestartNow);
         // Back (B / Escape / the Back row) returns to Main, selection on
         // the row that opened it.
@@ -3982,6 +4379,7 @@ mod tests {
     /// stays open.
     #[test]
     fn restart_now_failure_keeps_the_banner() {
+        let _g = DATA_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut o = Overlay::new();
         o.page = Page::Graphics;
         o.msaa = 4;
@@ -4013,12 +4411,113 @@ mod tests {
             o.running.widescreen
         );
         assert_eq!(o.fill_screen, o.running.fill_screen);
-        o.saved_restart = Some((8, Some(21.0 / 9.0), true));
+        o.saved_restart = Some(Running {
+            msaa: 8,
+            widescreen: Some(21.0 / 9.0),
+            fill_screen: true,
+            texture_pack: Some("hd".into()),
+            infinite_lod: false,
+            infinite_view_distance: false,
+        });
         o.stage_restart_rows();
         assert_eq!(o.msaa, 8);
         assert_eq!(o.widescreen[o.widescreen_sel].as_deref(), Some("21:9"));
         assert!(o.fill_screen);
         assert!(!o.widescreen_follow);
+        // The saved pack keeps its row even when the folder is gone
+        // (`pack_choices` appends it), Off stays row 0.
+        assert_eq!(o.pack_choices[o.texture_pack_sel].as_deref(), Some("hd"));
+        o.saved_restart = Some(Running {
+            msaa: 8,
+            widescreen: Some(21.0 / 9.0),
+            fill_screen: true,
+            texture_pack: None,
+            infinite_lod: false,
+            infinite_view_distance: false,
+        });
+        o.stage_restart_rows();
+        assert_eq!(o.texture_pack_sel, 0);
+    }
+
+    /// The texture-pack row: Off first, cycles wrap, a staged change is
+    /// restart-pending, and Reset stages Off.
+    #[test]
+    fn texture_pack_row_cycles_and_resets() {
+        let mut o = Overlay::new();
+        // Nothing configured: Off, row 0 (the folder's packs may follow).
+        assert_eq!(o.pack_choices[0], None);
+        assert_eq!(o.texture_pack_sel, 0);
+        // Off first, then the pack folders; a configured-but-missing pack
+        // keeps its own row (appended).
+        let (choices, sel) = pack_choices(&Some("hd".into()));
+        assert_eq!(choices, vec![None, Some("hd".into())]);
+        assert_eq!(sel, 1);
+        // Cycling wraps in both directions (select the row first: change
+        // steps the selected row).
+        o.page = Page::Graphics;
+        o.sel = o
+            .rows()
+            .iter()
+            .position(|r| *r == Row::Opt(Opt::TexturePack))
+            .unwrap();
+        o.pack_choices = vec![None, Some("a".into()), Some("b".into())];
+        // Re-derive the row index before every change: a staged value that
+        // differs from the running one shows the restart banner, whose row
+        // shifts the page.
+        let sel_row = |o: &Overlay| {
+            o.rows()
+                .iter()
+                .position(|r| *r == Row::Opt(Opt::TexturePack))
+                .unwrap()
+        };
+        o.texture_pack_sel = 2;
+        o.sel = sel_row(&o);
+        o.change(1, false);
+        assert_eq!(o.texture_pack_sel, 0);
+        o.sel = sel_row(&o);
+        o.change(-1, false);
+        assert_eq!(o.texture_pack_sel, 2);
+        // A staged change is restart-pending (the banner names it).
+        o.sel = sel_row(&o);
+        o.change(1, false); // back to Off (still nothing pending)
+        o.sel = sel_row(&o);
+        o.change(1, false); // "a" differs from the running Off
+        assert_eq!(o.pending_restart(), vec!["Texture pack"]);
+        // Reset stages Off again.
+        o.reset_graphics();
+        assert_eq!(o.texture_pack_sel, 0);
+        assert_eq!(o.staged_settings().texture_pack, Some(None));
+    }
+
+    /// The auto-save writes `[graphics] texture_pack` only when the staged
+    /// pack changed (Off stages `Some(None)`, so the key is removed).
+    #[test]
+    fn auto_save_writes_and_removes_texture_pack() {
+        let snap = config::SavedSettings {
+            texture_pack: Some(Some("hd".into())),
+            ..Default::default()
+        };
+        // Unchanged pack → nothing written (not pinned).
+        let d = changed_since(snap.clone(), &snap);
+        assert_eq!(d.texture_pack, None);
+        // A different pack → written.
+        let d = changed_since(
+            config::SavedSettings {
+                texture_pack: Some(Some("red".into())),
+                ..snap.clone()
+            },
+            &snap,
+        );
+        assert_eq!(d.texture_pack, Some(Some("red".into())));
+        // Off → the key is removed.
+        let d = changed_since(
+            config::SavedSettings {
+                texture_pack: Some(None),
+                ..snap.clone()
+            },
+            &snap,
+        );
+        assert_eq!(d.texture_pack, Some(None));
     }
 
     /// S8: Reset stages the monitor-default widescreen and saves it by

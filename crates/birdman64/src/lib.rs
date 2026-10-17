@@ -30,6 +30,7 @@ mod packs;
 mod pad_art;
 mod pad_sprites;
 mod paths;
+mod perf;
 // rfd has no Android backend: a log-only stand-in with the same API
 // (dialogs need JNI there; TODO with the SAF ROM picker).
 #[cfg(target_os = "android")]
@@ -450,6 +451,7 @@ pub fn run_game(
     audio::install(); // audio tasks → pw64-audio HLE, AI → cpal (audio.rs)
     pw64_game::set_widescreen_aspect(opts::widescreen().unwrap_or(0.0));
     pw64_game::set_fill_screen(opts::fill_screen());
+    pw64_game::set_visibility(opts::infinite_lod(), opts::infinite_view_distance());
     // Split-screen spike: with it on the game draws a second camera on
     // kernel channel 1 (splitscreen.md).
     pw64_game::set_split(u8::from(input::splitscreen_enabled()));

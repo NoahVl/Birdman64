@@ -53,6 +53,10 @@ pub struct Game {
     pub split_req: *mut i32,
     /// `pw64_split_hint` (pw64_split.c): 1 = player 2 has no controller.
     pub split_hint: *mut i32,
+    /// `pw64_infinite_lod` (pw64_visibility.c): 0 = off.
+    pub infinite_lod: *mut i32,
+    /// `pw64_infinite_view_distance` (pw64_visibility.c): 0 = off.
+    pub infinite_view_distance: *mut i32,
     /// `D_802B892C` (memory.c): the sample global memmap checks.
     pub sample_global: *const u32,
     /// `[start, end)` of the module image.
@@ -180,6 +184,8 @@ fn bind_module(h: *mut c_void, path: &Path) -> Result<(), String> {
             split_share: sym(c"pw64_split_share")?.cast(),
             split_req: sym(c"pw64_split_req")?.cast(),
             split_hint: sym(c"pw64_split_hint")?.cast(),
+            infinite_lod: sym(c"pw64_infinite_lod")?.cast(),
+            infinite_view_distance: sym(c"pw64_infinite_view_distance")?.cast(),
             sample_global: sym(c"D_802B892C")?.cast(),
             range,
         };
@@ -335,6 +341,14 @@ mod tests {
         use pw64_platform::os;
         crate::memmap::map_rdram_window();
         super::load(std::path::Path::new(&path)).unwrap();
+        crate::set_visibility(true, true);
+        // SAFETY: load verified both writable exported globals; boot has
+        // not started, so no game code can concurrently read them.
+        unsafe {
+            assert_eq!(*super::game().infinite_lod, 1);
+            assert_eq!(*super::game().infinite_view_distance, 1);
+        }
+        crate::set_visibility(false, false);
         eprintln!("{}", crate::memmap::check_low_4gb());
         os::boot(super::bootproc, core::ptr::null_mut());
         let err = std::panic::catch_unwind(|| {

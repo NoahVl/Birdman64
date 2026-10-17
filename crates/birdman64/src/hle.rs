@@ -336,11 +336,12 @@ impl Hle {
         if std::env::var_os("PW64_DUMP_DL").is_some() {
             interp.trace = Some(String::new());
         }
-        // `PW64_TEX_PACKS=<dir>`: replace textures by content key
-        // (`packs.rs`). `PW64_DUMP_TEX`: dump every texture the interpreter
-        // decodes (bind_tile -> replacer, once per key) as it will be drawn,
-        // i.e. the pack's replacement where it has one.
-        let packs = crate::packs::TexPacks::from_env();
+        // Texture packs (`packs.rs`): `PW64_TEX_PACKS=<dir>` or the config's
+        // `[graphics] texture_pack` name. `PW64_DUMP_TEX`: dump every
+        // texture the interpreter decodes (bind_tile -> replacer, once per
+        // key) as it will be drawn, i.e. the pack's replacement where it
+        // has one.
+        let packs = crate::packs::TexPacks::load();
         let dumping_tex = std::env::var_os("PW64_DUMP_TEX").is_some();
         if dumping_tex || packs.any() {
             interp.textures.replacer = Some(Box::new(move |key, img| {

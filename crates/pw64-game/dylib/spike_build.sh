@@ -85,12 +85,12 @@ echo "patch: $((t1 - t0)) s, compile: $((t2 - t1)) s, $(ls "$OUT"/obj/*.$EXT | w
 
 # 4. Link at the fixed base (0xB0000000: between the coroutine stacks, which
 #    end at 0xA0000000, and the exe at 0xC0000000).
-EXPORTS=(bootproc pw64_widescreen_aspect pw64_fill_screen pw64_split pw64_split_collide pw64_split_layout pw64_split_share pw64_split_req pw64_split_hint D_802B892C pw64_vmap)
+EXPORTS=(bootproc pw64_widescreen_aspect pw64_fill_screen pw64_split pw64_split_collide pw64_split_layout pw64_split_share pw64_split_req pw64_split_hint pw64_infinite_lod pw64_infinite_view_distance D_802B892C pw64_vmap)
 if [ $WIN = 1 ]; then
   # /FIXED: no relocations, so LoadLibrary fails instead of relocating when
   # the range is taken (the exe checks the base too). /NOENTRY: no CRT init.
   # (dash spelling: Git Bash would rewrite /FLAG arguments as paths)
-  "$ZIG" lld-link -nologo -dll -noentry -nodefaultlib -machine:x64 -Brepro     -base:0xB0000000 -fixed -dynamicbase:no -highentropyva:no -opt:ref -opt:icf     -export:bootproc -export:pw64_widescreen_aspect,DATA -export:pw64_fill_screen,DATA -export:pw64_split,DATA -export:pw64_split_collide,DATA -export:pw64_split_layout,DATA -export:pw64_split_share,DATA -export:pw64_split_req,DATA -export:pw64_split_hint,DATA -export:D_802B892C,DATA -export:pw64_vmap,DATA     -out:"$OUT/pw64game.dll" -map:"$OUT/pw64game.map" "$OUT"/obj/*.obj
+  "$ZIG" lld-link -nologo -dll -noentry -nodefaultlib -machine:x64 -Brepro     -base:0xB0000000 -fixed -dynamicbase:no -highentropyva:no -opt:ref -opt:icf     -export:bootproc -export:pw64_widescreen_aspect,DATA -export:pw64_fill_screen,DATA -export:pw64_split,DATA -export:pw64_split_collide,DATA -export:pw64_split_layout,DATA -export:pw64_split_share,DATA -export:pw64_split_req,DATA -export:pw64_split_hint,DATA -export:pw64_infinite_lod,DATA -export:pw64_infinite_view_distance,DATA -export:D_802B892C,DATA -export:pw64_vmap,DATA     -out:"$OUT/pw64game.dll" -map:"$OUT/pw64game.map" "$OUT"/obj/*.obj
   MOD=$OUT/pw64game.dll
 else
   { echo "{ global: pw64_dll_bind; pw64_dll_abi; pw64_dll_range;"; for e in "${EXPORTS[@]}"; do echo " $e;"; done; echo " local: *; };"; } > "$OUT/exports.ver"

@@ -149,7 +149,10 @@ button printed B is the N64 A):
   linear or nearest filter
 - The N64's 3-point texture filter (set the filter to `n64`, see
   `PW64_FILTER` below)
-- Texture packs (PNG files, keyed by content hash)
+- Texture packs: PNG folders keyed by texture content hash, in your data
+  dir's `packs` folder — pick one under Settings > Display & graphics >
+  "Texture pack" (a restart applies it) or open the folder from the game
+  with "Open texture packs folder"
 - Optional V-Sync style pacing to remove judder
 - OLED care: the HUD drifts and the screen dims a little to spread wear
 - Gamepads (including Switch 2 controllers over Bluetooth, experimental)
@@ -186,7 +189,8 @@ picks up where the last one stopped.
 **Settings screen:** press F10, Esc (or pad Select) to pause the game and
 change options. Changes are saved when you close the screen; volume and
 most graphics options apply immediately, a few (MSAA, widescreen, fill
-screen) are marked "(restart)" and need the game restarted to apply. Reset
+screen, infinite LOD, infinite view distance) are marked "(restart)" and need
+the game restarted to apply. Reset
 rows restore the defaults.
 
 `pw64.toml` example (all keys optional, the same options exist as
@@ -205,6 +209,8 @@ display_mode = "windowed"  # "windowed", "borderless" or "exclusive"
 fullscreen_resolution = "1920x1080@60" # exclusive video mode WxH[@Hz]
 linux_window = "auto"      # Linux: "auto", "wayland" or "x11"
 show_fps = false           # frame rate in the window title
+infinite_lod = false       # models at full detail at any distance (restart)
+infinite_view_distance = false # see the whole island (restart; costs frame time)
 no_audio = true            # no audio output device
 volume = 0.8               # 0.0..1.0
 
@@ -272,6 +278,8 @@ when both are set:
 | `PW64_FILTER=<bilinear\|n64>` | texture filter (the N64 look is `n64`) |
 | `PW64_WIDESCREEN=<1\|w:h\|0>` | widescreen aspect; the default is your monitor's aspect when it is wider than 4:3 (up to 21:9) |
 | `PW64_FILL_SCREEN=<0\|1>` | no letterbox bars around world views (default: follows widescreen) |
+| `PW64_INFINITE_LOD=<0\|1>` | models at full detail at any distance (restart) |
+| `PW64_INFINITE_VIEW_DISTANCE=<0\|1>` | see the whole island instead of fading out after ~2 km (restart) |
 | `PW64_FPS=<monitor\|N\|0>` | frame rate (uncapped with 0) |
 | `PW64_VSYNC=<0\|1>` | display-paced pacing (V-Sync) |
 | `PW64_DISPLAY_MODE=<windowed\|borderless\|exclusive>` | window, borderless fullscreen or exclusive fullscreen |
@@ -282,7 +290,7 @@ when both are set:
 | `PW64_ROM=<path>` | which ROM file to use |
 | `PW64_DATA_DIR=<path>` | folder for saves and settings |
 | `PW64_EEP=<path>` | exact save file to use instead of `pw64.eep` |
-| `PW64_TEX_PACKS=<dir>` | replace textures from a PNG pack |
+| `PW64_TEX_PACKS=<dir>` | replace textures from a PNG pack (overrides the in-game "Texture pack" setting) |
 | `PW64_NO_AUDIO=1` | run without an audio device |
 
 The developer variables live in [Developing](#developing).
@@ -453,7 +461,7 @@ environment variables):
 | `PW64_FALLBACK_ADAPTER` | force the fallback graphics adapter |
 | `PW64_CAPTURE_DL=<n[,..]>` | capture real display lists (bench input) |
 | `PW64_BENCH_CAPTURE=<file>` | replay a capture in the interpreter bench |
-| `PW64_DUMP_TEX=1` | write texture-pack keys as PNGs |
+| `PW64_DUMP_TEX=1` | write texture-pack keys as PNGs (a pack is a folder of these `<key>.png` files, named exactly as they are dumped; higher resolutions work) |
 | `PW64_AUDIO_VIRTUAL=1` | silent virtual audio device for stats |
 | `PW64_DUMP_AUDIO=<file>` | dump the audio stream to a WAV |
 | `PW64_AUDIO_STATS` | periodic audio counters and the Acmd histogram at exit |

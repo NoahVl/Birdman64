@@ -264,8 +264,22 @@ int pw64_p2_pilot_env(void);
  * glyphs + 0xFFE + -1 into out[max]; returns the glyph count. */
 int pw64_text_encode(const char* ascii, short* out, int max);
 int pw64_text_encode_style(const char* ascii, short* out, int max, int bold);
-/* World display-list buffer length (kernel/graphics.c.patch): two world
- * passes per frame with split-screen on nearly double the command count. */
-#define PW64_DL_LEN 16384
+/* Per-frame draw budgets, raised from the ROM's (4200 commands, 0x15E
+ * matrices, 0x1E look-ats, 100 + 60 sort entries) for split-screen (two
+ * world passes) and infinite view distance (every model on the island).
+ * Measured worst case, both on, split-screen rocket belt hovering high over
+ * an island (PW64_START=a:rb:1): 25045 commands,
+ * 1247 matrices, 0 look-ats (0x60 kept), 73 + 16 sort entries. Display
+ * list: kernel/graphics.c.patch; matrices: uv_graphics.h.patch (indices are
+ * s16); sort lists: chan.c.patch. */
+#define PW64_DL_LEN 65536
+#define PW64_MATRIX_LEN 4096
+#define PW64_SORT_LEN 512
+#define PW64_SORT_DOBJ_LEN 128
+/* Infinite LOD / infinite view distance (native/src/pw64_visibility.c),
+ * set before boot by pw64_game::set_visibility. */
+extern int pw64_infinite_lod;
+extern int pw64_infinite_view_distance;
+float pw64_visibility_far(const void* chan, float far);
 
 #endif
