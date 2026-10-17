@@ -171,6 +171,8 @@ button printed B is the N64 A):
 - Gamepads (including Switch 2 controllers over Bluetooth, experimental)
 - An in-game settings screen (F10, Esc or pad Select) that rebinds every
   key and button and saves to `pw64.toml`
+- An "Unlock everything" cheat on the settings screen: gold medals on every
+  test, every class, the bonus games and Birdman (your save is backed up first)
 - One-time setup that builds the game from your own ROM: nothing but our own
   code ships in the download
 
