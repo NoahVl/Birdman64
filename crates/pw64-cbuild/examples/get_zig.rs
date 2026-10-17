@@ -14,7 +14,8 @@
 //! `--android`: the aarch64-linux zig for the first-run Android APK
 //! (packaging/android/build-apk.sh `--release-flavour`), default out
 //! `tools/zig-android/`, on any host (needs a `tar` with xz: Git Bash's on
-//! Windows). It can't run here, so only an existing file counts as done.
+//! Windows). It can't run here, so `zig.stamp` (version + archive sha256)
+//! next to it decides whether it is current.
 
 use pw64_cbuild::{ZIG_VERSION, ZigDist};
 use sha2::{Digest, Sha256};
@@ -49,14 +50,19 @@ fn main() -> Result<(), String> {
     let out = out.unwrap_or_else(|| repo.join("tools").join(default_dir));
     if android {
         let exe = out.join("zig");
-        if exe.is_file() {
-            println!("{} already exists", exe.display());
+        let dist = &pw64_cbuild::ZIG_LINUX_ARM64;
+        // The binary can't run here, so a stamp (version + archive sha256)
+        // says which archive it came from; a pin bump re-fetches.
+        let stamp_path = out.join("zig.stamp");
+        let stamp = format!("{ZIG_VERSION} {}\n", dist.sha256);
+        if exe.is_file() && std::fs::read_to_string(&stamp_path).ok().as_deref() == Some(&stamp) {
+            println!("{} is already zig {ZIG_VERSION}", exe.display());
             return Ok(());
         }
-        let dist = &pw64_cbuild::ZIG_LINUX_ARM64;
         let bytes = download_checked(dist)?;
         std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
         extract_tar(dist, &bytes, &out)?;
+        std::fs::write(&stamp_path, stamp).map_err(|e| format!("{}: {e}", stamp_path.display()))?;
         println!(
             "installed {} (aarch64-linux zig {ZIG_VERSION})",
             exe.display()

@@ -83,8 +83,16 @@ fn dir_rom_candidates(dir: &Path) -> Vec<PathBuf> {
 
 /// Workspace root next to `crates/pw64-platform` (so `cargo run` from any
 /// working directory finds the repo's `rom/` and `decomp/`).
+#[cfg(not(target_os = "android"))]
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// Android: no checkout on the device, and the builder's path stays out of
+/// the APK.
+#[cfg(target_os = "android")]
+fn workspace_root() -> PathBuf {
+    PathBuf::from(".")
 }
 
 /// Every ROM path to try, in order. `explicit`/`$PW64_ROM` stay single-path

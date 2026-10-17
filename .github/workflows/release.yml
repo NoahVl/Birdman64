@@ -171,6 +171,81 @@ jobs:
             Birdman64-windows-x64-debug-symbols.pdb
             SHA256SUMS-windows.txt
 
+  # Android arm64 APK, release flavour (docs/notes/android.md): attached to
+  # the GitHub release ONLY when signed with the release key (secrets
+  # ANDROID_KEYSTORE_B64 / _PASSWORD / ANDROID_KEY_ALIAS): a debug-signed APK
+  # could never be updated in place by a later release.
+  android:
+    name: Android release (APK)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-apk
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+      - name: cargo-about (THIRD_PARTY_LICENSES.html)
+        run: cargo about --version || cargo install cargo-about --locked --version 0.9.2 --features cli
+      - name: build-apk.sh --release-flavour
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: bash packaging/android/build-apk.sh --release-flavour
+      # The only step that sees the release key (SDK tools only: no cargo,
+      # no build scripts).
+      - name: sign with the release key
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: >
+          bash packaging/android/build-apk.sh --sign-only
+          target/android-apk/Birdman64-android-arm64-unsigned.apk
+      - name: signed?
+        id: signed
+        run: |
+          if [ -f target/android-apk/Birdman64-android-arm64.apk ]; then
+            cp target/android-apk/Birdman64-android-arm64.apk .
+            sha256sum Birdman64-android-arm64.apk > SHA256SUMS-android.txt
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "::error::release tag without the Android release key secrets: no APK"
+            exit 1
+          else
+            echo "::warning::no release keystore secrets: debug-signed APK, not attached to a release"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/attest-build-provenance@v2
+        if: ${{ steps.signed.outputs.signed == 'true' && !github.event.repository.private }}
+        with:
+          subject-path: Birdman64-android-arm64.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Birdman64-android-arm64
+          path: |
+            target/android-apk/Birdman64-android-arm64*.apk
+            SHA256SUMS-android.txt
+          if-no-files-found: warn
+      - name: github release
+        if: startsWith(github.ref, 'refs/tags/v') && steps.signed.outputs.signed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: packaging/release-notes.md
+          files: |
+            Birdman64-android-arm64.apk
+            SHA256SUMS-android.txt
+
   linux:
     name: Linux release (AppImage + tar.gz)
     # The oldest supported runner: the exe and AppImage then need only the

@@ -3,11 +3,11 @@
   Birdman64 for Android: a NativeActivity (no Java code) that loads
   libbirdman64.so and calls its android_main. build-apk.sh packages it;
   docs/notes/android.md has the details. The package id is a placeholder
-  until the first release. versionName comes from Cargo.toml (build-apk.sh).
+  until the first release. versionName and versionCode come from the
+  Cargo.toml version (build-apk.sh).
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="app.birdman64"
-    android:versionCode="1">
+    package="app.birdman64">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
 
@@ -26,6 +26,8 @@
          (ANativeWindow_setFrameRate). Hiding the system bars is done in code. -->
     <application
         android:label="Birdman64"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:hasCode="false"
         android:hasFragileUserData="true"
         android:extractNativeLibs="true">
