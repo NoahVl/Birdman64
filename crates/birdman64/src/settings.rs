@@ -820,8 +820,7 @@ impl Overlay {
                 self.import_done = true;
                 if cfg!(target_os = "android") {
                     Some((
-                        "Save imported. Close Birdman64 and open it again to use it."
-                            .to_string(),
+                        "Save imported. Close Birdman64 and open it again to use it.".to_string(),
                         false,
                     ))
                 } else {
@@ -1498,7 +1497,11 @@ impl Overlay {
                 self.text_row(
                     ui,
                     at(Row::ExportSave),
-                    if busy { "Export save\u{2026} (waiting)" } else { "Export save\u{2026}" },
+                    if busy {
+                        "Export save\u{2026} (waiting)"
+                    } else {
+                        "Export save\u{2026}"
+                    },
                 );
                 self.text_row(ui, at(Row::ImportSave), "Import save\u{2026}");
                 if rows.contains(&Row::CloseApp) {
