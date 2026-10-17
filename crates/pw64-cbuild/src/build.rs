@@ -1158,9 +1158,16 @@ mod tests {
         assert!(transient_kind(K::ResourceBusy, Some(16), false));
         assert!(transient_kind(K::ExecutableFileBusy, Some(26), false));
         assert!(transient_kind(K::WouldBlock, Some(11), false));
-        // The kinds the OS actually maps those errnos to.
+        // The kinds the OS actually maps those errnos to (EAGAIN is 11 on
+        // Linux, 35 on Darwin, where 11 is EDEADLK).
         #[cfg(unix)]
-        for errno in [16, 26, 11] {
+        let eagain = if cfg!(target_vendor = "apple") {
+            35
+        } else {
+            11
+        };
+        #[cfg(unix)]
+        for errno in [16, 26, eagain] {
             assert!(transient_io(&std::io::Error::from_raw_os_error(errno)));
         }
         #[cfg(unix)]

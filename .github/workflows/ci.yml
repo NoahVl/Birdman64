@@ -205,6 +205,7 @@ jobs:
     name: iOS arm64 · clippy, ipa, simulator smoke
     runs-on: macos-14
     continue-on-error: true
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -237,11 +238,14 @@ jobs:
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
           xcrun simctl install "$UDID" target/ios/sim/Payload/Birdman64.app
-          SIMCTL_CHILD_PW64_NO_AUDIO=1 xcrun simctl launch --console-pty "$UDID" \
-            app.birdman64 > ios-sim.log 2>&1 || true
+          # Plain launch returns at once (--console-pty would block until the
+          # app exits, which it never does); stdout/stderr go to host files.
+          SIMCTL_CHILD_PW64_NO_AUDIO=1 xcrun simctl launch \
+            --stdout="$PWD/ios-sim.log" --stderr="$PWD/ios-sim.log" \
+            "$UDID" app.birdman64 || true
           sleep 30
           xcrun simctl io "$UDID" screenshot ios-sim.png
-          tail -20 ios-sim.log
+          tail -20 ios-sim.log || true
           xcrun simctl terminate "$UDID" app.birdman64 || true
       - uses: actions/upload-artifact@v4
         if: always()
