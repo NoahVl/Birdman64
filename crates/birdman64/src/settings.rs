@@ -1228,27 +1228,41 @@ impl Overlay {
         } else {
             460.0
         };
+        // One fixed panel size for every page: sizing it to the content made
+        // the window jump around on each page change and row change. The
+        // lists scroll inside it. Never wider than the screen (phones).
+        let width = width.min(screen.width() - 16.0);
+        let height = (0.8 * screen.height()).min(560.0);
+        if cfg!(target_os = "android") {
+            // Finger-sized rows with a gap between them, and a wider scroll
+            // bar to grab. Rows only react to taps; a drag scrolls the list.
+            ctx.style_mut(|s| {
+                s.spacing.interact_size.y = 44.0;
+                s.spacing.item_spacing.y = 6.0;
+                s.spacing.scroll.bar_width = 10.0;
+                s.spacing.scroll.floating = false;
+            });
+        }
         let mut open = self.show;
         egui::Window::new(egui::RichText::new(title).size(18.0))
             .open(&mut open)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
             .resizable(false)
-            .default_width(width)
-            .min_width(width)
+            .fixed_size([width, height])
             .show(ctx, |ui| {
                 if self.page != Page::Controls {
                     egui::ScrollArea::vertical()
-                        .max_height(0.8 * screen.height())
+                        .auto_shrink([false, false])
                         .show(ui, |ui| self.ui_rows(ui));
                 } else if wide {
-                    self.controls_wide(ui, 0.8 * screen.height());
+                    self.controls_wide(ui, ui.available_height());
                 } else {
                     // The drawing never scrolls (U10): fixed above the list.
                     crate::pad_art::draw(ui, self.selected_slot().as_deref());
                     ui.add_space(4.0);
                     egui::ScrollArea::vertical()
-                        .max_height(0.8 * screen.height())
+                        .auto_shrink([false, false])
                         .show(ui, |ui| self.ui_rows(ui));
                 }
             });
