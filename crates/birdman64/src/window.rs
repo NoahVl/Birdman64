@@ -1965,7 +1965,16 @@ impl ApplicationHandler<UserEvent> for App {
                 let pressed = match t.phase {
                     TouchPhase::Started => true,
                     TouchPhase::Ended | TouchPhase::Cancelled => false,
-                    TouchPhase::Moved => return,
+                    // A moving finger drags the overlay's lists (egui's
+                    // drag-to-scroll); the other screens ignore it.
+                    TouchPhase::Moved => {
+                        self.cursor = p;
+                        if let (true, Some(o)) = (settings::is_open(), &mut self.overlay) {
+                            o.pointer_moved(p.0, p.1);
+                            self.request_overlay_redraw();
+                        }
+                        return;
+                    }
                 };
                 self.cursor = p;
                 let (x, y) = self.cursor;

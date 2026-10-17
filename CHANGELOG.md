@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The settings menu keeps one fixed size on every page instead of resizing
+  as you move between pages and rows.
+- Android: the settings lists scroll by dragging with a finger, and the rows
+  are bigger and easier to tap.
 - Android: picking the ROM from some storage apps could close the app
   instead of falling back to a default file name.
 

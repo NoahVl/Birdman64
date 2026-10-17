@@ -590,3 +590,8 @@ Code: `crates/birdman64/src/settings.rs` (overlay + nav + config write), hooks i
 - `perf.rs`: `Hud` (egui card over the frame, like toasts; zero work while all options are off), `Stats` (frame-interval ring, fps over 0.5 s, 1% low = fps at the 99th-percentile frame time of the last 300 frames; a >0.5 s gap resets, so pauses aren't "slow frames").
 - Options: `[graphics] show_fps` (counter) + `[perf]` frametime/graph/lows/cpu/gpu/corner; Settings > Performance overlay page, all live via `perf::set_cfg` in `apply_live`, saved as one `SavedSettings::perf`.
 - CPU = the busiest thread (sampled on a helper thread: a Toolhelp snapshot lists every thread on the system)'s CPU time (Toolhelp + `GetThreadTimes` / `/proc/self/task/*/stat`) over wall time, % of ONE core: a whole-process figure divided by logical cores reads ~1% on many-core PCs. GPU is an estimate: a helper thread polls (non-blocking) for the queue-done callback after each frame (`poll(Wait)` holds wgpu locks that submit/present need, serialising CPU and GPU; a callback with no one polling fires ~1 frame late); with V-Sync on it can include swapchain wait; busy ms × fps; includes work queued ahead of it.
+
+## Fixed panel size, touch scrolling
+
+- The panel is `fixed_size([width, min(0.8*h, 430)])` on every page (width clamped to the screen); lists use `ScrollArea` with `auto_shrink([false, false])`. Sizing to content made the window jump between pages/rows.
+- Android: winit `Touch::Moved` is forwarded to the overlay as `PointerMoved` so egui drag-to-scroll works (rows are click-only); rows get `interact_size.y = 44` and a non-floating scroll bar.
