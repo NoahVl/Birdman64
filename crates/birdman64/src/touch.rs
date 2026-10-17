@@ -17,6 +17,11 @@
 //! "missed the stick" problem on phones of every size.
 //!
 //! L is left out: the game reads it only for a demo-HUD indicator.
+//!
+//! Edit mode (pause menu "Move touch controls"): the game stays paused,
+//! a drag moves a control ([`Group`]; the C diamond as one), Reset / Done
+//! at the top. [`Offsets`] are fractions of the screen, saved as `[touch]`
+//! in pw64.toml.
 //! TODO(android): opacity and size sliders in the settings screen
 //! ([`OPACITY`], the `scale` argument of [`Layout::new`]).
 
@@ -28,6 +33,18 @@ use crate::input::{
 
 /// Fill opacity of the controls (pressed ones draw brighter).
 pub const OPACITY: f32 = 0.35;
+
+/// The player's "Touch buttons: only menu" setting (pause menu, saved as
+/// `[touch] hidden`); the window copies it into [`Controls`] each frame.
+static HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn hidden_setting() -> bool {
+    HIDDEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_hidden_setting(hidden: bool) {
+    HIDDEN.store(hidden, std::sync::atomic::Ordering::Relaxed);
+}
 
 /// The touch controls' N64 state: button bits and the stick (-1..1, y up).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -85,6 +102,124 @@ impl Control {
     }
 }
 
+/// What the player can move in the edit mode, each with its own offset:
+/// the stick's rest spot, the single buttons, and the C diamond as a unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Group {
+    Stick,
+    A,
+    B,
+    Z,
+    R,
+    C,
+    Start,
+    Menu,
+}
+
+impl Group {
+    pub const ALL: [Group; 8] = [
+        Group::Stick,
+        Group::A,
+        Group::B,
+        Group::Z,
+        Group::R,
+        Group::C,
+        Group::Start,
+        Group::Menu,
+    ];
+
+    /// The `[touch]` key in pw64.toml.
+    pub fn name(self) -> &'static str {
+        match self {
+            Group::Stick => "stick",
+            Group::A => "a",
+            Group::B => "b",
+            Group::Z => "z",
+            Group::R => "r",
+            Group::C => "c",
+            Group::Start => "start",
+            Group::Menu => "menu",
+        }
+    }
+
+    fn of(c: Control) -> Group {
+        match c {
+            Control::A => Group::A,
+            Control::B => Group::B,
+            Control::Z => Group::Z,
+            Control::R => Group::R,
+            Control::CUp | Control::CDown | Control::CLeft | Control::CRight => Group::C,
+            Control::Start => Group::Start,
+            Control::Menu => Group::Menu,
+        }
+    }
+
+    fn index(self) -> usize {
+        Group::ALL.iter().position(|&g| g == self).unwrap_or(0)
+    }
+}
+
+/// The player's moves: per [`Group`], (dx, dy) as fractions of the surface
+/// width / height, so they survive a resolution or density change.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Offsets([(f32, f32); 8]);
+
+impl Offsets {
+    /// From the `[touch]` table (unknown names are skipped).
+    pub fn from_config(entries: &[(String, (f32, f32))]) -> Offsets {
+        let mut o = Offsets::default();
+        for (name, v) in entries {
+            if let Some(g) = Group::ALL.iter().find(|g| g.name() == name) {
+                o.0[g.index()] = *v;
+            }
+        }
+        o
+    }
+
+    /// The moved groups only, for `config::save_touch`.
+    pub fn to_config(self) -> Vec<(&'static str, (f32, f32))> {
+        Group::ALL
+            .iter()
+            .filter(|g| self.get(**g) != (0.0, 0.0))
+            .map(|g| (g.name(), self.get(*g)))
+            .collect()
+    }
+
+    pub fn get(&self, g: Group) -> (f32, f32) {
+        self.0[g.index()]
+    }
+
+    fn set(&mut self, g: Group, v: (f32, f32)) {
+        self.0[g.index()] = v;
+    }
+}
+
+/// The edit mode's two buttons (top centre).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EditAction {
+    /// Leave the edit mode; the window saves the offsets.
+    #[default]
+    Done,
+    /// Every control back to its default spot (the mode stays on).
+    Reset,
+}
+
+/// A rounded-rectangle button: center and half extents, physical px.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Pill {
+    pub x: f32,
+    pub y: f32,
+    pub half_w: f32,
+    pub half_h: f32,
+}
+
+impl Pill {
+    fn contains(&self, (x, y): (f32, f32)) -> bool {
+        (x - self.x).abs() <= self.half_w * HIT_SLACK
+            && (y - self.y).abs() <= self.half_h * HIT_SLACK
+    }
+}
+
 /// A round control: center and radius, physical px.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Circle {
@@ -119,12 +254,18 @@ pub struct Layout {
     /// A touch left of this (not on a button) grabs the stick.
     pub stick_zone_right: f32,
     pub buttons: Vec<(Control, Circle)>,
+    /// Surface size (offsets are fractions of it).
+    pub size: (f32, f32),
+    /// The edit mode's Reset / Done buttons.
+    pub edit_buttons: [(EditAction, Pill); 2],
 }
 
 /// Minimum distance from the screen edges, dp. Horizontal is larger: in
 /// landscape a notch or punch-hole sits on a short edge.
 const EDGE_X_DP: f32 = 36.0;
 const EDGE_Y_DP: f32 = 12.0;
+/// Gap between an inset (cutout, system bar) and the controls, dp.
+const INSET_GAP_DP: f32 = 8.0;
 /// Hit radius as a multiple of the drawn radius (fingers are imprecise).
 const HIT_SLACK: f32 = 1.2;
 
@@ -147,11 +288,14 @@ impl Layout {
             .min(avail_dp / 340.0)
             .clamp(0.3, 1.3);
         let u = dp * fit * scale.clamp(0.5, 2.0);
-        // The safe rectangle: insets, then at least the edge margins.
-        let left = insets.left.max(0.0) + EDGE_X_DP * dp;
-        let right = w - insets.right.max(0.0) - EDGE_X_DP * dp;
-        let top = insets.top.max(0.0) + EDGE_Y_DP * dp;
-        let bottom = h - insets.bottom.max(0.0) - EDGE_Y_DP * dp;
+        // The safe rectangle: the edge margins, or the insets (cutout,
+        // bars) plus a small gap where those are larger.
+        let edge =
+            |inset: f32, margin_dp: f32| (inset.max(0.0) + INSET_GAP_DP * dp).max(margin_dp * dp);
+        let left = edge(insets.left, EDGE_X_DP);
+        let right = w - edge(insets.right, EDGE_X_DP);
+        let top = edge(insets.top, EDGE_Y_DP);
+        let bottom = h - edge(insets.bottom, EDGE_Y_DP);
         let c = |x: f32, y: f32, r: f32| Circle { x, y, r: r * u };
         let stick_radius = 56.0 * u;
         let stick_rest = (left + stick_radius, bottom - stick_radius - 12.0 * u);
@@ -179,12 +323,118 @@ impl Layout {
             (Control::Start, c(w / 2.0, bottom - 20.0 * u, 20.0)),
             (Control::Menu, c(left + 18.0 * u, top + 18.0 * u, 18.0)),
         ];
+        let pill = |x: f32| Pill {
+            x,
+            y: top + 24.0 * u,
+            half_w: 56.0 * u,
+            half_h: 20.0 * u,
+        };
         Layout {
             stick_rest,
             stick_radius,
             stick_zone_right: w * 0.45,
             buttons,
+            size: (w, h),
+            edit_buttons: [
+                (EditAction::Reset, pill(w / 2.0 - 70.0 * u)),
+                (EditAction::Done, pill(w / 2.0 + 70.0 * u)),
+            ],
         }
+    }
+
+    /// This (default) layout with the player's offsets applied. Each group
+    /// moves as a unit and is clamped to stay fully on screen; the clamped
+    /// offsets come back too (an edit drag then can't run away).
+    pub fn with_offsets(&self, o: &Offsets) -> (Layout, Offsets) {
+        let (w, h) = self.size;
+        let mut out = self.clone();
+        let mut clamped = Offsets::default();
+        if w < 1.0 || h < 1.0 {
+            return (out, clamped);
+        }
+        for g in Group::ALL {
+            let members: Vec<Circle> = if g == Group::Stick {
+                vec![Circle {
+                    x: self.stick_rest.0,
+                    y: self.stick_rest.1,
+                    r: self.stick_radius,
+                }]
+            } else {
+                self.buttons
+                    .iter()
+                    .filter(|(c, _)| Group::of(*c) == g)
+                    .map(|(_, c)| *c)
+                    .collect()
+            };
+            if members.is_empty() {
+                continue;
+            }
+            // Allowed shift range in px: every member stays inside.
+            let (mut x0, mut x1, mut y0, mut y1) = (f32::MIN, f32::MAX, f32::MIN, f32::MAX);
+            for c in &members {
+                x0 = x0.max(c.r - c.x);
+                x1 = x1.min(w - c.r - c.x);
+                y0 = y0.max(c.r - c.y);
+                y1 = y1.min(h - c.r - c.y);
+            }
+            let (fx, fy) = o.get(g);
+            let clampf = |v: f32, lo: f32, hi: f32| if lo > hi { 0.0 } else { v.clamp(lo, hi) };
+            let (dx, dy) = (clampf(fx * w, x0, x1), clampf(fy * h, y0, y1));
+            clamped.set(g, (dx / w, dy / h));
+            if g == Group::Stick {
+                out.stick_rest = (self.stick_rest.0 + dx, self.stick_rest.1 + dy);
+                // A rest spot moved right keeps a grab zone around it.
+                out.stick_zone_right = self
+                    .stick_zone_right
+                    .max(out.stick_rest.0 + self.stick_radius);
+            } else {
+                for (c, circle) in &mut out.buttons {
+                    if Group::of(*c) == g {
+                        circle.x += dx;
+                        circle.y += dy;
+                    }
+                }
+            }
+        }
+        (out, clamped)
+    }
+
+    /// Does a member of `g` overlap the edit mode's Reset / Done buttons?
+    fn covers_edit_bar(&self, g: Group) -> bool {
+        let members: Vec<Circle> = if g == Group::Stick {
+            vec![Circle {
+                x: self.stick_rest.0,
+                y: self.stick_rest.1,
+                r: self.stick_radius,
+            }]
+        } else {
+            self.buttons
+                .iter()
+                .filter(|(c, _)| Group::of(*c) == g)
+                .map(|(_, c)| *c)
+                .collect()
+        };
+        members.iter().any(|c| {
+            self.edit_buttons.iter().any(|(_, p)| {
+                let dx = ((c.x - p.x).abs() - p.half_w * HIT_SLACK).max(0.0);
+                let dy = ((c.y - p.y).abs() - p.half_h * HIT_SLACK).max(0.0);
+                dx * dx + dy * dy < c.r * c.r
+            })
+        })
+    }
+
+    /// The edit mode's target under `p`: a button's group, else the stick
+    /// base at its rest spot.
+    fn hit_group(&self, p: (f32, f32)) -> Option<Group> {
+        if let Some(c) = self.hit(p) {
+            return Some(Group::of(c));
+        }
+        let rest = Circle {
+            x: self.stick_rest.0,
+            y: self.stick_rest.1,
+            r: self.stick_radius,
+        };
+        (rest.dist2(p) <= rest.r.powi(2)).then_some(Group::Stick)
     }
 
     /// The button under `p` (within its hit radius; the nearest center wins
@@ -222,9 +472,20 @@ enum Finger {
 /// The touch controls' state: layout, visibility and the fingers down.
 #[derive(Debug)]
 pub struct Controls {
+    /// The default layout for this surface (`set_layout`).
+    base: Layout,
+    /// `base` with `offsets` applied: what is drawn and hit-tested.
     layout: Layout,
+    offsets: Offsets,
     fingers: Vec<(u64, Finger)>,
+    /// False after a pad key: only the menu button shows until a touch.
     visible: bool,
+    /// The player's setting: only the menu button, always.
+    hidden: bool,
+    /// The edit mode (the game is paused): drags move controls.
+    editing: bool,
+    /// The edit finger: id, the group it drags, its last position.
+    drag: Option<(u64, Group, (f32, f32))>,
 }
 
 impl Default for Controls {
@@ -237,29 +498,160 @@ impl Controls {
     /// Visible by default: no pad is known to be connected at startup.
     pub fn new() -> Self {
         Self {
+            base: Layout::default(),
             layout: Layout::default(),
+            offsets: Offsets::default(),
             fingers: Vec::new(),
             visible: true,
+            hidden: false,
+            editing: false,
+            drag: None,
         }
+    }
+
+    /// The "only menu" setting. Turning it on releases what was held.
+    /// Returns true when fingers were dropped (republish [`Self::pad`]).
+    #[must_use]
+    pub fn set_hidden(&mut self, hidden: bool) -> bool {
+        if hidden == self.hidden {
+            return false;
+        }
+        self.hidden = hidden;
+        let dropped = hidden && !self.fingers.is_empty();
+        if hidden {
+            self.fingers.clear();
+        }
+        dropped
+    }
+
+    /// Only the menu button draws and reacts (the setting, or a pad was
+    /// used). Never nothing: without a pad the menu is the only way out of
+    /// a hidden layout. The edit mode shows everything.
+    pub fn menu_only(&self) -> bool {
+        !self.editing && (self.hidden || !self.visible)
     }
 
     pub fn layout(&self) -> &Layout {
         &self.layout
     }
 
-    /// A new layout (size / density / inset change): fingers are dropped,
-    /// their positions meant other controls. Returns true when fingers were
-    /// dropped: the caller must publish [`Self::pad`] again, or a held
-    /// button / stick would stick in the game.
+    /// A new default layout (size / density / inset change): fingers are
+    /// dropped, their positions meant other controls. Returns true when
+    /// fingers were dropped: the caller must publish [`Self::pad`] again,
+    /// or a held button / stick would stick in the game.
     #[must_use]
-    pub fn set_layout(&mut self, layout: Layout) -> bool {
-        if layout == self.layout {
+    pub fn set_layout(&mut self, base: Layout) -> bool {
+        if base == self.base {
             return false;
         }
-        self.layout = layout;
+        self.base = base;
+        // Drag ends first: a relayout mid-drag would store offsets clamped
+        // to this (maybe smaller) surface for good.
+        self.drag = None;
+        self.relayout();
         let dropped = !self.fingers.is_empty();
         self.fingers.clear();
         dropped
+    }
+
+    /// The player's moves (from pw64.toml at startup).
+    pub fn set_offsets(&mut self, o: Offsets) {
+        self.offsets = o;
+        self.relayout();
+    }
+
+    pub fn offsets(&self) -> &Offsets {
+        &self.offsets
+    }
+
+    /// Recomputes `layout` from `base` + `offsets`. Offsets are kept as the
+    /// player set them (a later, bigger surface may fit them again), except
+    /// while dragging, where the clamp keeps the control under the finger.
+    fn relayout(&mut self) {
+        let (layout, clamped) = self.base.with_offsets(&self.offsets);
+        self.layout = layout;
+        if self.drag.is_some() {
+            self.offsets = clamped;
+        }
+    }
+
+    pub fn editing(&self) -> bool {
+        self.editing
+    }
+
+    /// Enters the edit mode: everything released, controls shown.
+    pub fn begin_edit(&mut self) {
+        self.editing = true;
+        self.visible = true;
+        self.fingers.clear();
+        self.drag = None;
+    }
+
+    /// Leaves the edit mode (Done, Back, the app going to the background).
+    pub fn end_edit(&mut self) {
+        self.editing = false;
+        self.drag = None;
+    }
+
+    /// One touch in the edit mode: a finger on a control drags it (one at a
+    /// time); Reset / Done act on press. Done also leaves the mode.
+    pub fn edit_touch(&mut self, id: u64, phase: Phase, p: (f32, f32)) -> Option<EditAction> {
+        match phase {
+            Phase::Start => {
+                let pill = self.layout.edit_buttons.iter().find(|(_, b)| b.contains(p));
+                if let Some(&(action, _)) = pill {
+                    self.drag = None;
+                    match action {
+                        EditAction::Done => self.end_edit(),
+                        EditAction::Reset => self.set_offsets(Offsets::default()),
+                    }
+                    return Some(action);
+                }
+                if self.drag.is_none()
+                    && let Some(g) = self.layout.hit_group(p)
+                {
+                    self.drag = Some((id, g, p));
+                }
+            }
+            Phase::Move => {
+                if let Some((d, g, last)) = self.drag
+                    && d == id
+                {
+                    let (w, h) = self.base.size;
+                    let mut anchor = p;
+                    if w >= 1.0 && h >= 1.0 {
+                        let prev = self.offsets;
+                        let was_over = self.layout.covers_edit_bar(g);
+                        let (ox, oy) = self.offsets.get(g);
+                        let want = (ox + (p.0 - last.0) / w, oy + (p.1 - last.1) / h);
+                        self.offsets.set(g, want);
+                        self.relayout();
+                        // Never under the Reset / Done bar: there it could
+                        // not be grabbed again (the bar wins the hit test).
+                        if !was_over && self.layout.covers_edit_bar(g) {
+                            self.offsets = prev;
+                            self.relayout();
+                        }
+                        // Held back (screen edge, bar): the anchor stays at
+                        // the control, so it follows again on the way back.
+                        let (gx, gy) = self.offsets.get(g);
+                        anchor = (p.0 - (want.0 - gx) * w, p.1 - (want.1 - gy) * h);
+                    }
+                    self.drag = Some((d, g, anchor));
+                }
+            }
+            Phase::End => {
+                if self.drag.is_some_and(|(d, _, _)| d == id) {
+                    self.drag = None;
+                }
+            }
+        }
+        None
+    }
+
+    /// The group being dragged in the edit mode (drawn highlighted).
+    pub fn dragging(&self) -> Option<Group> {
+        self.drag.map(|(_, g, _)| g)
     }
 
     pub fn visible(&self) -> bool {
@@ -292,6 +684,7 @@ impl Controls {
                         self.fingers.push((id, Finger::Ignored));
                         return true;
                     }
+                    _ if self.hidden => Finger::Ignored,
                     Some(c) => Finger::Button(Some(c)),
                     None if p.0 < self.layout.stick_zone_right && self.stick_finger().is_none() => {
                         Finger::Stick { origin: p, pos: p }
@@ -396,7 +789,7 @@ impl Painter {
     }
 
     pub fn render(&mut self, gpu: &crate::window::Gpu, view: &wgpu::TextureView, c: &Controls) {
-        if !c.visible() || c.layout().buttons.is_empty() {
+        if c.layout().buttons.is_empty() {
             return;
         }
         let ppp = gpu.window.scale_factor() as f32;
@@ -430,19 +823,71 @@ fn draw(ctx: &egui::Context, ppp: f32, c: &Controls) {
         Color32::from_rgba_unmultiplied(r, g, b, (a.clamp(0.0, 1.0) * 255.0) as u8)
     };
     let fg = rgba(255, 255, 255, 0.8);
+    let editing = c.editing();
+    // Edit mode: the paused frame dimmed, controls more opaque.
+    let base_a = if editing { 0.6 } else { OPACITY };
+    if editing {
+        let (w, h) = c.layout().size;
+        painter.rect_filled(
+            egui::Rect::from_min_max(Pos2::ZERO, pt((w, h))),
+            0.0,
+            rgba(0, 0, 0, 0.45),
+        );
+        painter.text(
+            pt((w / 2.0, h * 0.42)),
+            egui::Align2::CENTER_CENTER,
+            "Drag the controls to move them",
+            egui::FontId::proportional(18.0),
+            fg,
+        );
+    }
+    let menu_only = c.menu_only();
     // Stick: base ring + knob.
     let (base, knob) = c.stick();
     let sr = c.layout().stick_radius / ppp;
-    painter.circle(
-        pt(base),
-        sr,
-        rgba(20, 20, 24, OPACITY * 0.6),
-        Stroke::new(2.0_f32, rgba(255, 255, 255, OPACITY)),
-    );
-    painter.circle_filled(pt(knob), sr * 0.45, rgba(200, 200, 210, OPACITY + 0.15));
+    let stick_a = if c.dragging() == Some(Group::Stick) {
+        base_a + 0.3
+    } else {
+        base_a
+    };
+    if !menu_only {
+        painter.circle(
+            pt(base),
+            sr,
+            rgba(20, 20, 24, stick_a * 0.6),
+            Stroke::new(2.0_f32, rgba(255, 255, 255, stick_a)),
+        );
+        painter.circle_filled(pt(knob), sr * 0.45, rgba(200, 200, 210, stick_a + 0.15));
+    }
+    if editing {
+        for &(action, pill) in &c.layout().edit_buttons {
+            let rect = egui::Rect::from_center_size(
+                pt((pill.x, pill.y)),
+                egui::vec2(2.0 * pill.half_w / ppp, 2.0 * pill.half_h / ppp),
+            );
+            let fill = match action {
+                EditAction::Done => rgba(40, 90, 230, 0.9),
+                EditAction::Reset => rgba(90, 90, 100, 0.9),
+            };
+            painter.rect_filled(rect, pill.half_h / ppp, fill);
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                match action {
+                    EditAction::Done => "Done",
+                    EditAction::Reset => "Reset",
+                },
+                egui::FontId::proportional(pill.half_h / ppp),
+                fg,
+            );
+        }
+    }
     for &(ctl, circle) in &c.layout().buttons {
-        let down = c.pressed(ctl);
-        let a = if down { OPACITY + 0.35 } else { OPACITY };
+        if menu_only && ctl != Control::Menu {
+            continue;
+        }
+        let down = c.pressed(ctl) || c.dragging() == Some(Group::of(ctl));
+        let a = if down { base_a + 0.3 } else { base_a };
         let fill = match ctl {
             Control::A => rgba(40, 90, 230, a),
             Control::B => rgba(40, 170, 80, a),
@@ -572,10 +1017,18 @@ mod tests {
             },
             1.0,
         );
-        assert_eq!(inset.stick_rest.0, plain.stick_rest.0 + 100.0);
+        // 100 px inset + 8 dp gap replaces the 36 dp edge margin.
+        let shift = 100.0 + 8.0 * 2.75 - 36.0 * 2.75;
+        assert!((inset.stick_rest.0 - plain.stick_rest.0 - shift).abs() < 1e-3);
+        assert!((center(&inset, Control::A).0 - center(&plain, Control::A).0 + shift).abs() < 1e-3);
+        // A small inset stays inside the edge margin: no shift.
+        let small = Insets {
+            left: 20.0,
+            ..Default::default()
+        };
         assert_eq!(
-            center(&inset, Control::A).0,
-            center(&plain, Control::A).0 - 100.0
+            Layout::new(2400.0, 1080.0, 2.75, small, 1.0).stick_rest,
+            plain.stick_rest
         );
     }
 
@@ -692,6 +1145,124 @@ mod tests {
         );
         assert_eq!(c.pad(), TouchPad::IDLE);
         assert!(!c.set_layout(Layout::new(1280.0, 720.0, 2.0, Insets::default(), 1.0)));
+    }
+
+    #[test]
+    fn offsets_move_groups_and_clamp_on_screen() {
+        let base = phone();
+        let mut o = Offsets::default();
+        o.set(Group::Z, (0.1, 0.0));
+        o.set(Group::C, (-0.05, 0.02));
+        let (l, clamped) = base.with_offsets(&o);
+        assert_eq!(clamped, o, "in range: unchanged");
+        let z0 = center(&base, Control::Z);
+        assert!((center(&l, Control::Z).0 - (z0.0 + 240.0)).abs() < 1e-3);
+        for c in [
+            Control::CUp,
+            Control::CDown,
+            Control::CLeft,
+            Control::CRight,
+        ] {
+            let (a, b) = (center(&base, c), center(&l, c));
+            assert!((b.0 - a.0 + 120.0).abs() < 1e-3 && (b.1 - a.1 - 21.6).abs() < 1e-3);
+        }
+        assert_eq!(center(&l, Control::A), center(&base, Control::A));
+        // Far off screen: clamped so every circle stays visible.
+        o.set(Group::C, (1.0, -1.0));
+        o.set(Group::Stick, (-1.0, 1.0));
+        let (l, clamped) = base.with_offsets(&o);
+        for (ctl, c) in &l.buttons {
+            assert!(c.x + c.r <= 2400.0 + 1e-3 && c.y - c.r >= -1e-3, "{ctl:?}");
+        }
+        assert!(clamped.get(Group::C).0 < 1.0);
+        assert!(l.stick_rest.0 - l.stick_radius >= -1e-3);
+        assert!(l.stick_rest.1 + l.stick_radius <= 1080.0 + 1e-3);
+        let cfg = Offsets::from_config(&[("z".into(), (0.1, 0.0)), ("bogus".into(), (0.5, 0.5))]);
+        assert_eq!(cfg.to_config(), vec![("z", (0.1, 0.0))]);
+    }
+
+    #[test]
+    fn hidden_setting_keeps_only_the_menu() {
+        let mut c = Controls::new();
+        let _ = c.set_layout(phone());
+        let l = c.layout().clone();
+        c.on_touch(1, Phase::Start, center(&l, Control::A));
+        assert!(c.set_hidden(true), "held A released: republish");
+        assert!(c.menu_only());
+        c.on_touch(2, Phase::Start, center(&l, Control::B));
+        c.on_touch(3, Phase::Start, (400.0, 700.0));
+        c.on_touch(3, Phase::Move, (300.0, 700.0));
+        assert_eq!(c.pad(), TouchPad::IDLE, "no buttons, no stick");
+        assert!(c.on_touch(4, Phase::Start, center(&l, Control::Menu)));
+        // A pad press alone also leaves the menu showing.
+        let _ = c.set_hidden(false);
+        c.hide();
+        assert!(c.menu_only());
+        c.begin_edit();
+        assert!(!c.menu_only(), "the edit mode shows everything");
+    }
+
+    #[test]
+    fn edit_mode_drags_resets_and_done() {
+        let mut c = Controls::new();
+        let _ = c.set_layout(phone());
+        let z = center(c.layout(), Control::Z);
+        c.begin_edit();
+        assert!(c.editing());
+        assert_eq!(c.edit_touch(1, Phase::Start, z), None);
+        assert_eq!(c.dragging(), Some(Group::Z));
+        c.edit_touch(1, Phase::Move, (z.0 + 120.0, z.1 + 54.0));
+        let moved = center(c.layout(), Control::Z);
+        assert!((moved.0 - z.0 - 120.0).abs() < 1e-3 && (moved.1 - z.1 - 54.0).abs() < 1e-3);
+        assert!((c.offsets().get(Group::Z).0 - 0.05).abs() < 1e-5);
+        c.edit_touch(1, Phase::End, moved);
+        assert_eq!(c.dragging(), None);
+        assert_eq!(c.pad(), TouchPad::IDLE, "edits never press buttons");
+        // The stick's rest spot drags too.
+        let rest = c.layout().stick_rest;
+        c.edit_touch(2, Phase::Start, rest);
+        c.edit_touch(2, Phase::Move, (rest.0 + 30.0, rest.1 - 30.0));
+        c.edit_touch(2, Phase::End, rest);
+        assert_eq!(c.layout().stick_rest, (rest.0 + 30.0, rest.1 - 30.0));
+        let pill = |c: &Controls, a: EditAction| {
+            let (_, p) = c
+                .layout()
+                .edit_buttons
+                .iter()
+                .find(|(k, _)| *k == a)
+                .unwrap();
+            (p.x, p.y)
+        };
+        // A control can't be dragged under the Reset / Done bar.
+        let r = center(c.layout(), Control::R);
+        let done = pill(&c, EditAction::Done);
+        c.edit_touch(5, Phase::Start, r);
+        c.edit_touch(5, Phase::Move, done);
+        c.edit_touch(5, Phase::End, done);
+        assert_eq!(center(c.layout(), Control::R), r, "blocked by the bar");
+        // Past the screen edge and back: it waits at the edge until the
+        // finger is back over it, then follows again.
+        let a = center(c.layout(), Control::A);
+        c.edit_touch(6, Phase::Start, a);
+        c.edit_touch(6, Phase::Move, (a.0 + 2000.0, a.1));
+        let edge = center(c.layout(), Control::A);
+        c.edit_touch(6, Phase::Move, (a.0 + 1990.0, a.1));
+        assert_eq!(center(c.layout(), Control::A), edge);
+        c.edit_touch(6, Phase::Move, (edge.0 - 10.0, a.1));
+        assert!((center(c.layout(), Control::A).0 - (edge.0 - 10.0)).abs() < 1e-2);
+        c.edit_touch(6, Phase::End, a);
+        assert_eq!(
+            c.edit_touch(3, Phase::Start, pill(&c, EditAction::Reset)),
+            Some(EditAction::Reset)
+        );
+        assert_eq!(*c.offsets(), Offsets::default());
+        assert_eq!(center(c.layout(), Control::Z), z);
+        assert!(c.editing());
+        assert_eq!(
+            c.edit_touch(4, Phase::Start, pill(&c, EditAction::Done)),
+            Some(EditAction::Done)
+        );
+        assert!(!c.editing());
     }
 
     /// Split screen / small windows: the right column still fits.

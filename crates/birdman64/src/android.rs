@@ -11,11 +11,14 @@
 //! (`crate::start` → `window::run`); the window's `resumed`/`suspended`
 //! handle the Android lifecycle, `input/android_pad.rs` the pads.
 
+use jni::objects::JObject;
+use jni::{Env, JValue, jni_sig, jni_str};
 use std::ffi::{c_char, c_int};
 use std::os::fd::FromRawFd as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use winit::platform::android::activity::AndroidApp;
+use std::sync::atomic::{AtomicU32, Ordering};
+use winit::platform::android::activity::{AndroidApp, WindowManagerFlags};
 
 static APP: OnceLock<AndroidApp> = OnceLock::new();
 
@@ -46,6 +49,11 @@ fn android_main(app: AndroidApp) {
         .map(|d| d.join("rom"))
         .collect();
     let rom = dirs.iter().find_map(|d| first_rom_in(d));
+    // Created by the app, not by `adb shell mkdir`: on a fresh install the
+    // app couldn't list a shell-made folder there (scoped storage).
+    for d in &dirs {
+        let _ = std::fs::create_dir_all(d);
+    }
     if rom.is_none() {
         eprintln!(
             "[android] no ROM in {}: push one there (adb push <rom>.z64 <dir>/)",
@@ -55,8 +63,328 @@ fn android_main(app: AndroidApp) {
                 .join(" or ")
         );
     }
+    // Touch play sends no key events, so without this the screen times out
+    // mid-flight. The flag only applies while the activity is in front.
+    app.set_window_flags(
+        WindowManagerFlags::KEEP_SCREEN_ON,
+        WindowManagerFlags::empty(),
+    );
     let _ = APP.set(app);
+    apply_window_mode();
     crate::start(None, rom);
+}
+
+/// Display-cutout safe insets, px (left, top, right, bottom), as the UI
+/// thread last read them ([`apply_window_mode`]); 0 until then.
+static CUTOUT: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+
+/// The cutout insets for the touch layout. NativeActivity's content rect
+/// doesn't carry them: targetSdk 35 draws edge to edge, under the cutout.
+pub(crate) fn cutout_insets() -> [f32; 4] {
+    CUTOUT.each_ref().map(|v| v.load(Ordering::Relaxed) as f32)
+}
+
+/// Immersive mode (status and navigation bars hidden; a swipe from the
+/// edge shows them for a moment) and a fresh read of the cutout insets.
+/// Both are View / Window calls that must run on the Java UI thread, not
+/// on `android_main`'s. Call at start and on every resume: the bars come
+/// back when the activity returns to the front.
+pub(crate) fn apply_window_mode() {
+    on_ui_thread(true);
+}
+
+/// Re-reads the cutout insets only (a 180° turn moves the cutout to the
+/// other side; no event reports that to the native side). The window calls
+/// it about once a second; the bars are left alone, so a swipe that showed
+/// them isn't undone.
+pub(crate) fn refresh_cutout() {
+    on_ui_thread(false);
+}
+
+fn on_ui_thread(hide_bars: bool) {
+    let Some(app) = APP.get().cloned() else {
+        return;
+    };
+    let ui = app.clone();
+    app.run_on_java_main_thread(Box::new(move || {
+        // SAFETY: the process's JavaVM, valid for its lifetime.
+        let vm = unsafe { jni::JavaVM::from_raw(ui.vm_as_ptr().cast()) };
+        let r = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            // SAFETY: the activity's global reference, alive while the
+            // activity is (this runs from its own UI thread).
+            let activity = unsafe { JObject::from_raw(env, ui.activity_as_ptr().cast()) };
+            window_mode(env, &activity, hide_bars)
+        });
+        if let Err(e) = r {
+            eprintln!("[android] window mode: {e}");
+        }
+    }));
+}
+
+/// The display's current refresh rate, mHz (0 = not read yet). winit has no
+/// refresh rate on Android, so `fps = monitor` (the default) reads this.
+static REFRESH_MHZ: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn refresh_mhz() -> Option<u32> {
+    Some(REFRESH_MHZ.load(Ordering::Relaxed)).filter(|&m| m > 0)
+}
+
+/// Reads the current refresh rate and, with `request` (start / resume),
+/// asks for the fastest mode at the current resolution on our surface
+/// (`ANativeWindow_setFrameRate`, API 30+). Without the request the system
+/// may keep a game at 60 Hz on a 90/120 Hz panel. Battery saver or the
+/// user's "smooth display" setting can still hold it lower; the current
+/// rate is re-read every second, so the present tick follows.
+fn display_rate(
+    env: &mut Env,
+    activity: &JObject,
+    sdk: i32,
+    request: bool,
+) -> jni::errors::Result<()> {
+    let display = if sdk >= 30 {
+        env.call_method(
+            activity,
+            jni_str!("getDisplay"),
+            jni_sig!("()Landroid/view/Display;"),
+            &[],
+        )?
+        .l()?
+    } else {
+        let wm = env
+            .call_method(
+                activity,
+                jni_str!("getWindowManager"),
+                jni_sig!("()Landroid/view/WindowManager;"),
+                &[],
+            )?
+            .l()?;
+        env.call_method(
+            &wm,
+            jni_str!("getDefaultDisplay"),
+            jni_sig!("()Landroid/view/Display;"),
+            &[],
+        )?
+        .l()?
+    };
+    if display.is_null() {
+        return Ok(());
+    }
+    let hz = env
+        .call_method(&display, jni_str!("getRefreshRate"), jni_sig!("()F"), &[])?
+        .f()?;
+    let mhz = (hz * 1000.0).round() as u32;
+    if REFRESH_MHZ.swap(mhz, Ordering::Relaxed) != mhz {
+        eprintln!("[android] display refresh {hz:.1} Hz");
+    }
+    if !request || sdk < 30 {
+        return Ok(());
+    }
+    // The fastest mode with the current mode's resolution.
+    let size = |env: &mut Env, mode: &JObject| -> jni::errors::Result<(i32, i32)> {
+        let w = env
+            .call_method(mode, jni_str!("getPhysicalWidth"), jni_sig!("()I"), &[])?
+            .i()?;
+        let h = env
+            .call_method(mode, jni_str!("getPhysicalHeight"), jni_sig!("()I"), &[])?
+            .i()?;
+        Ok((w, h))
+    };
+    let cur = env
+        .call_method(
+            &display,
+            jni_str!("getMode"),
+            jni_sig!("()Landroid/view/Display$Mode;"),
+            &[],
+        )?
+        .l()?;
+    let cur_size = size(env, &cur)?;
+    let modes = env
+        .call_method(
+            &display,
+            jni_str!("getSupportedModes"),
+            jni_sig!("()[Landroid/view/Display$Mode;"),
+            &[],
+        )?
+        .l()?;
+    let modes = env.cast_local::<jni::objects::JObjectArray>(modes)?;
+    let mut best = hz;
+    for i in 0..modes.len(env)? {
+        let mode = modes.get_element(env, i)?;
+        if size(env, &mode)? == cur_size {
+            let r = env
+                .call_method(&mode, jni_str!("getRefreshRate"), jni_sig!("()F"), &[])?
+                .f()?;
+            best = best.max(r);
+        }
+    }
+    TOP_MHZ.store((best * 1000.0).round() as u32, Ordering::Relaxed);
+    request_rate();
+    Ok(())
+}
+
+/// The panel's fastest mode at the current resolution, mHz (0 = unknown).
+static TOP_MHZ: AtomicU32 = AtomicU32::new(0);
+/// The chosen fixed frame rate, mHz (0 = monitor / uncapped: no cap).
+static FPS_CAP_MHZ: AtomicU32 = AtomicU32::new(0);
+
+/// The frame-rate setting changed (the window calls this with every present
+/// re-read; only a change re-requests): a fixed 30 / 60 fps choice asks the
+/// panel for that rate instead of holding it at its top rate.
+pub(crate) fn set_fps_cap(mhz: u32) {
+    if FPS_CAP_MHZ.swap(mhz, Ordering::Relaxed) != mhz {
+        request_rate();
+    }
+}
+
+/// Votes `min(top rate, fps cap)` on our surface. Any thread:
+/// `ANativeWindow_setFrameRate` is thread-safe.
+fn request_rate() {
+    let top = TOP_MHZ.load(Ordering::Relaxed);
+    let cap = FPS_CAP_MHZ.load(Ordering::Relaxed);
+    let mhz = if cap > 0 && top > 0 {
+        top.min(cap)
+    } else {
+        top
+    };
+    if mhz == 0 {
+        return;
+    }
+    if let Some(window) = APP.get().and_then(|a| a.native_window()) {
+        set_frame_rate(window.ptr().as_ptr().cast(), mhz as f32 / 1000.0);
+    }
+}
+
+/// `ANativeWindow_setFrameRate(window, hz, COMPATIBILITY_DEFAULT)`, looked
+/// up at run time (API 30+; minSdk is 26).
+fn set_frame_rate(window: *mut std::ffi::c_void, hz: f32) {
+    type SetFrameRate = unsafe extern "C" fn(*mut std::ffi::c_void, f32, i8) -> i32;
+    static FN: OnceLock<Option<SetFrameRate>> = OnceLock::new();
+    let f = FN.get_or_init(|| {
+        // SAFETY: dlopen/dlsym with NUL-terminated names; libandroid is
+        // already loaded (we link it), so this only takes a reference.
+        unsafe {
+            let lib = libc::dlopen(c"libandroid.so".as_ptr(), libc::RTLD_NOW);
+            if lib.is_null() {
+                return None;
+            }
+            let sym = libc::dlsym(lib, c"ANativeWindow_setFrameRate".as_ptr());
+            (!sym.is_null()).then(|| std::mem::transmute::<*mut libc::c_void, SetFrameRate>(sym))
+        }
+    });
+    if let Some(f) = f {
+        // SAFETY: a live ANativeWindow (the caller holds a reference).
+        let r = unsafe { f(window, hz, 0) };
+        eprintln!("[android] requested {hz:.1} Hz for the surface (result {r})");
+    }
+}
+
+/// [`apply_window_mode`]'s JNI calls (UI thread).
+fn window_mode(env: &mut Env, activity: &JObject, hide_bars: bool) -> jni::errors::Result<()> {
+    let sdk = env
+        .get_static_field(
+            jni_str!("android/os/Build$VERSION"),
+            jni_str!("SDK_INT"),
+            jni_sig!("I"),
+        )?
+        .i()?;
+    let window = env
+        .call_method(
+            activity,
+            jni_str!("getWindow"),
+            jni_sig!("()Landroid/view/Window;"),
+            &[],
+        )?
+        .l()?;
+    let decor = env
+        .call_method(
+            &window,
+            jni_str!("getDecorView"),
+            jni_sig!("()Landroid/view/View;"),
+            &[],
+        )?
+        .l()?;
+    if !hide_bars {
+        // Only the cutout read below.
+    } else if sdk >= 30 {
+        let bars = env
+            .call_static_method(
+                jni_str!("android/view/WindowInsets$Type"),
+                jni_str!("systemBars"),
+                jni_sig!("()I"),
+                &[],
+            )?
+            .i()?;
+        let ctl = env
+            .call_method(
+                &window,
+                jni_str!("getInsetsController"),
+                jni_sig!("()Landroid/view/WindowInsetsController;"),
+                &[],
+            )?
+            .l()?;
+        if !ctl.is_null() {
+            // BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            env.call_method(
+                &ctl,
+                jni_str!("setSystemBarsBehavior"),
+                jni_sig!("(I)V"),
+                &[JValue::Int(2)],
+            )?;
+            env.call_method(
+                &ctl,
+                jni_str!("hide"),
+                jni_sig!("(I)V"),
+                &[JValue::Int(bars)],
+            )?;
+        }
+    } else {
+        // IMMERSIVE_STICKY | LAYOUT_{STABLE,HIDE_NAVIGATION,FULLSCREEN} |
+        // HIDE_NAVIGATION | FULLSCREEN (API 26-29).
+        env.call_method(
+            &decor,
+            jni_str!("setSystemUiVisibility"),
+            jni_sig!("(I)V"),
+            &[JValue::Int(0x1706)],
+        )?;
+    }
+    if let Err(e) = display_rate(env, activity, sdk, hide_bars) {
+        eprintln!("[android] refresh rate: {e}");
+    }
+    if sdk >= 28 {
+        let insets = env
+            .call_method(
+                &decor,
+                jni_str!("getRootWindowInsets"),
+                jni_sig!("()Landroid/view/WindowInsets;"),
+                &[],
+            )?
+            .l()?;
+        if !insets.is_null() {
+            let cut = env
+                .call_method(
+                    &insets,
+                    jni_str!("getDisplayCutout"),
+                    jni_sig!("()Landroid/view/DisplayCutout;"),
+                    &[],
+                )?
+                .l()?;
+            let names = [
+                jni_str!("getSafeInsetLeft"),
+                jni_str!("getSafeInsetTop"),
+                jni_str!("getSafeInsetRight"),
+                jni_str!("getSafeInsetBottom"),
+            ];
+            for (slot, name) in CUTOUT.iter().zip(names) {
+                let v = if cut.is_null() {
+                    0
+                } else {
+                    env.call_method(&cut, name, jni_sig!("()I"), &[])?.i()?
+                };
+                slot.store(v.max(0) as u32, Ordering::Relaxed);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The first file (by name) in `dir` with a ROM extension (`.z64`, `.n64`,

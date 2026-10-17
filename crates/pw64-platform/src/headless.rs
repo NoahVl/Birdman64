@@ -390,11 +390,52 @@ pub fn set_controllers_present(n: u8) {
 /// (0-based) here; `osContGetReadData` delivers it. Calls for a controller
 /// beyond `MAXCONTROLLERS` are ignored. Callable from any thread.
 pub fn set_controller(n: usize, button: u16, stick_x: i8, stick_y: i8) {
+    use std::sync::atomic::Ordering::Relaxed;
     if let Some(pad) = PADS.get(n) {
         let v = button as u32 | (stick_x as u8 as u32) << 16 | (stick_y as u8 as u32) << 24;
-        pad.store(v, std::sync::atomic::Ordering::Relaxed);
+        let old = pad.swap(v, Relaxed) as u16;
+        let newly = button & !old;
+        if newly != 0 {
+            LATCH_AT[n].store(READS.load(Relaxed), Relaxed);
+            LATCH[n].fetch_or(newly as u32, Relaxed);
+            // The game last saw these down (a release and a new press both
+            // fell between two reads): give it one "up" read first, or the
+            // second press of a quick double tap would not be an edge.
+            let gap = newly as u32 & DELIVERED[n].load(Relaxed);
+            GAP[n].fetch_or(gap, Relaxed);
+        }
     }
 }
+
+/// Drops latched presses (and pending "up" reads): the host calls it when
+/// the game's input is rerouted (pause / settings overlay, focus loss,
+/// suspend), so a press made meanwhile can't reach the game on resume.
+pub fn clear_latch() {
+    use std::sync::atomic::Ordering::Relaxed;
+    for (latch, gap) in LATCH.iter().zip(&GAP) {
+        latch.store(0, Relaxed);
+        gap.store(0, Relaxed);
+    }
+}
+
+/// Buttons pressed since the last reads (per pad): a press released before
+/// the game polled (a quick screen tap or key tap is shorter than a game
+/// frame) still reaches the game once. `LATCH_AT` = `READS` when latched.
+static LATCH: [std::sync::atomic::AtomicU32; MAXCONTROLLERS] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; MAXCONTROLLERS];
+static LATCH_AT: [std::sync::atomic::AtomicU64; MAXCONTROLLERS] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; MAXCONTROLLERS];
+/// Latched buttons first delivered as "up" for `PRESENT` reads (see
+/// `set_controller`); the latch then counts its reads from there.
+static GAP: [std::sync::atomic::AtomicU32; MAXCONTROLLERS] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; MAXCONTROLLERS];
+/// The buttons each pad's last read delivered.
+static DELIVERED: [std::sync::atomic::AtomicU32; MAXCONTROLLERS] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; MAXCONTROLLERS];
+/// `osContGetReadData` calls so far. `uvReadController` reads all pads once
+/// per controller it polls, so a latch is cleared only after `PRESENT`
+/// reads: every polled controller's own read then saw it.
+static READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Controller 1 shorthand (`set_controller(0, ..)`): every existing caller
 /// and test publishes controller 1.
@@ -417,11 +458,26 @@ pub unsafe extern "C-unwind" fn osContGetReadData(pads: *mut OSContPad) {
         LOGGED.call_once(|| eprintln!("[input] first non-idle pad delivered: {v:#010x}"));
     }
     let present = PRESENT.load(std::sync::atomic::Ordering::Relaxed) as usize;
+    let reads = READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     for (i, snapshot) in PADS.iter().enumerate() {
         let pad = if i < present {
-            let v = snapshot.load(std::sync::atomic::Ordering::Relaxed);
+            use std::sync::atomic::Ordering::Relaxed;
+            let v = snapshot.load(Relaxed);
+            let latched = LATCH[i].load(Relaxed);
+            let gap = GAP[i].load(Relaxed);
+            let button = (v as u16 | latched as u16) & !(gap as u16);
+            if reads - LATCH_AT[i].load(Relaxed) >= present as u64 {
+                if gap != 0 {
+                    // The "up" reads are done: the press counts from here.
+                    GAP[i].fetch_and(!gap, Relaxed);
+                    LATCH_AT[i].store(reads, Relaxed);
+                } else if latched != 0 {
+                    LATCH[i].fetch_and(!latched, Relaxed);
+                }
+            }
+            DELIVERED[i].store(button as u32, Relaxed);
             OSContPad {
-                button: v as u16,
+                button,
                 stick_x: (v >> 16) as u8 as i8,
                 stick_y: (v >> 24) as u8 as i8,
                 errno: 0,
@@ -732,6 +788,38 @@ mod tests {
         assert_eq!(pattern, 0b11);
         assert_eq!(status[1].errno, 0);
         assert_eq!(status[2].errno, CONT_NO_RESPONSE_ERROR);
+        // A tap released before any read is delivered once per polled
+        // controller (two reads with two present), then cleared.
+        set_controller(1, 0, 0, 0);
+        set_controller1(0x8000, 0, 0);
+        set_controller1(0, 0, 0);
+        let mut seen = [0u16; 3];
+        for s in &mut seen {
+            // SAFETY: scratch buffer as above.
+            unsafe { osContGetReadData(pads.as_mut_ptr()) };
+            *s = pads[0].button;
+        }
+        assert_eq!(seen, [0x8000, 0x8000, 0]);
+        // Double tap: the 2nd tap lands right after the 1st was delivered
+        // (both before the game saw A up): one "up" pair of reads, then the
+        // 2nd press, so the game sees two edges.
+        let read = |pads: &mut [OSContPad; MAXCONTROLLERS]| {
+            // SAFETY: scratch buffer as above.
+            unsafe { osContGetReadData(pads.as_mut_ptr()) };
+            pads[0].button
+        };
+        set_controller1(0x8000, 0, 0);
+        set_controller1(0, 0, 0);
+        assert_eq!([read(&mut pads), read(&mut pads)], [0x8000, 0x8000]);
+        set_controller1(0x8000, 0, 0);
+        set_controller1(0, 0, 0);
+        let seen: Vec<u16> = (0..6).map(|_| read(&mut pads)).collect();
+        assert_eq!(seen, [0, 0, 0x8000, 0x8000, 0, 0]);
+        // A latched press dropped by `clear_latch` never arrives.
+        set_controller1(0x8000, 0, 0);
+        set_controller1(0, 0, 0);
+        clear_latch();
+        assert_eq!(read(&mut pads), 0);
         // Restore the globals for the other tests (they share the statics).
         set_controllers_present(1);
         set_controller(1, 0, 0, 0);

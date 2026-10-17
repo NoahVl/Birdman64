@@ -62,10 +62,12 @@ rfd.workspace = true
 
 # Android (src/android.rs): winit's NativeActivity backend (android-activity,
 # re-exported as `winit::platform::android::activity`); libc for the
-# stderr → logcat pipe.
+# stderr → logcat pipe; jni (the version android-activity uses) for the
+# immersive mode and cutout insets, which only Java APIs offer.
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { workspace = true, features = ["android-native-activity"] }
 libc.workspace = true
+jni = "0.22.4"
 
 [build-dependencies]
 # Windows exe resource (pw64.rc: icon + VERSIONINFO; build.rs gates on the

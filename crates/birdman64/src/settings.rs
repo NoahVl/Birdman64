@@ -137,6 +137,10 @@ enum Row {
     /// Graphics: the restart banner's "Restart now" row (U16). Only on the
     /// page while restart-only changes are pending (the banner's row).
     RestartNow,
+    /// Main (Android only): move the on-screen touch controls.
+    TouchLayout,
+    /// Main (Android only): on-screen buttons shown / only the menu button.
+    TouchHidden,
 }
 
 /// Which input kind a Bind / Reset row edits.
@@ -384,6 +388,8 @@ pub struct Overlay {
     /// [`Overlay::take_quit`] after the close-save.
     quit_armed: Option<Instant>,
     quit_requested: bool,
+    /// "Move touch controls" chosen ([`Overlay::take_touch_edit`]).
+    touch_edit_requested: bool,
     /// A confirmed "Restart now" (U16) the window takes with
     /// [`Overlay::take_restart`] after the close-save: spawn + exit there.
     restart_requested: bool,
@@ -491,6 +497,7 @@ impl Overlay {
             fb: (960, 720),
             quit_armed: None,
             quit_requested: false,
+            touch_edit_requested: false,
             restart_requested: false,
             restart_error: None,
             monitor_hz: None,
@@ -558,9 +565,7 @@ impl Overlay {
         // monitor's current mode first, then every video mode.
         let monitor = gpu.window.current_monitor();
         // U5: the Frame-rate row names the rate it tracks.
-        self.monitor_hz = monitor
-            .as_ref()
-            .and_then(|m| m.refresh_rate_millihertz())
+        self.monitor_hz = crate::window::monitor_mhz(&gpu.window)
             .filter(|hz| *hz > 0)
             .map(|hz| (hz + 500) / 1000);
         self.res_desktop = monitor.as_ref().map_or_else(
@@ -700,6 +705,13 @@ impl Overlay {
     /// D2 auto-save has written the staged settings by then).
     pub fn take_quit(&mut self) -> bool {
         std::mem::take(&mut self.quit_requested)
+    }
+
+    /// "Move touch controls" was chosen (Android): taken by the window
+    /// when the overlay closes, which then keeps the game paused.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn take_touch_edit(&mut self) -> bool {
+        std::mem::take(&mut self.touch_edit_requested)
     }
 
     /// A confirmed "Restart now" (U16): taken by the window like
@@ -1197,17 +1209,26 @@ impl Overlay {
     /// and mouse clicks stay in sync.
     fn rows(&self) -> Vec<Row> {
         match self.page {
-            Page::Main => vec![
-                Row::Resume,
-                Row::Controls,
-                Row::SplitScreen,
-                Row::Graphics,
-                Row::Opt(Opt::Volume),
-                // U26: pause when the window goes to the background.
-                Row::Opt(Opt::PauseBackground),
-                Row::OpenSaveFolder,
-                Row::Quit,
-            ],
+            Page::Main => {
+                let mut rows = vec![
+                    Row::Resume,
+                    Row::Controls,
+                    Row::SplitScreen,
+                    Row::Graphics,
+                    Row::Opt(Opt::Volume),
+                    // U26: pause when the window goes to the background.
+                    Row::Opt(Opt::PauseBackground),
+                    Row::OpenSaveFolder,
+                    Row::Quit,
+                ];
+                // Android: the touch controls' edit mode and the "only
+                // menu" switch, under Controls.
+                if cfg!(target_os = "android") {
+                    rows.insert(2, Row::TouchLayout);
+                    rows.insert(3, Row::TouchHidden);
+                }
+                rows
+            }
             Page::Graphics => {
                 let mut rows = vec![
                     Row::Opt(Opt::DisplayMode),
@@ -1304,6 +1325,15 @@ impl Overlay {
             Page::Main => {
                 self.text_row(ui, at(Row::Resume), "Resume game");
                 self.text_row(ui, at(Row::Controls), "Controls \u{203a}");
+                if rows.contains(&Row::TouchLayout) {
+                    self.text_row(ui, at(Row::TouchLayout), "Move touch controls");
+                    let shown = if crate::touch::hidden_setting() {
+                        "Touch buttons: only menu"
+                    } else {
+                        "Touch buttons: shown"
+                    };
+                    self.text_row(ui, at(Row::TouchHidden), shown);
+                }
                 self.text_row(ui, at(Row::SplitScreen), "Split-screen \u{203a}");
                 self.text_row(ui, at(Row::Graphics), "Display & graphics \u{203a}");
                 self.opt_row(ui, at(Row::Opt(Opt::Volume)), Opt::Volume);
@@ -1875,6 +1905,19 @@ impl Overlay {
                 _ => self.change(1, true),
             },
             Row::Resume => self.show = false,
+            // The window enters the touch edit mode once the overlay closed
+            // (`take_touch_edit`); the game stays paused.
+            Row::TouchLayout => {
+                self.touch_edit_requested = true;
+                self.show = false;
+            }
+            Row::TouchHidden => {
+                let hidden = !crate::touch::hidden_setting();
+                crate::touch::set_hidden_setting(hidden);
+                if let Err(e) = config::save_touch_hidden(hidden) {
+                    eprintln!("[touch] setting not saved: {e}");
+                }
+            }
             Row::Controls => self.enter_page(Page::Controls, Row::Controls),
             Row::SplitScreen => self.enter_page(Page::Split, Row::SplitScreen),
             Row::Graphics => self.enter_page(Page::Graphics, Row::Graphics),
@@ -2077,6 +2120,8 @@ impl Overlay {
             | Row::P2Assign
             | Row::Quit
             | Row::OpenSaveFolder
+            | Row::TouchLayout
+            | Row::TouchHidden
             | Row::RestartNow => {}
             // Neither do Resume / the page-open rows / Reset to defaults.
             Row::Resume | Row::Graphics | Row::SplitScreen | Row::ResetGraphics => {}
@@ -2734,6 +2779,11 @@ fn help(row: Row) -> &'static str {
              your progress."
         }
         Row::RestartNow => "Saves your changes and starts Birdman64 again so they take effect.",
+        Row::TouchLayout => "Drag the on-screen buttons and stick to where your thumbs want them.",
+        Row::TouchHidden => {
+            "Playing with a controller? Hide the on-screen buttons. The menu button always \
+             stays."
+        }
     }
 }
 

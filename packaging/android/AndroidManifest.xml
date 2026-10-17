@@ -16,12 +16,14 @@
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
+    <!-- No android:isGame / appCategory="game": on the test device (120 Hz
+         panel) that classification brought a 60 fps game frame-rate
+         override for the app, which held even with a requested rate
+         (ANativeWindow_setFrameRate). Hiding the system bars is done in code. -->
     <application
         android:label="Birdman64"
         android:hasCode="false"
-        android:extractNativeLibs="true"
-        android:appCategory="game"
-        android:isGame="true">
+        android:extractNativeLibs="true">
         <!-- Landscape only; a pad connecting (keyboard|navigation) or any
              other listed change must not restart the activity: the game
              thread and its OS core live for the whole process. -->

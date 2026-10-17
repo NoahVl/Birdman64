@@ -348,11 +348,14 @@ impl Gpu {
         // mode's rate, but the display now runs at the chosen video mode's.
         let mhz = match (self.display_mode, self.exclusive_mhz) {
             (opts::DisplayMode::Exclusive, Some(mhz)) => Some(mhz),
-            _ => self
-                .window
-                .current_monitor()
-                .and_then(|m| m.refresh_rate_millihertz()),
+            _ => monitor_mhz(&self.window),
         };
+        // Android: vote the chosen fixed rate (not the panel's top rate).
+        #[cfg(target_os = "android")]
+        crate::android::set_fps_cap(match self.fps {
+            opts::Fps::Hz(hz) => hz * 1000,
+            opts::Fps::Monitor | opts::Fps::Uncapped => 0,
+        });
         let rate = opts::present_rate(self.fps, mhz, self.vsync);
         let tearing = opts::allows_tearing(self.fps, mhz);
         let mode = opts::present_mode(self.vsync, rate.is_some(), tearing, &self.present_modes);
@@ -658,7 +661,14 @@ pub fn run(setup: bool, ask_rom: bool) -> ! {
         settings_shot: crate::hle::env_list("PW64_SETTINGS_SHOT").first().copied(),
         settings_shot_frame: 0,
         #[cfg(target_os = "android")]
-        touch: crate::touch::Controls::new(),
+        touch: {
+            let mut t = crate::touch::Controls::new();
+            t.set_offsets(crate::touch::Offsets::from_config(
+                &crate::config::get().touch,
+            ));
+            crate::touch::set_hidden_setting(crate::config::get().touch_hidden);
+            t
+        },
         #[cfg(target_os = "android")]
         touch_painter: crate::touch::Painter::new(),
     };
@@ -741,16 +751,30 @@ fn queue_rate(
     }
 }
 
+/// The refresh rate of the window's display, mHz. Android: winit has none;
+/// `android.rs` reads it via JNI (None until the first read, about a second
+/// after start; the 1 s present re-read then switches to the present tick).
+pub(crate) fn monitor_mhz(window: &Window) -> Option<u32> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
+        crate::android::refresh_mhz()
+    }
+    #[cfg(not(target_os = "android"))]
+    window
+        .current_monitor()
+        .and_then(|m| m.refresh_rate_millihertz())
+}
+
 /// The touch controls' layout for this surface: density from the scale
 /// factor, insets from NativeActivity's content rect (the area not under
-/// system bars; empty until the first report). A display cutout is kept
-/// clear by the layout's own edge margins (and, in landscape, by the
-/// system letterboxing a default-mode window away from it).
+/// system bars; empty until the first report) and the display cutout
+/// (`android::cutout_insets`: targetSdk 35 windows draw under it).
 #[cfg(target_os = "android")]
 fn touch_layout(g: &Gpu) -> crate::touch::Layout {
     let (w, h) = (g.config.width as f32, g.config.height as f32);
     let r = crate::android::app().content_rect();
-    let insets = if r.right > r.left && r.bottom > r.top {
+    let mut insets = if r.right > r.left && r.bottom > r.top {
         crate::touch::Insets {
             left: r.left as f32,
             top: r.top as f32,
@@ -760,6 +784,11 @@ fn touch_layout(g: &Gpu) -> crate::touch::Layout {
     } else {
         crate::touch::Insets::default()
     };
+    let [cl, ct, cr, cb] = crate::android::cutout_insets();
+    insets.left = insets.left.max(cl);
+    insets.top = insets.top.max(ct);
+    insets.right = insets.right.max(cr);
+    insets.bottom = insets.bottom.max(cb);
     crate::touch::Layout::new(w, h, g.window.scale_factor() as f32, insets, 1.0)
 }
 
@@ -771,6 +800,10 @@ impl App {
         // runs never set it: their dumps stay 4:3 unless PW64_WIDESCREEN.
         if let Some(m) = el.primary_monitor() {
             let s = m.size();
+            // Android: landscape only, but a start from the (portrait) lock
+            // screen reports the portrait size: long side over short side.
+            #[cfg(target_os = "android")]
+            let s = winit::dpi::PhysicalSize::new(s.width.max(s.height), s.width.min(s.height));
             opts::set_widescreen_monitor_default(s.width, s.height);
         }
         let monitor = el.primary_monitor();
@@ -898,9 +931,7 @@ impl App {
         // V-Sync (`PW64_VSYNC`, default off — matrix in framerate.md).
         let vsync = opts::vsync();
         let fps = opts::fps(true);
-        let monitor = window
-            .current_monitor()
-            .and_then(|m| m.refresh_rate_millihertz());
+        let monitor = monitor_mhz(&window);
         let rate = opts::present_rate(fps, monitor, vsync);
         // Present mode (opts::present_mode): V-Sync → Fifo; else with a
         // present tick Mailbox (the newest frame goes out at the next vblank
@@ -1029,7 +1060,9 @@ impl App {
         // U14: a running.lock left by the previous run means that one never
         // got to a clean quit (crash, power loss): say so once, over the
         // first frames, before this run's marker is created below.
-        let stale_lock = paths::running_lock().is_file();
+        // Not on Android: there a process is normally ended by a kill (swiped
+        // away, memory, an update), so the marker is nearly always stale.
+        let stale_lock = !cfg!(target_os = "android") && paths::running_lock().is_file();
         let Some(g) = &self.gpu else { return };
         let (slot, proxy) = (self.slot.clone(), self.proxy.clone());
         let stop_proxy = self.proxy.clone();
@@ -1347,7 +1380,9 @@ impl App {
         if !settings::is_open() {
             // A relayout mid-touch drops the fingers: republish, or what
             // they held would stay held in the game.
-            if self.touch.set_layout(touch_layout(g)) {
+            if self.touch.set_layout(touch_layout(g))
+                | self.touch.set_hidden(crate::touch::hidden_setting())
+            {
                 input::set_touch(self.touch.pad());
             }
             self.touch_painter.render(g, &view, &self.touch);
@@ -1410,6 +1445,25 @@ impl App {
             // second (the next frame applies it; unchanged readings queue
             // nothing and reconfigure nothing).
             g.present_dirty = true;
+            // Android: a 180° turn moves the cutout to the other side.
+            #[cfg(target_os = "android")]
+            crate::android::refresh_cutout();
+        }
+        // "Move touch controls" (Android): the overlay closes into the
+        // touch edit mode, the game stays paused.
+        #[cfg(target_os = "android")]
+        if overlay_closed && self.overlay.as_mut().is_some_and(|o| o.take_touch_edit()) {
+            // Before the close reroutes the pad: the game keeps an idle one.
+            input::set_game_blocked(true);
+            if let Some(o) = &mut self.overlay {
+                o.close();
+            }
+            self.touch.begin_edit();
+            input::set_touch(crate::touch::TouchPad::IDLE);
+            if let Some(g) = &self.gpu {
+                g.window.request_redraw();
+            }
+            return;
         }
         if overlay_closed {
             self.close_settings();
@@ -1485,6 +1539,13 @@ impl App {
         self.show_cursor();
         // No window yet: nothing could draw the overlay, and a paused game
         // with no visible way out would look hung.
+        // A keyboard Esc / F10 during the touch edit mode ends it (saved);
+        // that reopens the overlay through here.
+        #[cfg(target_os = "android")]
+        if self.touch.editing() {
+            self.end_touch_edit();
+            return;
+        }
         let Some(g) = &self.gpu else { return };
         // Nothing sticks while the overlay owns the input.
         input::release_all_keys();
@@ -1523,6 +1584,19 @@ impl App {
         }
     }
 
+    /// Leaves the touch edit mode (Done, Back, going to the background):
+    /// saves the offsets as `[touch]` and returns to the pause menu (the
+    /// game was paused all along).
+    #[cfg(target_os = "android")]
+    fn end_touch_edit(&mut self) {
+        self.touch.end_edit();
+        if let Err(e) = crate::config::save_touch(&self.touch.offsets().to_config()) {
+            eprintln!("[touch] layout not saved: {e}");
+        }
+        input::set_game_blocked(false);
+        self.open_settings();
+    }
+
     fn close_settings(&mut self) {
         if let Some(o) = &mut self.overlay {
             o.close(); // flips the flag + hands the pads back
@@ -1543,6 +1617,10 @@ impl App {
 
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
+        // Android: the system bars come back whenever the activity returns
+        // to the front; hide them again (and re-read the cutout).
+        #[cfg(target_os = "android")]
+        crate::android::apply_window_mode();
         let Some(g) = &mut self.gpu else {
             self.start(el);
             return;
@@ -1579,6 +1657,9 @@ impl ApplicationHandler<UserEvent> for App {
     /// and fsynced as it happens (pw64-platform headless.rs `persist`).
     #[cfg(target_os = "android")]
     fn suspended(&mut self, _: &ActiveEventLoop) {
+        if self.touch.editing() {
+            self.end_touch_edit();
+        }
         input::release_all_keys();
         self.touch.reset();
         crate::audio::set_suspended(true);
@@ -1756,7 +1837,7 @@ impl ApplicationHandler<UserEvent> for App {
                         input::AndroidKey::Pad => {
                             // A physical pad is in use: the touch controls
                             // hide until the next touch.
-                            if pressed && self.touch.visible() {
+                            if pressed && self.touch.visible() && !self.touch.editing() {
                                 self.touch.hide();
                                 input::set_touch(crate::touch::TouchPad::IDLE);
                             }
@@ -1766,7 +1847,11 @@ impl ApplicationHandler<UserEvent> for App {
                             return;
                         }
                         input::AndroidKey::Back => {
-                            self.toggle_settings();
+                            if self.touch.editing() {
+                                self.end_touch_edit();
+                            } else {
+                                self.toggle_settings();
+                            }
                             return;
                         }
                         input::AndroidKey::Keyboard => {}
@@ -1851,6 +1936,14 @@ impl ApplicationHandler<UserEvent> for App {
                         TouchPhase::Moved => crate::touch::Phase::Move,
                         TouchPhase::Ended | TouchPhase::Cancelled => crate::touch::Phase::End,
                     };
+                    if self.touch.editing() {
+                        let action = self.touch.edit_touch(t.id, phase, p);
+                        if action == Some(crate::touch::EditAction::Done) {
+                            self.end_touch_edit();
+                        }
+                        self.request_overlay_redraw();
+                        return;
+                    }
                     let menu = self.touch.on_touch(t.id, phase, p);
                     input::set_touch(self.touch.pad());
                     if menu {

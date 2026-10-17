@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Linux: `linux_window` setting in `pw64.toml` (`auto`, `wayland` or `x11`)
   to choose between a native Wayland window and X11 (XWayland).
+- Android (arm64, experimental): runs the game from a locally installed APK with on-screen
+  touch controls, which you can move or hide from the pause menu.
 
 ### Changed
 
@@ -19,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Very short button taps (shorter than one game frame) are no longer lost.
 - Linux (Wayland) on laptops with an NVIDIA GPU next to an AMD or Intel one:
   the picture no longer freezes before the main menu, and the game no longer
   crashes right after choosing Start game. The game now opens its window

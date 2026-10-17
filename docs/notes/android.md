@@ -1,8 +1,10 @@
 # Android port (arm64): feasibility and plan
 
-Status: compile-only groundwork. `aarch64-linux-android` builds and lints (CI job
-`android`), the app library links, and `packaging/android/build-apk.sh` makes a
-debug-signed APK. Nothing has run on a device yet. Target is **arm64-v8a**. Distribution is an
+Status: runs on a device (a recent arm64 phone with a 1080p-class screen):
+boots to the title, renders correctly widescreen, music plays (AAudio), touch
+controls fly, Home → back resumes paused. `aarch64-linux-android` builds and lints (CI job
+`android`); `packaging/android/build-apk.sh` makes a
+debug-signed APK. Target is **arm64-v8a**. Distribution is an
 APK on GitHub releases, not Google Play, so Play's rule against downloaded or locally
 built executable code doesn't apply. Goal: one codebase. Android-specific code sits
 behind `cfg(target_os = "android")`, the same way the Windows and Linux splits work.
@@ -29,7 +31,7 @@ anywhere. Android is relocatable only, like aarch64 Linux (pw64-game build.rs se
 `pw64_reloc`; `PW64_RELOC` defaults to `on`). No low reservation, so ART's use of the
 low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile there.
 
-## Groundwork (compile-only, nothing run on a device)
+## Groundwork
 
 - **C:** zig has no bionic libc, but the C is `-nostdinc` and the module imports
   nothing, so zig still compiles and links it. `Os::Android` uses the target
@@ -63,7 +65,7 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
 - **Crash handler:** the `.so` range (`dl_iterate_phdr`, not signal-safe) is
   computed in `install`; the handler only reads the cache (Release/Acquire flag).
 
-## Touch controls (`touch.rs`, compile-checked only)
+## Touch controls (`touch.rs`)
 
 - Pure part (layout, hit-test, finger state machine) builds everywhere and is
   unit-tested on desktop; the egui `Painter` is Android-only. Drawn after the
@@ -77,11 +79,19 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
   left, opens settings, never reaches the game). L omitted (game reads it only
   for the demo HUD). A finger slides between A/B/C/R/Z; Start needs its own press.
 - State → `android_pad::set_touch` (N64 bits, not rebindable; merged into the
-  same controller-1 entry). Any pad key press hides the controls and releases
-  them; the next touch shows them again. No "pad connected" check yet.
+  same controller-1 entry). Any pad key press hides all but the menu button
+  (never hide it: without a pad it is the only way out); the next touch shows
+  everything. Pause menu "Touch buttons: only menu" does that permanently
+  (`[touch] hidden = true`).
+- Pause menu "Move touch controls": edit mode, game stays paused (overlay closed,
+  `os::set_paused` kept), drag a control (C diamond as one group), Reset / Done;
+  Done / Back saves `[touch] <group> = [dx, dy]` (fractions of the screen,
+  clamped on screen) and reopens the pause menu.
 - Sizes in dp (winit scale factor = density), scaled to the screen (fit 0.7-1.3),
-  36 dp side / 12 dp top-bottom margins plus NativeActivity's `content_rect`
-  insets (cutouts: the default cutout mode letterboxes landscape windows anyway).
+  36 dp side / 12 dp top-bottom margins, or inset + 8 dp where an inset is larger.
+  targetSdk 35 is edge to edge: the window draws under the cutout and
+  `content_rect` doesn't report it, so `android.rs` reads `DisplayCutout` safe
+  insets via JNI (re-read every second: a 180° turn moves the cutout).
   Opacity/size are constants (`touch::OPACITY`, `scale` 1.0); sliders: TODO.
 
 ## Build + first device test
@@ -94,6 +104,38 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
 - Test order: platform test binaries via `adb push` + `adb shell` first, then boot to
   the title, then touch controls, then pad buttons, then home → back (audio stops
   and resumes, `[audio] stream paused/resumed` in logcat).
+- Scripted checks: `adb exec-out screencap -p` captures game + touch overlay;
+  `adb shell input tap` presses a button, `input swipe x0 y0 x1 y1 2500` holds the
+  stick. `wm user-rotation` doesn't turn a `sensorLandscape` activity: rotation
+  needs the real sensor.
+
+## Device findings (first bring-up)
+
+- Taps shorter than a game poll were lost (2 of 6 `input tap`s): a press and
+  release between two `osContGetReadData` calls. headless.rs latches newly
+  pressed bits until every present controller's read saw them (all inputs).
+- Screen timed out during touch play (no key events): `KEEP_SCREEN_ON` window flag.
+- Immersive mode: View / `WindowInsetsController` calls throw off the UI thread;
+  `AndroidApp::run_on_java_main_thread` + the `jni` crate (0.22, android-activity's)
+  runs them there, at start and on every `resumed` (the bars come back).
+- A start from the lock screen reports a portrait monitor (taller than wide): the
+  widescreen default fell to 4:3. Landscape-only, so long side / short side.
+- `running.lock` "didn't close properly" toast is off on Android: a kill is the
+  normal end of an app process.
+- Refresh rate: winit has none on Android. `android.rs` reads
+  `Display.getRefreshRate` (UI thread, re-read each second → `window::monitor_mhz`)
+  and asks for the fastest same-size mode with `ANativeWindow_setFrameRate`
+  (dlsym, API 30+). Measured 120 fps presents (`dumpsys SurfaceFlinger --latency`).
+- On the test device, `isGame` / `appCategory="game"` came with a 60 fps game
+  frame-rate override for our uid (`GameFrameRateOverrides` in `dumpsys
+  SurfaceFlinger`), which held even with a requested rate: removed. The override
+  stayed on the old uid until an uninstall.
+- The vote is `min(top rate, fixed fps)`: a 30 / 60 fps choice lets the panel drop.
+- `adb shell mkdir` of `<external files>/rom` on a fresh install made a folder the
+  app couldn't list; the app now creates both `rom/` folders at start.
+- Saves (`pw64.eep`, `pw64.toml`) are in internal storage (`files/`): kept by
+  `adb install -r`, wiped by an uninstall (as is the external `rom/`).
+- Pause menu rows that mean nothing on Android yet: "Open save folder", "Quit".
 
 ## Building the game module
 
@@ -116,7 +158,7 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
 
 1. **Option A on desktop** (Windows/Linux x86_64): done.
 2. **aarch64 Linux:** builds, tests pass under qemu (aarch64.md).
-3. **Android, pad only:** compile-only groundwork done (above); next is the device test,
-   then the stick path. A module built on desktop: `Os::Android` exists in pw64-cbuild,
+3. **Android, pad only:** groundwork done and device-tested (above); next is the
+   pad stick path. A module built on desktop: `Os::Android` exists in pw64-cbuild,
    but the builder only targets its host so far.
 4. **On-device build, touch controls, SAF ROM picker:** usable by beginners.
