@@ -7,14 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-10-14
-
 ### Added
 
 - Performance overlay (Pause menu > Performance overlay): a small corner readout
   that works in fullscreen. The FPS counter is on its own; frame time, 1% lows,
   a frame-time graph, CPU load (busiest core), GPU load and the screen corner are each optional.
   The old "Show FPS" option is now the counter here.
+
+## [1.2.0] - 2026-10-14
+
+### Added
+
 - Linux: `linux_window` setting in `pw64.toml` (`auto`, `wayland` or `x11`)
   to choose between a native Wayland window and X11 (XWayland).
 - Two new Display & graphics options, both off by default and applied after a
