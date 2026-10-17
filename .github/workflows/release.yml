@@ -7,10 +7,12 @@
 # `--build-game` downloads the pinned decomp and compiles it in CI, and the
 # dylib test runs against the result (an absolute PW64_GAME_DLL is required:
 # cargo runs tests with the crate dir as cwd).
+# Android: a release-signed arm64 APK (signer pinned, see the android job).
+# The jobs are independent: a failed one never blocks the others' uploads.
 #
 # The zip carries READ ME FIRST.txt; the debug symbols asset
 # is renamed Birdman64-windows-x64-debug-symbols.pdb; the release body comes
-# from packaging/release-notes.md (both jobs pass the same body_path).
+# from packaging/release-notes.md (all jobs pass the same body_path).
 #
 # The zip contains only our code + zig + licences: no ROM, no decomp files,
 # no extracted assets (CONTRIBUTING.md). The decomp's MIT licence is mentioned
@@ -209,6 +211,9 @@ jobs:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          # Pinned release signer (public certificate fingerprint, not a
+          # secret): build-apk.sh fails if the APK is signed by any other key.
+          ANDROID_CERT_SHA256: C3:D6:0B:FD:4B:67:E6:EC:D5:06:14:A7:85:D1:E9:F5:38:63:20:6A:26:AC:00:FC:2F:01:7C:E3:E1:12:86:D9
         run: >
           bash packaging/android/build-apk.sh --sign-only
           target/android-apk/Birdman64-android-arm64-unsigned.apk

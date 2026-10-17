@@ -96,6 +96,21 @@ sign_apk() {
         --v1-signing-enabled false --v2-signing-enabled true --v3-signing-enabled true \
         --v4-signing-enabled false --out "$out" "$in"
     "$BT/apksigner$BAT" verify "$out"
+    # ANDROID_CERT_SHA256 (release.yml): the expected signer certificate's
+    # SHA-256 (colons/case ignored). A wrong key would produce an APK that
+    # phones refuse to install over the previous release, so fail instead.
+    if [ "$3" = release ] && [ -n "${ANDROID_CERT_SHA256:-}" ]; then
+        local want got
+        want=$(printf '%s' "$ANDROID_CERT_SHA256" | tr -d ': ' | tr 'A-F' 'a-f')
+        got=$("$BT/apksigner$BAT" verify --print-certs "$out" |
+            sed -n 's/^Signer #1 certificate SHA-256 digest: *//p' | tr -d ': \r' | tr 'A-F' 'a-f')
+        if [ "$got" != "$want" ]; then
+            echo "error: APK signer certificate SHA-256 is '$got', expected '$want'" >&2
+            rm -f "$out"
+            exit 1
+        fi
+        echo "signer certificate SHA-256 matches the pinned fingerprint"
+    fi
     echo "$out"
 }
 

@@ -11,6 +11,10 @@
   folder"), pick it under "Texture pack" and restart.
 
 **Windows:** download `Birdman64-windows-x64.zip`. **Linux:** download the `.AppImage`.
+**Android (experimental):** sideload `Birdman64-android-arm64.apk` (64-bit phones,
+Android 8+), start it once, then copy your ROM into `Android/data/app.birdman64/files/rom/`
+on the phone and start it again. The first launch builds the game on the phone (internet
+needed once, about 240 MB installed). Later APKs install over it and keep your saves.
 
 You need your own Pilotwings 64 (US) ROM.
 

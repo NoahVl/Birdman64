@@ -190,7 +190,10 @@ checks, cache key, `find_cached`). Works on the test device end to end.
 - **ROM / files:** pick the ROM through the Storage Access Framework
   (`ACTION_OPEN_DOCUMENT`, JNI), copy it into app storage.
 - **Release APK:** built by CI (`android-apk` job, release.yml `android`); left:
-  suspend/resume during the setup screen (untested).
+  suspend/resume during the setup screen (untested). `--sign-only` with
+  `ANDROID_CERT_SHA256` set (release.yml pins the release cert) fails unless
+  `apksigner verify --print-certs` reports that signer: a wrong key would make an APK
+  phones refuse to install over the previous release.
 
 ## Order
 
