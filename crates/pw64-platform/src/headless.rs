@@ -519,6 +519,132 @@ static EEP_BACKED_UP: AtomicBool = AtomicBool::new(false);
 /// The "couldn't save" toast was shown this session (S6): once, not per save.
 static SAVE_FAIL_TOASTED: AtomicBool = AtomicBool::new(false);
 
+/// [`eep_edit_and_freeze`] replaced the file: from then on game writes stay
+/// in memory, so the game's RAM copy of the old saves can never be written
+/// back over the edited file before the process exits.
+static EEP_FROZEN: AtomicBool = AtomicBool::new(false);
+
+/// The save file could not be read this session (writes are skipped to
+/// protect it); host-side save edits must not run either.
+pub fn eep_read_failed() -> bool {
+    EEP_READ_FAILED.load(Ordering::Relaxed)
+}
+
+/// What [`eep_edit_and_freeze`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EepEdit {
+    /// The edit changed nothing: no backup, no write, not frozen.
+    Unchanged,
+    /// The file now holds the edited image; the previous image is in
+    /// `backup` (a new file, never an existing one overwritten).
+    Written { backup: std::path::PathBuf },
+}
+
+/// Edits the save image from outside the game (the settings screen's
+/// "Unlock everything"), for a restart to load. `edit` gets a copy of the
+/// image and returns whether it changed it. When it did: the old image is
+/// written to a fresh `<eep><backup_suffix>` (then `-2`, `-3`, … so an older
+/// backup is never overwritten), the new one replaces the file atomically,
+/// and further game writes are kept off the disk for the rest of the
+/// process (the game still holds the old saves in RAM). Any failure leaves
+/// the file as it was. Refused while the file couldn't be read.
+pub fn eep_edit_and_freeze(
+    edit: impl FnOnce(&mut [u8]) -> bool,
+    backup_suffix: &str,
+) -> Result<EepEdit, String> {
+    if EEP_READ_FAILED.load(Ordering::Relaxed) {
+        return Err("the save file couldn't be read this session".into());
+    }
+    if EEP_FROZEN.load(Ordering::Relaxed) {
+        return Err("already changed: restart Birdman64 first".into());
+    }
+    let path = eep_path();
+    let mut data = eep_data().lock().unwrap();
+    let r = edit_image(&path, &mut data, edit, backup_suffix);
+    if matches!(r, Ok(EepEdit::Written { .. })) {
+        EEP_FROZEN.store(true, Ordering::Relaxed);
+    }
+    r
+}
+
+/// `<eep><suffix>`: where [`eep_edit_and_freeze`] puts its first backup
+/// (the later ones get `-2`, `-3`, …).
+pub fn eep_backup_path(suffix: &str) -> std::path::PathBuf {
+    let mut name = eep_path().into_os_string();
+    name.push(suffix);
+    std::path::PathBuf::from(name)
+}
+
+/// A backup [`eep_edit_and_freeze`] wrote, read back as a whole EEPROM
+/// image. Anything but a readable file of exactly `EEP_SIZE` bytes (what
+/// every backup is) is refused, so a stray or truncated file never becomes
+/// the save.
+pub fn eep_read_backup(path: &std::path::Path) -> Result<[u8; EEP_SIZE], String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("couldn't read the backup: {e}"))?;
+    <[u8; EEP_SIZE]>::try_from(bytes.as_slice()).map_err(|_| {
+        format!(
+            "the backup is {} bytes, not a {EEP_SIZE}-byte save",
+            bytes.len()
+        )
+    })
+}
+
+/// [`eep_edit_and_freeze`]'s body on an explicit path + image (testable
+/// without the process-wide EEPROM cache). `data` is updated only after the
+/// file write succeeded.
+fn edit_image(
+    path: &std::path::Path,
+    data: &mut [u8; EEP_SIZE],
+    edit: impl FnOnce(&mut [u8]) -> bool,
+    backup_suffix: &str,
+) -> Result<EepEdit, String> {
+    let mut new = *data;
+    if !edit(&mut new) || new == *data {
+        return Ok(EepEdit::Unchanged);
+    }
+    let backup = write_new_backup(path, &data[..], backup_suffix)
+        .map_err(|e| format!("couldn't back up the save file: {e}"))?;
+    write_atomic(path, &new).map_err(|e| format!("couldn't write the save file: {e}"))?;
+    *data = new;
+    Ok(EepEdit::Written { backup })
+}
+
+/// Writes `bytes` to the first free `<path><suffix>`, `<path><suffix>-2`, …
+/// (`create_new`: an existing backup is never replaced), synced to disk.
+fn write_new_backup(
+    path: &std::path::Path,
+    bytes: &[u8],
+    suffix: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+    for n in 1..1000 {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        if n > 1 {
+            name.push(format!("-{n}"));
+        }
+        let p = std::path::PathBuf::from(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&p)
+        {
+            Ok(mut f) => {
+                let r = f.write_all(bytes).and_then(|()| f.sync_all());
+                if let Err(e) = r {
+                    drop(f);
+                    let _ = std::fs::remove_file(&p);
+                    return Err(e);
+                }
+                return Ok(p);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other("too many backups"))
+}
+
 /// Sets the fallback EEPROM path for when `PW64_EEP` is unset. Call before
 /// the EEPROM is first used (i.e. before `os::boot`); later calls are
 /// ignored. `PW64_EEP` keeps priority over this.
@@ -642,7 +768,9 @@ pub unsafe extern "C-unwind" fn osEepromLongWrite(
         if let Err(e) = persist(
             &path,
             &*data,
-            EEP_READ_FAILED.load(Ordering::Relaxed),
+            // Frozen (`eep_edit_and_freeze`): the game's old RAM copy must
+            // not reach the edited file; skipped like an unreadable file.
+            EEP_READ_FAILED.load(Ordering::Relaxed) || EEP_FROZEN.load(Ordering::Relaxed),
             &EEP_BACKED_UP,
         ) {
             eprintln!("[platform] EEPROM write to {path:?} failed: {e}");
@@ -989,6 +1117,125 @@ mod tests {
             b"old image",
             "old save intact"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host-side save edit: no-op edits write nothing; a real one backs
+    /// the old image up to a new file (a second edit gets `-2`, the first
+    /// backup survives), then replaces the save; a failed backup leaves
+    /// both the file and the in-memory image alone.
+    #[test]
+    fn edit_image_backs_up_without_overwriting() {
+        let dir = std::env::temp_dir().join("pw64-eep-edit-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let eep = dir.join("pw64.eep");
+        let mut data = [0u8; EEP_SIZE];
+        data[0] = 1;
+        std::fs::write(&eep, data).unwrap();
+        // Unchanged: nothing written.
+        let r = edit_image(&eep, &mut data, |_| true, ".before-x");
+        assert_eq!(r, Ok(EepEdit::Unchanged));
+        assert!(!dir.join("pw64.eep.before-x").exists());
+        // First edit.
+        let r = edit_image(
+            &eep,
+            &mut data,
+            |d| {
+                d[0] = 2;
+                true
+            },
+            ".before-x",
+        );
+        let b1 = dir.join("pw64.eep.before-x");
+        assert_eq!(r, Ok(EepEdit::Written { backup: b1.clone() }));
+        assert_eq!(std::fs::read(&b1).unwrap()[0], 1);
+        assert_eq!(std::fs::read(&eep).unwrap()[0], 2);
+        assert_eq!(data[0], 2);
+        // Second edit: a new backup, the first one kept.
+        let r = edit_image(
+            &eep,
+            &mut data,
+            |d| {
+                d[0] = 3;
+                true
+            },
+            ".before-x",
+        );
+        let b2 = dir.join("pw64.eep.before-x-2");
+        assert_eq!(r, Ok(EepEdit::Written { backup: b2.clone() }));
+        assert_eq!(std::fs::read(&b1).unwrap()[0], 1);
+        assert_eq!(std::fs::read(&b2).unwrap()[0], 2);
+        assert_eq!(std::fs::read(&eep).unwrap()[0], 3);
+        // A backup that can't be made (its directory is missing): the save
+        // and the image stay as they are.
+        let gone = dir.join("missing").join("pw64.eep");
+        let r = edit_image(
+            &gone,
+            &mut data,
+            |d| {
+                d[0] = 4;
+                true
+            },
+            ".before-x",
+        );
+        assert!(r.is_err());
+        assert_eq!(data[0], 3);
+        assert_eq!(std::fs::read(&eep).unwrap()[0], 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Restore = an edit that copies a backup back: an edit then a restore
+    /// gives the original bytes; the restore's own backup never replaces an
+    /// older one (`-2`); a backup of the wrong size or a missing one is
+    /// refused before anything is written.
+    #[test]
+    fn restore_from_backup_round_trips() {
+        let dir = std::env::temp_dir().join("pw64-eep-restore-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let eep = dir.join("pw64.eep");
+        let original: [u8; EEP_SIZE] = std::array::from_fn(|i| i as u8);
+        let mut data = original;
+        std::fs::write(&eep, data).unwrap();
+        let fill = |d: &mut [u8]| {
+            d.fill(0x55);
+            true
+        };
+        edit_image(&eep, &mut data, fill, ".before-u").unwrap();
+        let ub = dir.join("pw64.eep.before-u");
+        let backup = eep_read_backup(&ub).unwrap();
+        let restore = |d: &mut [u8]| {
+            d.copy_from_slice(&backup);
+            true
+        };
+        let r = edit_image(&eep, &mut data, restore, ".before-r").unwrap();
+        assert_eq!(
+            r,
+            EepEdit::Written {
+                backup: dir.join("pw64.eep.before-r")
+            }
+        );
+        assert_eq!(std::fs::read(&eep).unwrap(), original);
+        assert_eq!(data, original);
+        assert!(ub.exists(), "the unlock backup stays");
+        // Unlock + restore again: the second restore backup gets -2.
+        edit_image(&eep, &mut data, fill, ".before-u").unwrap();
+        let r = edit_image(&eep, &mut data, restore, ".before-r").unwrap();
+        assert_eq!(
+            r,
+            EepEdit::Written {
+                backup: dir.join("pw64.eep.before-r-2")
+            }
+        );
+        assert_eq!(
+            std::fs::read(dir.join("pw64.eep.before-r")).unwrap(),
+            [0x55; EEP_SIZE]
+        );
+        // Invalid backups are refused.
+        std::fs::write(&ub, [0u8; 0x200]).unwrap();
+        assert!(eep_read_backup(&ub).unwrap_err().contains("512 bytes"));
+        assert!(eep_read_backup(&dir.join("missing")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

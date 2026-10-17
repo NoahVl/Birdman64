@@ -42,6 +42,7 @@ mod settings;
 mod sys;
 mod toast;
 mod touch;
+pub mod unlock;
 mod window;
 
 use pw64_platform::{headless, os};
