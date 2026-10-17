@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   a frame-time graph, CPU load (busiest core), GPU load and the screen corner are each optional.
   The old "Show FPS" option is now the counter here.
 
+- Texture packs without command-line setup: put a pack folder in the new
+  `packs` folder (Settings > Display & graphics > "Open texture packs
+  folder"), pick it under "Texture pack" and restart.
+
 ## [1.2.0] - 2026-10-14
 
 ### Added

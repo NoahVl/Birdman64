@@ -83,6 +83,14 @@ pub fn running_lock() -> PathBuf {
     data_dir().join("running.lock")
 }
 
+/// The player-facing texture pack folder: `<data dir>/packs`. A pack is a
+/// folder in here (`[graphics] texture_pack = "<name>"`, the settings
+/// screen's Texture pack row); `PW64_TEX_PACKS` may point anywhere instead
+/// (`opts::texture_pack_dir`).
+pub fn packs_dir() -> PathBuf {
+    data_dir().join("packs")
+}
+
 /// Opens `dir` in the system file manager (ux-1.0 U13 "Open log folder",
 /// U14 "Open the folder now?"). Fire and forget: the child outlives us,
 /// so a slow file manager never delays the exit, and failures are logged
