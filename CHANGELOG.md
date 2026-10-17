@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Move your save between PC and Android (or keep a backup): the pause menu has
+  "Export save…" and "Import save…". Importing keeps your old save next to it
+  as `pw64.eep.before-import` and restarts the game (on Android it asks you to
+  reopen the app). On Android, "Open save folder" is replaced by these two.
+
 ### Fixed
 
 - Android: picking the ROM from some storage apps could close the app

@@ -146,6 +146,13 @@ enum Row {
     TouchLayout,
     /// Main (Android only): on-screen buttons shown / only the menu button.
     TouchHidden,
+    /// Main: copy the save out to a file the player picks.
+    ExportSave,
+    /// Main: replace the save with a picked file, then restart.
+    ImportSave,
+    /// Main (Android only, after an import): close the app so the next
+    /// start loads the imported save.
+    CloseApp,
 }
 
 /// Which input kind a Bind / Reset row edits.
@@ -446,6 +453,10 @@ pub struct Overlay {
     /// Why the last "Restart now" failed to spawn (shown under the restart
     /// banner, U16); cleared with the banner itself.
     restart_error: Option<String>,
+    /// The last save export / import result for the Main page's status line
+    /// (text, is an error), and whether an import is waiting for a restart.
+    transfer_status: Option<(String, bool)>,
+    import_done: bool,
     /// The monitor's refresh rate in whole Hz (the Frame-rate row's
     /// "Match display ({hz} Hz)" value, U5); `None`: unknown.
     monitor_hz: Option<u32>,
@@ -562,6 +573,8 @@ impl Overlay {
             touch_edit_requested: false,
             restart_requested: false,
             restart_error: None,
+            transfer_status: None,
+            import_done: false,
             monitor_hz: None,
             capture: None,
             p2_capture: None,
@@ -789,6 +802,40 @@ impl Overlay {
     /// spawn have both happened; only the exit is left).
     pub fn take_restart(&mut self) -> bool {
         std::mem::take(&mut self.restart_requested)
+    }
+
+    /// Takes a finished save export / import (`save_transfer`): the Main
+    /// page's status line says what happened. An import restarts the game
+    /// (desktop) or asks to close the app (Android) to load the new save.
+    fn poll_transfer(&mut self) {
+        use crate::save_transfer::Outcome;
+        let Some(outcome) = crate::save_transfer::poll() else {
+            return;
+        };
+        self.transfer_status = match outcome {
+            Outcome::Cancelled => None,
+            Outcome::Exported => Some(("Save exported.".to_string(), false)),
+            Outcome::Failed(e) => Some((e, true)),
+            Outcome::Imported => {
+                self.import_done = true;
+                if cfg!(target_os = "android") {
+                    Some((
+                        "Save imported. Close Birdman64 and open it again to use it."
+                            .to_string(),
+                        false,
+                    ))
+                } else {
+                    self.restart_now();
+                    // A failed restart keeps the overlay: say what to do.
+                    self.restart_error.take().map(|e| {
+                        (
+                            format!("Save imported. {e} Close Birdman64 and open it again."),
+                            true,
+                        )
+                    })
+                }
+            }
+        };
     }
 
     /// Disarms the Quit row once its 3 s window has passed (U3). Called
@@ -1092,6 +1139,7 @@ impl Overlay {
     pub fn render(&mut self, gpu: &mut Gpu, view: &wgpu::TextureView) -> bool {
         self.poll_capture();
         self.poll_p2_capture();
+        self.poll_transfer();
         self.quit_check();
         self.pad_nav();
         self.running_mode = gpu.display_mode;
@@ -1301,13 +1349,20 @@ impl Overlay {
                     // U26: pause when the window goes to the background.
                     Row::Opt(Opt::PauseBackground),
                     Row::OpenSaveFolder,
+                    Row::ExportSave,
+                    Row::ImportSave,
                     Row::Quit,
                 ];
                 // Android: the touch controls' edit mode and the "only
-                // menu" switch, under Controls.
+                // menu" switch, under Controls. Its save folder is private
+                // (no file manager reaches it): export / import replace it.
                 if cfg!(target_os = "android") {
                     rows.insert(2, Row::TouchLayout);
                     rows.insert(3, Row::TouchHidden);
+                    rows.retain(|r| *r != Row::OpenSaveFolder);
+                    if self.import_done {
+                        rows.insert(rows.len() - 1, Row::CloseApp);
+                    }
                 }
                 rows
             }
@@ -1436,7 +1491,27 @@ impl Overlay {
                 self.text_row(ui, at(Row::PerfPage), "Performance overlay \u{203a}");
                 self.opt_row(ui, at(Row::Opt(Opt::Volume)), Opt::Volume);
                 self.opt_row(ui, at(Row::Opt(Opt::PauseBackground)), Opt::PauseBackground);
-                self.text_row(ui, at(Row::OpenSaveFolder), "Open save folder");
+                if rows.contains(&Row::OpenSaveFolder) {
+                    self.text_row(ui, at(Row::OpenSaveFolder), "Open save folder");
+                }
+                let busy = crate::save_transfer::busy();
+                self.text_row(
+                    ui,
+                    at(Row::ExportSave),
+                    if busy { "Export save\u{2026} (waiting)" } else { "Export save\u{2026}" },
+                );
+                self.text_row(ui, at(Row::ImportSave), "Import save\u{2026}");
+                if rows.contains(&Row::CloseApp) {
+                    self.text_row(ui, at(Row::CloseApp), "Close Birdman64");
+                }
+                if let Some((text, is_error)) = &self.transfer_status {
+                    let color = if *is_error {
+                        egui::Color32::LIGHT_RED
+                    } else {
+                        egui::Color32::LIGHT_GREEN
+                    };
+                    ui.colored_label(color, text);
+                }
                 // Quit (U3): armed, the row turns into a red second chance.
                 let quit_text = if self.quit_armed.is_some() {
                     egui::RichText::new("Press again to quit")
@@ -2111,6 +2186,16 @@ impl Overlay {
             Row::PerfPage => self.enter_page(Page::Perf, Row::PerfPage),
             // U15: the save/data folder in the OS file manager.
             Row::OpenSaveFolder => crate::paths::open_in_file_manager(crate::paths::data_dir()),
+            Row::ExportSave | Row::ImportSave => {
+                let kind = if rows[self.sel] == Row::ExportSave {
+                    crate::save_transfer::Kind::Export
+                } else {
+                    crate::save_transfer::Kind::Import
+                };
+                self.transfer_status = None;
+                crate::save_transfer::start(kind);
+            }
+            Row::CloseApp => std::process::exit(0),
             // The texture packs folder: created when missing (the Texture
             // pack row's choices come from it), then opened like above.
             Row::OpenPacksFolder => {
@@ -2337,6 +2422,9 @@ impl Overlay {
             | Row::OpenSaveFolder
             | Row::TouchLayout
             | Row::TouchHidden
+            | Row::ExportSave
+            | Row::ImportSave
+            | Row::CloseApp
             | Row::OpenPacksFolder
             | Row::RestartNow => {}
             // Neither do Resume / the page-open rows / Reset to defaults.
@@ -3064,6 +3152,15 @@ fn help(row: Row) -> &'static str {
             "Your save (pw64.eep), settings and crash reports. Copy pw64.eep to back up \
              your progress."
         }
+        Row::ExportSave => {
+            "Copies your save to a file you choose: a backup, or to carry it to another \
+             device (PC or Android)."
+        }
+        Row::ImportSave => {
+            "Replaces your save with one from a file. Your current save is kept next to it \
+             as pw64.eep.before-import; Birdman64 restarts to load the new one."
+        }
+        Row::CloseApp => "Closes the app. Open it again to play with the imported save.",
         Row::OpenPacksFolder => {
             "The folder texture packs live in: one folder per pack. Opened here after \
              dropping one in, pick it on the Texture pack row."
@@ -3743,9 +3840,9 @@ mod tests {
     fn rows_pages_and_controls_row() {
         let mut o = Overlay::new();
         // Main: Resume, the three sub-pages, Volume, the background-pause
-        // row, Open save folder, Quit (U2, U3, U15, U26).
+        // row, Open save folder, Export / Import save, Quit (U2, U3, U15, U26).
         let rows = o.rows();
-        assert_eq!(rows.len(), 9);
+        assert_eq!(rows.len(), 11);
         assert_eq!(rows[0], Row::Resume);
         assert_eq!(rows[1], Row::Controls);
         assert_eq!(rows[2], Row::SplitScreen);
@@ -3754,7 +3851,9 @@ mod tests {
         assert_eq!(rows[5], Row::Opt(Opt::Volume));
         assert_eq!(rows[6], Row::Opt(Opt::PauseBackground));
         assert_eq!(rows[7], Row::OpenSaveFolder);
-        assert_eq!(rows[8], Row::Quit);
+        assert_eq!(rows[8], Row::ExportSave);
+        assert_eq!(rows[9], Row::ImportSave);
+        assert_eq!(rows[10], Row::Quit);
         // The performance overlay page: the counter, the opt-in extras, Back.
         o.sel = 4;
         o.confirm();
