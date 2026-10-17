@@ -116,7 +116,8 @@ jobs:
         id: ndk
         with:
           ndk-version: r27c
-          local-cache: true
+          # No local-cache: its restore dropped the NDK's clang symlink
+          # (aarch64-linux-android26-clang: "bin/clang: No such file").
       - name: NDK toolchain env
         run: |
           bin="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"

@@ -81,7 +81,12 @@ fn reserve(base: usize) -> bool {
     {
         // SAFETY: plain reservation at a fixed address; checked.
         let p = unsafe {
-            sys::VirtualAlloc(base as *mut _, ARENA_SIZE, sys::MEM_RESERVE, sys::PAGE_NOACCESS)
+            sys::VirtualAlloc(
+                base as *mut _,
+                ARENA_SIZE,
+                sys::MEM_RESERVE,
+                sys::PAGE_NOACCESS,
+            )
         };
         p as usize == base
     }
@@ -93,7 +98,10 @@ fn reserve(base: usize) -> bool {
             base as *mut libc::c_void,
             ARENA_SIZE,
             libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | pw64_platform::MAP_FIXED_NOREPLACE,
+            libc::MAP_PRIVATE
+                | libc::MAP_ANONYMOUS
+                | libc::MAP_NORESERVE
+                | pw64_platform::MAP_FIXED_NOREPLACE,
             -1,
             0,
         );
@@ -109,7 +117,8 @@ fn commit(addr: usize, len: usize) -> bool {
     #[cfg(windows)]
     {
         // SAFETY: pages inside our own reservation.
-        let p = unsafe { sys::VirtualAlloc(addr as *mut _, len, sys::MEM_COMMIT, sys::PAGE_READWRITE) };
+        let p =
+            unsafe { sys::VirtualAlloc(addr as *mut _, len, sys::MEM_COMMIT, sys::PAGE_READWRITE) };
         !p.is_null()
     }
     #[cfg(any(target_os = "linux", target_os = "android"))]

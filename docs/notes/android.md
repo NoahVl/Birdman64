@@ -137,22 +137,44 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
   `adb install -r`, wiped by an uninstall (as is the external `rom/`).
 - Pause menu rows that mean nothing on Android yet: "Open save folder", "Quit".
 
-## Building the game module
+## Building the game module on the device (release flavour)
 
-- **On device:** zig ships `aarch64-linux` builds (~37 MB xz). Android 10+ blocks
-  `exec()` of files in app data, so ship zig in the APK as `lib/arm64-v8a/libzig.so`
-  and run it from `nativeLibraryDir`. Check that `dlopen` of a module written to app
-  storage still works on current Android versions. Use the same download, hash check,
-  patch and cache flow as the desktop. Compile time on a phone is unmeasured.
-- **Fallback:** the desktop exe builds an Android module with
-  `--target=aarch64-linux-android`, and the player copies it over. Simpler and no
-  zig in the APK, but a worse experience for beginners.
+`build-apk.sh --release-flavour` = feature `first-run`: no game C in the APK; same
+launcher as the desktop (firstrun.rs: setup screen, `cache/build.log`, manifest hash
+checks, cache key, `find_cached`). Works on the test device end to end.
+- **zig:** the official `zig-aarch64-linux-0.16.0` binary (static, ET_EXEC, 159 MB;
+  `get_zig --android` → `tools/zig-android/`), unmodified, packed as
+  `lib/arm64-v8a/libzig.so` (+ `assets/licenses/zig-LICENSE.txt`). Only the binary is
+  needed (`zig clang`/`ld.lld`, `-nostdinc`, no `lib/`). Android 10+ (targetSdk 29+)
+  forbids `execve` of app-data files, but `nativeLibraryDir` (`apk_data_file`) is
+  exec-able: `extractNativeLibs="true"` extracts it there. firstrun.rs finds the dir
+  with `dladdr` on our own `.so` (`android::native_lib_dir`). No HOME/cache env
+  needed; the app's seccomp filter let it run. The `/system/bin/linker64` fallback is
+  unneeded (and can't load a static ET_EXEC anyway).
+- **Module:** zig target `aarch64-linux-android26`, link adds `-z max-page-size=16384`
+  (16 KB-page devices); written to `files/cache/game/<key>/libpw64game.so` and
+  `dlopen`ed from there: SELinux allows mmap-exec of app data, only exec is blocked.
+  Cached start: module loaded 2 ms after the ROM step.
+- **Download:** same ureq/rustls code; the platform verifier needs a Java part the
+  APK lacks, so Android reads the system CA dir (`/apex/com.android.conscrypt/cacerts`,
+  else `/system/etc/security/cacerts`, PEM) into `RootCerts::Specific` (fetch.rs).
+  Manifest: `INTERNET` (normal permission, no prompt).
+- **Time (Pixel 9, 8 cores, 8 jobs), screen on:** compile 207 files 5.1 s, link
+  0.6 s, **~7 s total** (desktop 16 threads: ~6 s). With the screen off (CPUs
+  throttled) the compile took 38 s. Flew a hang glider test on the built module.
+- **Size:** APK 77 MB (dev APK 21 MB); installed zig adds 159 MB to the app size.
+  A smaller payload would need a custom clang/lld build: not worth it yet.
+- Setup screen on Android: "phone" wording, no "Open log folder" (no file manager
+  for app-private files), taps reach Retry / Quit.
+- Dev APK unchanged (`build-apk.sh [--debug]`, game C linked in). Windows hosts: the
+  script hands get_zig Git Bash's GNU tar (`PW64_TAR`): Windows' tar.exe hangs on .xz.
 
 ## Frontend work left
 
 - **ROM / files:** pick the ROM through the Storage Access Framework
   (`ACTION_OPEN_DOCUMENT`, JNI), copy it into app storage.
-- **Release APK:** debug-signed APK as a release asset (CI signing); no static game C.
+- **Release APK:** `--release-flavour` exists; left: CI signing/upload, the LLVM
+  licence text next to zig's, and suspend/resume during the setup screen (untested).
 
 ## Order
 
@@ -161,4 +183,5 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
 3. **Android, pad only:** groundwork done and device-tested (above); next is the
    pad stick path. A module built on desktop: `Os::Android` exists in pw64-cbuild,
    but the builder only targets its host so far.
-4. **On-device build, touch controls, SAF ROM picker:** usable by beginners.
+4. **On-device build, touch controls, SAF ROM picker:** usable by beginners. The
+   first two are done; the SAF picker is next.

@@ -249,9 +249,16 @@ pub fn link_args(os: Os) -> Vec<String> {
         // build there, option-a.md "Flipping the default"): never an
         // `--image-base`. Android also rejects text relocations (API 23+);
         // the -fPIE objects have none.
-        Os::LinuxArm64 | Os::Android => ["ld.lld", "-shared", "-Bsymbolic", "--eh-frame-hdr"]
+        Os::LinuxArm64 => ["ld.lld", "-shared", "-Bsymbolic", "--eh-frame-hdr"]
             .iter()
             .chain(&["-z", "noexecstack"])
+            .map(|s| s.to_string())
+            .collect(),
+        // Android 15+ devices may run 16 KB pages: LOAD segments must be
+        // 16 KB aligned or bionic refuses the module (same as the app .so).
+        Os::Android => ["ld.lld", "-shared", "-Bsymbolic", "--eh-frame-hdr"]
+            .iter()
+            .chain(&["-z", "noexecstack", "-z", "max-page-size=16384"])
             .map(|s| s.to_string())
             .collect(),
     }

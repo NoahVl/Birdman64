@@ -25,6 +25,20 @@ reloc = []
 name = "kernel_diff"
 required-features = ["static"]
 
+# The vaddr-region tests register the exe image only; a dylib build needs the
+# module loaded first (memmap::register_regions), which they don't do.
+[[test]]
+name = "rdram_alias"
+required-features = ["static"]
+
+[[test]]
+name = "rdram_on"
+required-features = ["static"]
+
+[[test]]
+name = "rdram_strict"
+required-features = ["static"]
+
 [build-dependencies]
 cc.workspace = true
 pw64-cbuild.workspace = true

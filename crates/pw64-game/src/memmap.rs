@@ -325,7 +325,14 @@ fn reserve_noaccess(base: usize, len: usize) -> bool {
     #[cfg(windows)]
     {
         // SAFETY: plain Win32 reservation at a fixed address; checked.
-        let p = unsafe { sys::VirtualAlloc(base as *mut c_void, len, sys::MEM_RESERVE, sys::PAGE_NOACCESS) };
+        let p = unsafe {
+            sys::VirtualAlloc(
+                base as *mut c_void,
+                len,
+                sys::MEM_RESERVE,
+                sys::PAGE_NOACCESS,
+            )
+        };
         p as usize == base
     }
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -336,7 +343,10 @@ fn reserve_noaccess(base: usize, len: usize) -> bool {
             base as *mut c_void,
             len,
             libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | pw64_platform::MAP_FIXED_NOREPLACE,
+            libc::MAP_PRIVATE
+                | libc::MAP_ANONYMOUS
+                | libc::MAP_NORESERVE
+                | pw64_platform::MAP_FIXED_NOREPLACE,
             -1,
             0,
         );
@@ -701,7 +711,10 @@ pub fn init() -> String {
         Reloc::Alias => reserved += &format!(", RDRAM alias: high view at {:#x}", rdram_host()),
         Reloc::On => {
             let stacks = pw64_platform::os::stack::window().0;
-            reserved += &format!(", relocated: RDRAM at {:#x}, stacks at {stacks:#x}", rdram_host())
+            reserved += &format!(
+                ", relocated: RDRAM at {:#x}, stacks at {stacks:#x}",
+                rdram_host()
+            )
         }
         Reloc::Strict => {
             // S6 audit: Rust heap blocks from now on lie above 4 GB, so one

@@ -342,8 +342,19 @@ mod tests {
             },
         ];
         let vaddrs = [
-            0u32, 0x1050, 0x003D_A800, 0x7FFF_FFFF, 0x8000_0000, 0x803D_A800, 0x807F_FFFF,
-            0x8080_0000, 0x817F_FFFF, 0x8180_0000, 0xB000_0010, 0xC000_1234, u32::MAX,
+            0u32,
+            0x1050,
+            0x003D_A800,
+            0x7FFF_FFFF,
+            0x8000_0000,
+            0x803D_A800,
+            0x807F_FFFF,
+            0x8080_0000,
+            0x817F_FFFF,
+            0x8180_0000,
+            0xB000_0010,
+            0xC000_1234,
+            u32::MAX,
         ];
         for regions in [&[][..], &R[..], &multi[..]] {
             let m = VMap::for_regions(regions);

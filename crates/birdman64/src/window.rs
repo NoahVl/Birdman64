@@ -1966,6 +1966,14 @@ impl ApplicationHandler<UserEvent> for App {
                     s.pointer_button(x, y, scale, pressed);
                     g.window.request_redraw();
                 }
+                // First-run setup screen (error Retry / Quit buttons).
+                #[cfg(feature = "first-run")]
+                if let (Some(s), Some(g)) = (&mut self.setup, &self.gpu) {
+                    let scale = g.window.scale_factor() as f32;
+                    s.pointer_moved(x, y, scale);
+                    s.pointer_button(x, y, scale, pressed);
+                    g.window.request_redraw();
+                }
                 if let (true, Some(o)) = (settings::is_open(), &mut self.overlay) {
                     o.pointer_moved(x, y);
                     o.pointer_button(x, y, pressed);

@@ -4,12 +4,17 @@
 //! pw64-game's build.rs looks for it. Used by devs and CI alike.
 //!
 //! ```sh
-//! cargo run -p pw64-cbuild --example get_zig --features fetch [-- --out <dir>]
+//! cargo run -p pw64-cbuild --example get_zig --features fetch [-- --out <dir>] [--android]
 //! ```
 //!
 //! Does nothing when `<out>/zig[.exe] version` already prints the pinned
 //! version. Windows: the zip is read with the `zip` crate; Linux: the tar.xz
 //! is unpacked by the system `tar` (xz-utils), no extra crate.
+//!
+//! `--android`: the aarch64-linux zig for the first-run Android APK
+//! (packaging/android/build-apk.sh `--release-flavour`), default out
+//! `tools/zig-android/`, on any host (needs a `tar` with xz: Git Bash's on
+//! Windows). It can't run here, so only an existing file counts as done.
 
 use pw64_cbuild::{ZIG_VERSION, ZigDist};
 use sha2::{Digest, Sha256};
@@ -26,13 +31,37 @@ fn main() -> Result<(), String> {
         .ancestors()
         .nth(2)
         .expect("crates/pw64-cbuild sits two levels below the repo root");
-    let mut out = repo.join("tools").join("zig");
+    let mut out = None;
+    let mut android = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--out" => out = PathBuf::from(it.next().ok_or("--out: missing value")?),
-            other => return Err(format!("unknown argument {other:?} (only --out <dir>)")),
+            "--out" => out = Some(PathBuf::from(it.next().ok_or("--out: missing value")?)),
+            "--android" => android = true,
+            other => {
+                return Err(format!(
+                    "unknown argument {other:?} (only --out <dir>, --android)"
+                ));
+            }
         }
+    }
+    let default_dir = if android { "zig-android" } else { "zig" };
+    let out = out.unwrap_or_else(|| repo.join("tools").join(default_dir));
+    if android {
+        let exe = out.join("zig");
+        if exe.is_file() {
+            println!("{} already exists", exe.display());
+            return Ok(());
+        }
+        let dist = &pw64_cbuild::ZIG_LINUX_ARM64;
+        let bytes = download_checked(dist)?;
+        std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+        extract_tar(dist, &bytes, &out)?;
+        println!(
+            "installed {} (aarch64-linux zig {ZIG_VERSION})",
+            exe.display()
+        );
+        return Ok(());
     }
     let (dist, exe_name) = if cfg!(windows) {
         (&pw64_cbuild::ZIG_WINDOWS, "zig.exe")
@@ -50,19 +79,7 @@ fn main() -> Result<(), String> {
         println!("{} is already zig {ZIG_VERSION}", exe.display());
         return Ok(());
     }
-    println!("downloading {}", dist.url);
-    let bytes = download(dist.url)?;
-    let hash: String = Sha256::digest(&bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    if hash != dist.sha256 {
-        return Err(format!(
-            "sha256 mismatch for {}: got {hash}, expected {}",
-            dist.url, dist.sha256
-        ));
-    }
-    println!("sha256 ok ({} MB)", bytes.len() >> 20);
+    let bytes = download_checked(dist)?;
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     extract(dist, &bytes, &out, &exe)?;
     match version_of(&exe) {
@@ -84,6 +101,24 @@ fn version_of(exe: &Path) -> Option<String> {
     o.status
         .success()
         .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// The archive bytes, sha256-checked against the pinned hash.
+fn download_checked(dist: &ZigDist) -> Result<Vec<u8>, String> {
+    println!("downloading {}", dist.url);
+    let bytes = download(dist.url)?;
+    let hash: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if hash != dist.sha256 {
+        return Err(format!(
+            "sha256 mismatch for {}: got {hash}, expected {}",
+            dist.url, dist.sha256
+        ));
+    }
+    println!("sha256 ok ({} MB)", bytes.len() >> 20);
+    Ok(bytes)
 }
 
 fn download(url: &str) -> Result<Vec<u8>, String> {
@@ -129,22 +164,33 @@ fn extract(dist: &ZigDist, bytes: &[u8], out: &Path, exe: &Path) -> Result<(), S
             std::fs::write(&dest, data).map_err(|e| format!("{}: {e}", dest.display()))?;
         }
     } else {
-        let tarball = out.join("zig.tar.xz");
-        std::fs::write(&tarball, bytes).map_err(|e| format!("{}: {e}", tarball.display()))?;
-        let status = Command::new("tar")
-            .arg("-xJf")
-            .arg(&tarball)
-            .arg("-C")
-            .arg(out)
-            .arg("--strip-components=1")
-            .arg(dist.exe_in_archive)
-            .arg(format!("{top}/LICENSE"))
-            .status()
-            .map_err(|e| format!("running tar (needs xz-utils): {e}"))?;
-        let _ = std::fs::remove_file(&tarball);
-        if !status.success() {
-            return Err(format!("tar -xJf failed ({status})"));
-        }
+        extract_tar(dist, bytes, out)?;
+    }
+    Ok(())
+}
+
+/// Unpacks the zig binary + LICENSE of a tar.xz `dist` into `out` with
+/// `$PW64_TAR`, else the system `tar`. Run inside `out` with relative names:
+/// GNU tar reads a `C:/…` archive path as a remote `host:file`. Windows'
+/// own tar.exe hung piping through an external xz, hence `PW64_TAR`
+/// (build-apk.sh points it at Git Bash's GNU tar).
+fn extract_tar(dist: &ZigDist, bytes: &[u8], out: &Path) -> Result<(), String> {
+    let top = dist.exe_in_archive.split('/').next().unwrap();
+    let tarball = out.join("zig.tar.xz");
+    std::fs::write(&tarball, bytes).map_err(|e| format!("{}: {e}", tarball.display()))?;
+    let tar = std::env::var_os("PW64_TAR").unwrap_or_else(|| "tar".into());
+    let status = Command::new(tar)
+        .current_dir(out)
+        .arg("-xJf")
+        .arg("zig.tar.xz")
+        .arg("--strip-components=1")
+        .arg(dist.exe_in_archive)
+        .arg(format!("{top}/LICENSE"))
+        .status()
+        .map_err(|e| format!("running tar (needs xz-utils): {e}"))?;
+    let _ = std::fs::remove_file(&tarball);
+    if !status.success() {
+        return Err(format!("tar -xJf failed ({status})"));
     }
     Ok(())
 }

@@ -11,6 +11,10 @@
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
 
+    <!-- First-run build (release flavour): downloads the open-source decomp
+         once (docs/notes/android.md). A normal permission: no prompt. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- wgpu: Vulkan first, GLES 3 as the fallback. -->
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />

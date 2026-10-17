@@ -71,6 +71,12 @@ pub fn game() -> &'static Game {
         .expect("game module not loaded (pw64_game::dylib::load)")
 }
 
+/// The loaded module, or `None` before [`load`] (the settings screen's
+/// "any time" switches run in unit tests, which load no module).
+pub fn try_game() -> Option<&'static Game> {
+    GAME.get()
+}
+
 /// `[start, end)` of the module image once loaded, else `None` (no panic).
 pub fn loaded_range() -> Option<(usize, usize)> {
     GAME.get().map(|g| g.range)

@@ -166,7 +166,12 @@ pub fn panic_frames(skip: u32) -> String {
     let mut ips = [core::ptr::null_mut::<c_void>(); 48];
     // SAFETY: a buffer of 48 slots for at most 48 frames; no hash wanted.
     let n = unsafe {
-        sys::RtlCaptureStackBackTrace(skip + 1, ips.len() as u32, ips.as_mut_ptr(), core::ptr::null_mut())
+        sys::RtlCaptureStackBackTrace(
+            skip + 1,
+            ips.len() as u32,
+            ips.as_mut_ptr(),
+            core::ptr::null_mut(),
+        )
     };
     let mut s = String::new();
     let _ = write_images(&mut s, exe, module);
@@ -453,7 +458,10 @@ mod tests {
         assert_eq!(s, "images: exe 0x7ff612340000-0x7ff615340000");
         s.clear();
         let _ = write_images(&mut s, exe, module);
-        assert!(s.ends_with(", pw64game 0x7ffd00000000-0x7ffd00100000"), "{s}");
+        assert!(
+            s.ends_with(", pw64game 0x7ffd00000000-0x7ffd00100000"),
+            "{s}"
+        );
     }
 
     /// The panic report's frame list: this test function's own frame is an

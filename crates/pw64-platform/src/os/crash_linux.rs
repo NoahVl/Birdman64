@@ -305,7 +305,10 @@ extern "C" fn handler(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
     let (exe, module) = (handler_image_range(), module_range());
     let _ = write!(buf, "[crash] signal {sig} at {pc_name} ");
     let _ = write_rip(&mut buf, rip, exe, module);
-    let _ = write!(buf, " {sp_name} 0x{rsp:x}, fault address 0x{addr:x}\n[crash] ");
+    let _ = write!(
+        buf,
+        " {sp_name} 0x{rsp:x}, fault address 0x{addr:x}\n[crash] "
+    );
     let _ = write_images(&mut buf, exe, module);
     // Where the module's `.map` is (cache layout: next to the module): with
     // the `pw64game+0x<off>` form above, the faulting function is a lookup.

@@ -180,7 +180,12 @@ pub fn reserve_region_at(base: usize) -> bool {
     #[cfg(windows)]
     // SAFETY: plain Win32 reservation at a fixed address; failure is checked.
     let ok = unsafe {
-        sys::VirtualAlloc(base as *mut _, WINDOW_SIZE, sys::MEM_RESERVE, sys::PAGE_NOACCESS) as usize
+        sys::VirtualAlloc(
+            base as *mut _,
+            WINDOW_SIZE,
+            sys::MEM_RESERVE,
+            sys::PAGE_NOACCESS,
+        ) as usize
             == base
     };
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -473,7 +478,10 @@ mod tests {
             assert_eq!(of(usize::MAX - 2, 4), None);
         }
         // The default window's vaddrs are not slots of a relocated one.
-        assert_eq!(stack_slot_in(0x7_4000_0000, SEARCH_START + 0x2_0000, 4), None);
+        assert_eq!(
+            stack_slot_in(0x7_4000_0000, SEARCH_START + 0x2_0000, 4),
+            None
+        );
     }
 
     /// Creating a stack (PAGE_GUARD) must not move the caller's TEB

@@ -9,9 +9,9 @@
 //! they funnel into these functions, and `uvMemRead` already assembles values
 //! big-endian byte by byte (memory.c:185).
 
-use crate::vaddr;
 use crate::os::mesg::{OSMesg, OSMesgQueue};
 use crate::os::{reschedule, with};
+use crate::vaddr;
 use anyhow::Result;
 use pw64_rom::Rom;
 use std::ffi::c_void;

@@ -116,8 +116,9 @@ pub fn split_on() -> bool {
     #[cfg(feature = "static")]
     let v = unsafe { core::ptr::addr_of!(pw64_split).read_volatile() };
     // SAFETY: same global, exported by the loaded game module.
+    // Before the module loads: off.
     #[cfg(feature = "dylib")]
-    let v = unsafe { dylib::game().split.read_volatile() };
+    let v = dylib::try_game().map_or(0, |g| unsafe { g.split.read_volatile() });
     v != 0
 }
 
@@ -131,11 +132,12 @@ pub fn request_split(on: bool) {
     unsafe {
         core::ptr::addr_of_mut!(pw64_split_req).write_volatile(on as i32)
     };
-    // SAFETY: same global, exported by the loaded game module.
+    // SAFETY: same global, exported by the loaded game module (no module
+    // yet: nothing runs that could apply it).
     #[cfg(feature = "dylib")]
-    unsafe {
-        dylib::game().split_req.write_volatile(on as i32)
-    };
+    if let Some(g) = dylib::try_game() {
+        unsafe { g.split_req.write_volatile(on as i32) };
+    }
 }
 
 /// The [`request_split`] the game hasn't applied yet (`None`: nothing
@@ -146,7 +148,7 @@ pub fn split_req_pending() -> Option<bool> {
     let v = unsafe { core::ptr::addr_of!(pw64_split_req).read_volatile() };
     // SAFETY: same global, exported by the loaded game module.
     #[cfg(feature = "dylib")]
-    let v = unsafe { dylib::game().split_req.read_volatile() };
+    let v = dylib::try_game().map_or(-1, |g| unsafe { g.split_req.read_volatile() });
     (v >= 0).then_some(v != 0)
 }
 
@@ -161,9 +163,9 @@ pub fn set_split_hint(missing: bool) {
     };
     // SAFETY: same global, exported by the loaded game module.
     #[cfg(feature = "dylib")]
-    unsafe {
-        *dylib::game().split_hint = missing as i32
-    };
+    if let Some(g) = dylib::try_game() {
+        unsafe { *g.split_hint = missing as i32 };
+    }
 }
 
 /// Split-screen pilot collisions for the C side (splitscreen.md
@@ -178,9 +180,9 @@ pub fn set_split_collide(on: bool) {
     };
     // SAFETY: same global, exported by the loaded game module.
     #[cfg(feature = "dylib")]
-    unsafe {
-        *dylib::game().split_collide = on as i32
-    };
+    if let Some(g) = dylib::try_game() {
+        unsafe { *g.split_collide = on as i32 };
+    }
 }
 
 /// Split-screen view layout for the C side (splitscreen.md "Viewports"):
@@ -195,9 +197,9 @@ pub fn set_split_layout(left_right: bool) {
     };
     // SAFETY: same global, exported by the loaded game module.
     #[cfg(feature = "dylib")]
-    unsafe {
-        *dylib::game().split_layout = left_right as i32
-    };
+    if let Some(g) = dylib::try_game() {
+        unsafe { *g.split_layout = left_right as i32 };
+    }
 }
 
 /// Split-screen "Share best score" for the C side: on = when player 2's run
@@ -212,9 +214,9 @@ pub fn set_split_share(on: bool) {
     };
     // SAFETY: same global, exported by the loaded game module.
     #[cfg(feature = "dylib")]
-    unsafe {
-        *dylib::game().split_share = on as i32
-    };
+    if let Some(g) = dylib::try_game() {
+        unsafe { *g.split_share = on as i32 };
+    }
 }
 
 #[cfg(all(test, feature = "static"))]

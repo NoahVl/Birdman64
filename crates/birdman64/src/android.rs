@@ -74,6 +74,27 @@ fn android_main(app: AndroidApp) {
     crate::start(None, rom);
 }
 
+/// The APK's extracted native library dir (`ApplicationInfo.nativeLibraryDir`,
+/// needs `extractNativeLibs="true"`): the directory of this library, found
+/// with `dladdr` on one of its functions (no JNI needed). Empty if unknown.
+#[cfg_attr(not(feature = "first-run"), allow(dead_code))]
+pub(crate) fn native_lib_dir() -> PathBuf {
+    use std::os::unix::ffi::OsStrExt as _;
+    // SAFETY: Dl_info is plain data; dladdr fills it for an address inside
+    // a loaded object (this function) and returns 0 otherwise.
+    let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+    let found = unsafe { libc::dladdr(native_lib_dir as *const libc::c_void, &mut info) };
+    if found == 0 || info.dli_fname.is_null() {
+        return PathBuf::new();
+    }
+    // SAFETY: dli_fname is a NUL-terminated path owned by the linker.
+    let name = unsafe { std::ffi::CStr::from_ptr(info.dli_fname) };
+    Path::new(std::ffi::OsStr::from_bytes(name.to_bytes()))
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+}
+
 /// Display-cutout safe insets, px (left, top, right, bottom), as the UI
 /// thread last read them ([`apply_window_mode`]); 0 until then.
 static CUTOUT: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];

@@ -8,17 +8,30 @@
 # example); ANDROID_NDK_HOME (NDK r27+); ANDROID_HOME (build-tools + one
 # platform). Runs on Linux and Git Bash on Windows.
 #
-# Usage: packaging/android/build-apk.sh [--debug]
+# Usage: packaging/android/build-apk.sh [--debug] [--release-flavour]
 #   → target/android-apk/birdman64.apk
+#
+# Default: dev APK, game C linked into libbirdman64.so (never distribute).
+# --release-flavour: no game C (feature first-run); the app builds the game
+# module on the device with the bundled zig, shipped as
+# lib/arm64-v8a/libzig.so (get_zig --android → tools/zig-android/).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 PROFILE=release
 CARGO_PROFILE=(--release)
-if [ "${1:-}" = "--debug" ]; then
-    PROFILE=debug
-    CARGO_PROFILE=()
-fi
+FEATURES=()
+FLAVOUR=dev
+for arg in "$@"; do
+    case "$arg" in
+        --debug) PROFILE=debug CARGO_PROFILE=() ;;
+        --release-flavour)
+            FLAVOUR=release
+            FEATURES=(--no-default-features --features first-run)
+            ;;
+        *) echo "error: unknown argument $arg" >&2; exit 1 ;;
+    esac
+done
 SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
 [ -d "$SDK" ] || { echo "error: set ANDROID_HOME to the Android SDK" >&2; exit 1; }
@@ -31,6 +44,9 @@ case "$(uname -s)" in
     Darwin) HOST=darwin-x86_64 EXE= CMD= BAT= ;;
     *) HOST=linux-x86_64 EXE= CMD= BAT= ;;
 esac
+# Git Bash: Windows-form paths (cc-rs runs the NDK's .cmd wrappers through
+# cmd.exe, which can't resolve /c/... paths).
+if command -v cygpath > /dev/null; then NDK=$(cygpath -m "$NDK"); fi
 BIN="$NDK/toolchains/llvm/prebuilt/$HOST/bin"
 # rustc links the app library with the NDK clang (bionic, liblog,
 # libandroid, libaaudio); the decomp C itself is compiled by zig.
@@ -41,7 +57,13 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
 
 cargo rustc -p birdman64 --lib --crate-type cdylib --target aarch64-linux-android \
-    ${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}
+    ${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"} ${FEATURES[@]+"${FEATURES[@]}"}
+if [ "$FLAVOUR" = release ]; then
+    # This shell's GNU tar (xz support); Windows' tar.exe hangs on the .xz.
+    TAR=$(command -v tar)
+    if command -v cygpath > /dev/null; then TAR=$(cygpath -w "$TAR"); fi
+    PW64_TAR="$TAR" cargo run -p pw64-cbuild --example get_zig --features fetch -- --android
+fi
 
 BT=$(ls -d "$SDK"/build-tools/* | sort -V | tail -n 1)
 PLATFORM=$(ls -d "$SDK"/platforms/android-* | sort -V | tail -n 1)
@@ -50,12 +72,22 @@ OUT=target/android-apk
 rm -rf "$OUT/stage" "$OUT/unsigned.apk" "$OUT/aligned.apk"
 mkdir -p "$OUT/stage/lib/arm64-v8a"
 cp "target/aarch64-linux-android/$PROFILE/libbirdman64.so" "$OUT/stage/lib/arm64-v8a/"
+LIBS=(lib/arm64-v8a/libbirdman64.so)
+if [ "$FLAVOUR" = release ]; then
+    # zig (static aarch64-linux executable, unmodified) under a lib*.so name:
+    # the installer extracts it to nativeLibraryDir, the one app-reachable
+    # place Android 10+ lets an app exec from. Its MIT licence rides along.
+    cp tools/zig-android/zig "$OUT/stage/lib/arm64-v8a/libzig.so"
+    mkdir -p "$OUT/stage/assets/licenses"
+    cp tools/zig-android/LICENSE "$OUT/stage/assets/licenses/zig-LICENSE.txt"
+    LIBS+=(lib/arm64-v8a/libzig.so assets/licenses/zig-LICENSE.txt)
+fi
 
 # --debug-mode: android:debuggable (adb run-as, logs); this is a dev APK.
 "$BT/aapt2$EXE" link -o "$OUT/unsigned.apk" \
     --manifest packaging/android/AndroidManifest.xml \
     -I "$PLATFORM/android.jar" --version-name "$VERSION" --debug-mode
-(cd "$OUT/stage" && "$BT/aapt$EXE" add ../unsigned.apk lib/arm64-v8a/libbirdman64.so > /dev/null)
+(cd "$OUT/stage" && "$BT/aapt$EXE" add ../unsigned.apk "${LIBS[@]}" > /dev/null)
 "$BT/zipalign$EXE" -P 16 -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 
 KS="$OUT/debug.keystore"

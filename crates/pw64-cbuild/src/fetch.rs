@@ -170,7 +170,7 @@ fn download(url: &str, progress: &mut dyn FnMut(Progress)) -> Result<Vec<u8>, Fe
         .timeout_global(Some(Duration::from_secs(60)))
         .tls_config(
             ureq::tls::TlsConfig::builder()
-                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .root_certs(root_certs())
                 .build(),
         )
         .build()
@@ -206,6 +206,50 @@ fn download(url: &str, progress: &mut dyn FnMut(Progress)) -> Result<Vec<u8>, Fe
         }
     }
     Err(FetchError::Network(last))
+}
+
+/// The OS root store (corporate TLS proxies work). Desktop: the platform
+/// verifier. Android: that verifier needs its Java component, and the APK has
+/// no Java code, so read the system CA directory instead (Android 14+ keeps
+/// the updatable store in the conscrypt APEX). Empty store = every download
+/// fails with a TLS error, reported like any network failure.
+fn root_certs() -> ureq::tls::RootCerts {
+    #[cfg(not(target_os = "android"))]
+    return ureq::tls::RootCerts::PlatformVerifier;
+    #[cfg(target_os = "android")]
+    {
+        const DIRS: [&str; 2] = [
+            "/apex/com.android.conscrypt/cacerts",
+            "/system/etc/security/cacerts",
+        ];
+        let certs = DIRS
+            .iter()
+            .map(|d| pem_dir_certs(Path::new(d)))
+            .find(|c| !c.is_empty())
+            .unwrap_or_default();
+        ureq::tls::RootCerts::from(certs)
+    }
+}
+
+/// Every certificate in the PEM files of `dir` (Android's CA files are one
+/// PEM certificate plus a text dump each; non-certificate items are skipped).
+#[cfg(any(target_os = "android", test))]
+fn pem_dir_certs(dir: &Path) -> Vec<ureq::tls::Certificate<'static>> {
+    let mut certs = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return certs;
+    };
+    for e in entries.flatten() {
+        let Ok(bytes) = std::fs::read(e.path()) else {
+            continue;
+        };
+        for item in ureq::tls::parse_pem(&bytes).flatten() {
+            if let ureq::tls::PemItem::Certificate(c) = item {
+                certs.push(c);
+            }
+        }
+    }
+    certs
 }
 
 /// Verifies every manifest entry in `zip_bytes` and extracts the manifest's
@@ -387,6 +431,22 @@ mod tests {
         ));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn pem_dir_reads_android_style_ca_files() {
+        // One PEM certificate followed by a text dump, as in Android's
+        // cacerts files; a non-PEM file and a missing dir yield nothing.
+        let d = temp_dir("pem");
+        let pem = "-----BEGIN CERTIFICATE-----\nAQIDBA==\n-----END CERTIFICATE-----\n\
+                   Certificate:\n    Data: ...\n";
+        std::fs::write(d.join("a1b2c3d4.0"), pem).unwrap();
+        std::fs::write(d.join("junk.0"), "not pem").unwrap();
+        let certs = pem_dir_certs(&d);
+        assert_eq!(certs.len(), 1);
+        assert_eq!(certs[0].der(), &[1, 2, 3, 4]);
+        assert!(pem_dir_certs(&d.join("missing")).is_empty());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
