@@ -1231,8 +1231,10 @@ impl Overlay {
         // One fixed panel size for every page: sizing it to the content made
         // the window jump around on each page change and row change. The
         // lists scroll inside it. Never wider than the screen (phones).
-        let width = width.min(screen.width() - 16.0);
-        let height = (0.8 * screen.height()).min(560.0);
+        let width = width.min(screen.width() - 32.0);
+        // Tall enough for the longest page's list without a big empty tail
+        // on the short ones; on small screens it is 80% of the height.
+        let height = (0.8 * screen.height()).min(430.0);
         if cfg!(target_os = "android") {
             // Finger-sized rows with a gap between them, and a wider scroll
             // bar to grab. Rows only react to taps; a drag scrolls the list.

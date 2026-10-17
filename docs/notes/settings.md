@@ -593,5 +593,5 @@ Code: `crates/birdman64/src/settings.rs` (overlay + nav + config write), hooks i
 
 ## Fixed panel size, touch scrolling
 
-- The panel is `fixed_size([width, min(0.8*h, 560)])` on every page (width clamped to the screen); lists use `ScrollArea` with `auto_shrink([false, false])`. Sizing to content made the window jump between pages/rows.
+- The panel is `fixed_size([width, min(0.8*h, 430)])` on every page (width clamped to the screen); lists use `ScrollArea` with `auto_shrink([false, false])`. Sizing to content made the window jump between pages/rows.
 - Android: winit `Touch::Moved` is forwarded to the overlay as `PointerMoved` so egui drag-to-scroll works (rows are click-only); rows get `interact_size.y = 44` and a non-floating scroll bar.
