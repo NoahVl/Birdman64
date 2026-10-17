@@ -304,7 +304,10 @@ impl Screen {
     #[cfg(target_os = "android")]
     fn ui_android(&mut self, ui: &mut egui::Ui) {
         if ui
-            .add_sized(egui::vec2(240.0, 40.0), egui::Button::new("Choose a game file"))
+            .add_sized(
+                egui::vec2(240.0, 40.0),
+                egui::Button::new("Choose a game file"),
+            )
             .clicked()
         {
             // Non-blocking: the result lands in try_load via take_picked.
@@ -314,9 +317,7 @@ impl Screen {
         }
         if self.picking {
             ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new("Waiting for the file picker…").weak(),
-            );
+            ui.label(egui::RichText::new("Waiting for the file picker…").weak());
         }
         ui.add_space(8.0);
         ui.label(

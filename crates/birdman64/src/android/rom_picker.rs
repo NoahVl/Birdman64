@@ -14,7 +14,7 @@
 //! is up, and a cancel simply lands back on the ROM screen.
 
 use jni::errors::LogErrorAndDefault;
-use jni::objects::{JClass, JObject, JString};
+use jni::objects::{JClass, JObject, JObjectArray, JString};
 use jni::{Env, EnvUnowned, JValue, jni_sig, jni_str};
 use std::io::Read as _;
 use std::os::fd::FromRawFd as _;
@@ -207,7 +207,7 @@ fn read_document(
         Ok(p) => Ok(p),
         Err(e) => {
             env.exception_clear();
-            Err(e.into())
+            Err(e)
         }
     }
 }
@@ -250,7 +250,9 @@ fn read_document_inner(
         // openFileDescriptor threw FileNotFoundException.
         Err(_) => return Err(ReadFail::Missing),
     };
-    let fd = env.call_method(&pfd, jni_str!("detachFd"), jni_sig!("()I"), &[])?.i()?;
+    let fd = env
+        .call_method(&pfd, jni_str!("detachFd"), jni_sig!("()I"), &[])?
+        .i()?;
     if fd < 0 {
         return Err(ReadFail::Missing);
     }
@@ -264,11 +266,13 @@ fn read_document_inner(
 /// The document's display name (`OpenableColumns.DISPLAY_NAME`), as the
 /// player knows the file. `None`: the query found nothing useful.
 fn display_name(env: &mut Env, cr: &JObject, uri: &JObject) -> Option<String> {
+    let null = JObject::null();
     let projection = env
-        .new_object_array(1, jni_str!("java/lang/String"), JObject::null())
+        .new_object_array(1, jni_str!("java/lang/String"), null)
         .ok()?;
     let column = env.new_string("_display_name").ok()?;
-    env.set_object_array_element(&projection, 0, &column).ok()?;
+    let projection = env.cast_local::<JObjectArray<JObject>>(projection).ok()?;
+    projection.set_element(env, 0, &column).ok()?;
     let cursor = env
         .call_method(
             cr,
@@ -308,10 +312,10 @@ fn display_name(env: &mut Env, cr: &JObject, uri: &JObject) -> Option<String> {
             .ok()?
             .l()
             .ok();
-        if let Some(s) = s {
-            if let Ok(s) = env.cast_local::<JString>(s) {
-                name = s.try_to_string(env).ok();
-            }
+        if let Some(s) = s
+            && let Ok(s) = env.cast_local::<JString>(s)
+        {
+            name = s.try_to_string(env).ok();
         }
     }
     let _ = env.call_method(&cursor, jni_str!("close"), jni_sig!("()V"), &[]);
@@ -323,11 +327,7 @@ fn display_name(env: &mut Env, cr: &JObject, uri: &JObject) -> Option<String> {
 /// A display name safe to use as a file name in the app's rom folder:
 /// folder components and odd characters out, `.`/`..` out, never empty.
 fn sanitize_name(raw: &str) -> String {
-    let name = raw
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or_default()
-        .trim();
+    let name = raw.rsplit(['/', '\\']).next().unwrap_or_default().trim();
     let cleaned: String = name
         .chars()
         .map(|c| {
@@ -352,7 +352,10 @@ mod tests {
 
     #[test]
     fn plain_name_is_kept() {
-        assert_eq!(sanitize_name("Pilotwings 64 (USA).z64"), "Pilotwings 64 (USA).z64");
+        assert_eq!(
+            sanitize_name("Pilotwings 64 (USA).z64"),
+            "Pilotwings 64 (USA).z64"
+        );
     }
 
     #[test]
