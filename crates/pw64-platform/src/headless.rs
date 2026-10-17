@@ -567,6 +567,28 @@ pub fn eep_edit_and_freeze(
     r
 }
 
+/// `<eep><suffix>`: where [`eep_edit_and_freeze`] puts its first backup
+/// (the later ones get `-2`, `-3`, …).
+pub fn eep_backup_path(suffix: &str) -> std::path::PathBuf {
+    let mut name = eep_path().into_os_string();
+    name.push(suffix);
+    std::path::PathBuf::from(name)
+}
+
+/// A backup [`eep_edit_and_freeze`] wrote, read back as a whole EEPROM
+/// image. Anything but a readable file of exactly `EEP_SIZE` bytes (what
+/// every backup is) is refused, so a stray or truncated file never becomes
+/// the save.
+pub fn eep_read_backup(path: &std::path::Path) -> Result<[u8; EEP_SIZE], String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("couldn't read the backup: {e}"))?;
+    <[u8; EEP_SIZE]>::try_from(bytes.as_slice()).map_err(|_| {
+        format!(
+            "the backup is {} bytes, not a {EEP_SIZE}-byte save",
+            bytes.len()
+        )
+    })
+}
+
 /// [`eep_edit_and_freeze`]'s body on an explicit path + image (testable
 /// without the process-wide EEPROM cache). `data` is updated only after the
 /// file write succeeded.
@@ -1160,6 +1182,60 @@ mod tests {
         assert!(r.is_err());
         assert_eq!(data[0], 3);
         assert_eq!(std::fs::read(&eep).unwrap()[0], 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Restore = an edit that copies a backup back: an edit then a restore
+    /// gives the original bytes; the restore's own backup never replaces an
+    /// older one (`-2`); a backup of the wrong size or a missing one is
+    /// refused before anything is written.
+    #[test]
+    fn restore_from_backup_round_trips() {
+        let dir = std::env::temp_dir().join("pw64-eep-restore-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let eep = dir.join("pw64.eep");
+        let original: [u8; EEP_SIZE] = std::array::from_fn(|i| i as u8);
+        let mut data = original;
+        std::fs::write(&eep, data).unwrap();
+        let fill = |d: &mut [u8]| {
+            d.fill(0x55);
+            true
+        };
+        edit_image(&eep, &mut data, fill, ".before-u").unwrap();
+        let ub = dir.join("pw64.eep.before-u");
+        let backup = eep_read_backup(&ub).unwrap();
+        let restore = |d: &mut [u8]| {
+            d.copy_from_slice(&backup);
+            true
+        };
+        let r = edit_image(&eep, &mut data, restore, ".before-r").unwrap();
+        assert_eq!(
+            r,
+            EepEdit::Written {
+                backup: dir.join("pw64.eep.before-r")
+            }
+        );
+        assert_eq!(std::fs::read(&eep).unwrap(), original);
+        assert_eq!(data, original);
+        assert!(ub.exists(), "the unlock backup stays");
+        // Unlock + restore again: the second restore backup gets -2.
+        edit_image(&eep, &mut data, fill, ".before-u").unwrap();
+        let r = edit_image(&eep, &mut data, restore, ".before-r").unwrap();
+        assert_eq!(
+            r,
+            EepEdit::Written {
+                backup: dir.join("pw64.eep.before-r-2")
+            }
+        );
+        assert_eq!(
+            std::fs::read(dir.join("pw64.eep.before-r")).unwrap(),
+            [0x55; EEP_SIZE]
+        );
+        // Invalid backups are refused.
+        std::fs::write(&ub, [0u8; 0x200]).unwrap();
+        assert!(eep_read_backup(&ub).unwrap_err().contains("512 bytes"));
+        assert!(eep_read_backup(&dir.join("missing")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

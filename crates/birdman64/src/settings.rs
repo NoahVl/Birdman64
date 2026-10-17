@@ -150,6 +150,9 @@ enum Row {
     /// which opens every class, bonus game and Birdman (`unlock.rs`). Two
     /// confirms like Quit, then a restart.
     UnlockAll,
+    /// Main, under Unlock everything, only while `pw64.eep.before-unlock`
+    /// exists: copy that (first) backup back over the save, then restart.
+    RestoreUnlock,
 }
 
 /// Which input kind a Bind / Reset row edits.
@@ -264,11 +267,17 @@ const QUIT_ARM: Duration = Duration::from_secs(3);
 const UNLOCK_ARM: Duration = Duration::from_secs(15);
 /// The backup of the save an unlock replaces (`<eep>` + this, then `-2`, …).
 const UNLOCK_BACKUP: &str = ".before-unlock";
+/// The backup of the save a restore replaces (same numbering).
+const RESTORE_BACKUP: &str = ".before-restore";
+/// The armed restore row's warning.
+const RESTORE_WARNING: &str = "This puts back your save from before you first used Unlock \
+    everything. Anything you played since then is lost. Birdman64 then restarts. Your current \
+    save is kept as pw64.eep.before-restore in the save folder.";
 /// The armed Unlock everything row's warning (the confirm dialog).
 const UNLOCK_WARNING: &str = "This gives a gold medal on every test in both save files and \
     unlocks every class, the bonus games and Birdman. Birdman64 then restarts. It can't be \
-    undone in the game: your current save is kept as pw64.eep.before-unlock in the save \
-    folder (rename it to pw64.eep to go back).";
+    undone by playing: your current save is kept as pw64.eep.before-unlock in the save \
+    folder, and \"Restore save from before unlock\" here puts it back.";
 /// How long the Assign-player-2 row confirms a just-applied assignment
 /// ("Player 2 now uses: …") before naming the current controller again.
 const P2_ASSIGN_CONFIRM: Duration = Duration::from_secs(4);
@@ -456,6 +465,11 @@ pub struct Overlay {
     /// last attempt's outcome when it didn't restart (shown under the row).
     unlock_armed: Option<Instant>,
     unlock_status: Option<String>,
+    /// The restore row: same arm + status, and whether the unlock backup
+    /// exists (checked at open, so `rows()` touches no files).
+    restore_armed: Option<Instant>,
+    restore_status: Option<String>,
+    restore_available: bool,
     /// "Move touch controls" chosen ([`Overlay::take_touch_edit`]).
     touch_edit_requested: bool,
     /// A confirmed "Restart now" (U16) the window takes with
@@ -579,6 +593,9 @@ impl Overlay {
             quit_requested: false,
             unlock_armed: None,
             unlock_status: None,
+            restore_armed: None,
+            restore_status: None,
+            restore_available: false,
             touch_edit_requested: false,
             restart_requested: false,
             restart_error: None,
@@ -615,6 +632,8 @@ impl Overlay {
         self.pending_revert = None;
         self.restart_error = None;
         self.unlock_armed = None;
+        self.restore_armed = None;
+        self.restore_available = pw64_platform::headless::eep_backup_path(UNLOCK_BACKUP).is_file();
         self.stage_restart_rows();
         // Frame rate and V-Sync are live: stage from the running values.
         (self.fps, self.fps_sel) = fps_choices(gpu.fps);
@@ -822,6 +841,81 @@ impl Overlay {
         if self.unlock_armed.is_some_and(|t| t.elapsed() >= UNLOCK_ARM) {
             self.unlock_armed = None;
         }
+        if self
+            .restore_armed
+            .is_some_and(|t| t.elapsed() >= UNLOCK_ARM)
+        {
+            self.restore_armed = None;
+        }
+    }
+
+    /// The restore row's second confirm: the first unlock backup back over
+    /// the save (the current one backed up as `.before-restore`), then the
+    /// restart. The unlock backup itself stays.
+    fn restore_now(&mut self) {
+        self.restore_with(
+            || {
+                use pw64_platform::headless as h;
+                let backup = h::eep_read_backup(&h::eep_backup_path(UNLOCK_BACKUP))?;
+                h::eep_edit_and_freeze(
+                    |image| {
+                        image.copy_from_slice(&backup);
+                        true
+                    },
+                    RESTORE_BACKUP,
+                )
+            },
+            restart_command(),
+        );
+    }
+
+    /// `restore_now`'s body with the edit and the restart command injected
+    /// (tests); outcomes as in [`Overlay::unlock_with`].
+    fn restore_with(
+        &mut self,
+        apply: impl FnOnce() -> Result<pw64_platform::headless::EepEdit, String>,
+        cmd: std::io::Result<std::process::Command>,
+    ) {
+        use pw64_platform::headless::EepEdit;
+        self.restore_armed = None;
+        self.restore_status = Some(match apply() {
+            Err(e) => {
+                eprintln!("[unlock] restore: {e}");
+                format!("Couldn't restore: {e}. Your save wasn't changed.")
+            }
+            Ok(EepEdit::Unchanged) => "Your save already is the one from before the unlock.".into(),
+            Ok(EepEdit::Written { backup }) => {
+                eprintln!(
+                    "[unlock] save restored; previous save kept as {}",
+                    backup.display()
+                );
+                match self.restart_after_edit(cmd) {
+                    None => return,
+                    Some(why) => format!(
+                        "Restored, but {why}. Quit and start Birdman64 again: until then your \
+                         progress isn't saved."
+                    ),
+                }
+            }
+        });
+    }
+
+    /// The restart after a save edit (U16 spawn + exit). `None`: restarting;
+    /// `Some(why)`: the spawn failed (lower-case reason for a status line).
+    fn restart_after_edit(
+        &mut self,
+        cmd: std::io::Result<std::process::Command>,
+    ) -> Option<String> {
+        self.restart_with(cmd);
+        if self.restart_requested {
+            return None;
+        }
+        Some(
+            self.restart_error
+                .take()
+                .unwrap_or_default()
+                .replacen("Couldn't", "couldn't", 1),
+        )
     }
 
     /// The Unlock everything row's second confirm: edit the save, then
@@ -899,17 +993,12 @@ impl Overlay {
                     "[unlock] save unlocked; previous save kept as {}",
                     backup.display()
                 );
-                self.restart_with(cmd);
-                if self.restart_requested {
+                // Unlocked, but if the restart fails this copy keeps running
+                // with the old saves in memory (and no longer writes them):
+                // say so plainly.
+                let Some(why) = self.restart_after_edit(cmd) else {
                     return;
-                }
-                // Unlocked, but this copy keeps running with the old saves in
-                // memory (and no longer writes them): say so plainly.
-                let why = self
-                    .restart_error
-                    .take()
-                    .unwrap_or_default()
-                    .replacen("Couldn't", "couldn't", 1);
+                };
                 self.unlock_status = Some(format!(
                     "Unlocked, but {why}. Quit and start Birdman64 again: until then your \
                      progress isn't saved."
@@ -1419,14 +1508,18 @@ impl Overlay {
                     // U26: pause when the window goes to the background.
                     Row::Opt(Opt::PauseBackground),
                     Row::UnlockAll,
+                    Row::RestoreUnlock,
                     Row::OpenSaveFolder,
                     Row::Quit,
                 ];
+                if !self.restore_available {
+                    rows.retain(|&r| r != Row::RestoreUnlock);
+                }
                 // Android: the touch controls' edit mode and the "only
                 // menu" switch, under Controls. No Unlock everything there:
                 // it needs the restart, which Android can't do.
                 if cfg!(target_os = "android") {
-                    rows.retain(|&r| r != Row::UnlockAll);
+                    rows.retain(|&r| !matches!(r, Row::UnlockAll | Row::RestoreUnlock));
                     rows.insert(2, Row::TouchLayout);
                     rows.insert(3, Row::TouchHidden);
                 }
@@ -1559,6 +1652,9 @@ impl Overlay {
                 self.opt_row(ui, at(Row::Opt(Opt::PauseBackground)), Opt::PauseBackground);
                 if rows.contains(&Row::UnlockAll) {
                     self.unlock_row(ui, at(Row::UnlockAll));
+                }
+                if rows.contains(&Row::RestoreUnlock) {
+                    self.restore_row(ui, at(Row::RestoreUnlock));
                 }
                 self.text_row(ui, at(Row::OpenSaveFolder), "Open save folder");
                 // Quit (U3): armed, the row turns into a red second chance.
@@ -1837,6 +1933,35 @@ impl Overlay {
             "Assign player 2\u{2026} ({})",
             self.p2_choices[self.p2_sel].label
         )
+    }
+
+    /// The restore row: like [`Overlay::unlock_row`] (greyed, armed with
+    /// its warning, status line).
+    fn restore_row(&mut self, ui: &mut egui::Ui, i: usize) {
+        if pw64_platform::headless::eep_read_failed() {
+            self.disabled_row(
+                ui,
+                i,
+                "Restore save from before unlock (save file couldn't be read)",
+            );
+            return;
+        }
+        if self.restore_armed.is_some() {
+            self.selectable(
+                ui,
+                i,
+                egui::RichText::new("Press again to restore the old save")
+                    .size(16.0)
+                    .color(egui::Color32::LIGHT_RED)
+                    .into(),
+            );
+            ui.colored_label(egui::Color32::YELLOW, RESTORE_WARNING);
+        } else {
+            self.text_row(ui, i, "Restore save from before unlock");
+        }
+        if let Some(s) = &self.restore_status {
+            ui.colored_label(egui::Color32::YELLOW, s);
+        }
     }
 
     /// The Unlock everything row: greyed while the save couldn't be read;
@@ -2214,6 +2339,7 @@ impl Overlay {
         // Any navigation disarms the Quit row (U3) and Unlock everything.
         self.quit_armed = None;
         self.unlock_armed = None;
+        self.restore_armed = None;
         self.follow_sel = true;
     }
 
@@ -2238,6 +2364,9 @@ impl Overlay {
         }
         if rows[self.sel] != Row::UnlockAll {
             self.unlock_armed = None;
+        }
+        if rows[self.sel] != Row::RestoreUnlock {
+            self.restore_armed = None;
         }
         match rows[self.sel] {
             Row::Opt(o) => match o {
@@ -2296,6 +2425,16 @@ impl Overlay {
                 } else {
                     self.unlock_status = None;
                     self.unlock_armed = Some(Instant::now());
+                }
+            }
+            // Restore: the same two-confirm pattern.
+            Row::RestoreUnlock if pw64_platform::headless::eep_read_failed() => {}
+            Row::RestoreUnlock => {
+                if self.restore_armed.is_some_and(|t| t.elapsed() < UNLOCK_ARM) {
+                    self.restore_now();
+                } else {
+                    self.restore_status = None;
+                    self.restore_armed = Some(Instant::now());
                 }
             }
             // Reset to defaults: stage the built-in defaults and apply the
@@ -2505,6 +2644,7 @@ impl Overlay {
             | Row::TouchHidden
             | Row::OpenPacksFolder
             | Row::UnlockAll
+            | Row::RestoreUnlock
             | Row::RestartNow => {}
             // Neither do Resume / the page-open rows / Reset to defaults.
             Row::Resume | Row::Graphics | Row::PerfPage | Row::SplitScreen | Row::ResetGraphics => {
@@ -3240,6 +3380,9 @@ fn help(row: Row) -> &'static str {
             "Cheat: gives a gold medal on every test in both save files, which opens every \
              class, the bonus games and Birdman. Your scores are only ever raised."
         }
+        Row::RestoreUnlock => {
+            "Undo Unlock everything: puts back the save you had before you first used it."
+        }
         Row::TouchLayout => "Drag the on-screen buttons and stick to where your thumbs want them.",
         Row::TouchHidden => {
             "Playing with a controller? Hide the on-screen buttons. The menu button always \
@@ -3927,6 +4070,13 @@ mod tests {
         assert_eq!(rows[7], Row::UnlockAll);
         assert_eq!(rows[8], Row::OpenSaveFolder);
         assert_eq!(rows[9], Row::Quit);
+        // With an unlock backup, the restore row sits under Unlock everything.
+        o.restore_available = true;
+        let rows = o.rows();
+        assert_eq!(rows.len(), 11);
+        assert_eq!(rows[8], Row::RestoreUnlock);
+        assert_eq!(rows[9], Row::OpenSaveFolder);
+        o.restore_available = false;
         // The performance overlay page: the counter, the opt-in extras, Back.
         o.sel = 4;
         o.confirm();
@@ -4568,12 +4718,56 @@ mod tests {
         assert!(o.restart_error.is_none(), "moved into the unlock status");
     }
 
+    /// The restore row: first confirm arms, navigation disarms, and each
+    /// outcome that doesn't restart leaves a status line.
+    #[test]
+    fn restore_row_arms_then_restores() {
+        use pw64_platform::headless::EepEdit;
+        let _g = DATA_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut o = Overlay::new();
+        o.show = true;
+        o.restore_available = true;
+        let i = o
+            .rows()
+            .iter()
+            .position(|&r| r == Row::RestoreUnlock)
+            .unwrap();
+        o.sel = i;
+        o.confirm();
+        assert!(o.restore_armed.is_some() && o.restore_status.is_none());
+        o.move_sel(-1);
+        assert!(o.restore_armed.is_none(), "navigation disarms");
+        let ok = || Ok(std::process::Command::new("pw64-no-such-exe"));
+        o.restore_with(|| Err("the backup is 512 bytes".into()), ok());
+        assert!(
+            o.restore_status
+                .as_deref()
+                .unwrap()
+                .contains("wasn't changed")
+        );
+        o.restore_with(|| Ok(EepEdit::Unchanged), ok());
+        assert!(o.restore_status.as_deref().unwrap().contains("already"));
+        o.snapshot = o.staged_settings();
+        o.restore_with(
+            || {
+                Ok(EepEdit::Written {
+                    backup: "x.before-restore".into(),
+                })
+            },
+            ok(),
+        );
+        let s = o.restore_status.clone().unwrap();
+        assert!(s.starts_with("Restored, but couldn't restart"), "{s}");
+        assert!(!o.restart_requested && o.show);
+    }
+
     /// Every row of every page has a help line (U5). A restart-only change
     /// is staged so the conditional "Restart now" row (U16) is covered too.
     #[test]
     fn every_row_has_help() {
         let mut o = Overlay::new();
         o.msaa = 4;
+        o.restore_available = true;
         for page in [Page::Main, Page::Graphics, Page::Controls, Page::Split] {
             o.page = page;
             for row in o.rows() {
