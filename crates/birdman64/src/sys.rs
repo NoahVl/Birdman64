@@ -3,6 +3,8 @@
 //! (W6). Raw `extern "system"` declarations (Windows) keep this free of
 //! extra crate features; everything is a no-op where it doesn't apply.
 
+#[cfg(target_os = "android")]
+use crate::rfd;
 use std::fs::File;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};

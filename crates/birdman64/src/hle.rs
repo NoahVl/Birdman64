@@ -36,9 +36,9 @@
 use crate::opts;
 use pw64_game::memmap::hle_readable;
 use pw64_gfx::{FbOp, Frame, Interpreter, Memory, RenderOptions, Renderer, VecMemory, Widescreen};
+use pw64_platform::os::vi::Retrace;
 use pw64_platform::vaddr::{self, Region, VMap};
 use pw64_platform::{headless::GfxTaskInfo, vaddr::pw64_vmap};
-use pw64_platform::os::vi::Retrace;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -116,7 +116,8 @@ impl GfxMemory {
     /// `vm`/`regions` are the production globals; the tests pass local ones
     /// (`set_regions` is once-only).
     fn host(vm: &VMap, regions: &[Region], addr: u32) -> usize {
-        vm.to_host(addr).unwrap_or_else(|| vaddr::to_host_in(regions, addr))
+        vm.to_host(addr)
+            .unwrap_or_else(|| vaddr::to_host_in(regions, addr))
     }
 
     /// The host address for one read range.
@@ -137,7 +138,11 @@ impl Memory for GfxMemory {
     /// gets it (a physical / `osVirtualToPhysical` value). Reads translate
     /// the vaddr to its host address.
     fn map(&self, raw: u32) -> Option<u32> {
-        Some(if raw & 0x8000_0000 == 0 { raw | 0x8000_0000 } else { raw })
+        Some(if raw & 0x8000_0000 == 0 {
+            raw | 0x8000_0000
+        } else {
+            raw
+        })
     }
 
     /// Per display-list word: the vaddr translates through the fast path.
@@ -648,7 +653,8 @@ impl Hle {
         // Read the fb as the game writes it: RGBA5551, 320×240. The VI
         // framebuffer is a host pointer; the read takes the vaddr.
         let mut bytes = vec![0u8; FB_W * FB_H * 2];
-        self.mem.read_bytes(vaddr::to_vaddr(r.framebuffer), &mut bytes);
+        self.mem
+            .read_bytes(vaddr::to_vaddr(r.framebuffer), &mut bytes);
         let mut rgba = vec![0u8; FB_W * FB_H * 4];
         for (i, px) in bytes.as_chunks::<2>().0.iter().enumerate() {
             let px = u16::from_be_bytes(*px);
@@ -849,7 +855,10 @@ mod tests {
             }
         }
         // No regions: the identity (today's build).
-        assert_eq!(GfxMemory::host(&VMap::IDENTITY, &[], 0x803D_A800), 0x803D_A800);
+        assert_eq!(
+            GfxMemory::host(&VMap::IDENTITY, &[], 0x803D_A800),
+            0x803D_A800
+        );
         assert_eq!(GfxMemory::host(&VMap::IDENTITY, &[], 0x1050), 0x1050);
     }
 }

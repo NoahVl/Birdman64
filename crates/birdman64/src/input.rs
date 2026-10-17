@@ -19,6 +19,10 @@
 //! `p2_input` choice. Without it everything merges into controller 1, as
 //! above.
 
+// Android: the gilrs thread (`spawn`) and its helpers never run (no gilrs
+// backend there); `android_pad` feeds the slots instead.
+#![cfg_attr(target_os = "android", allow(dead_code))]
+
 use crate::config;
 use gilrs::{Axis, Button, Gilrs};
 use std::collections::{BTreeMap, HashMap};
@@ -26,6 +30,12 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use winit::keyboard::KeyCode;
+
+// Android: no gilrs backend; the window feeds pad key events instead.
+#[cfg(target_os = "android")]
+mod android_pad;
+#[cfg(target_os = "android")]
+pub use android_pad::{AndroidKey, android_key, set_touch};
 
 // libultra `os_cont.h` button bits.
 pub const CONT_A: u16 = 0x8000;
@@ -1646,7 +1656,7 @@ fn publish(s: &mut Sources) {
     // Always kept current: the first-run setup screen (firstrun.rs, U13)
     // polls it too, before the game or the overlay exist.
     *OVERLAY_PAD.lock().unwrap() = s.nav();
-    if crate::settings::is_open() {
+    if crate::settings::is_open() || GAME_BLOCKED.load(Ordering::Relaxed) {
         // The overlay owns input: the game sees an idle pad while paused.
         pw64_platform::headless::set_controller1(0, 0, 0);
         if p2.is_some() {
@@ -1717,8 +1727,15 @@ pub fn overlay_pad() -> Pad {
     *OVERLAY_PAD.lock().unwrap()
 }
 
-/// Window lost focus: release every held key (no stuck buttons).
+/// Window lost focus: release every held key (no stuck buttons). Android:
+/// also the pad keys and touch controls (`android_pad`; its lock is taken
+/// and released first, the order its own publishes use).
 pub fn release_all_keys() {
+    #[cfg(target_os = "android")]
+    android_pad::release_all();
+    // Focus loss / suspend / pause: a tap latched meanwhile must not fire
+    // in the game later.
+    pw64_platform::headless::clear_latch();
     let mut s = SOURCES.lock().unwrap();
     if !s.held_keys.is_empty() {
         s.held_keys.clear();
@@ -1739,6 +1756,20 @@ pub fn overlay_toggled(open: bool) {
         s.suppressed[1] = pads[1].button;
     }
     publish(&mut s);
+    // After the publish: presses latched while the input was elsewhere
+    // (or by this reroute) never reach the game.
+    pw64_platform::headless::clear_latch();
+}
+
+/// The game gets an idle pad while set, like with the overlay open: the
+/// touch edit mode (Android) closes the overlay but keeps the game paused,
+/// and pad presses made there must not reach it on resume.
+static GAME_BLOCKED: AtomicBool = AtomicBool::new(false);
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn set_game_blocked(blocked: bool) {
+    GAME_BLOCKED.store(blocked, Ordering::Relaxed);
+    overlay_toggled(blocked);
 }
 
 /// One `PW64_INPUT_SCRIPT` step: from `retrace` on, hold `pad`.

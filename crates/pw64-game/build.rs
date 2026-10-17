@@ -76,15 +76,18 @@ enum Flavor {
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    let flavor = match (target_os.as_str(), target_arch.as_str()) {
-        ("windows", _) => Flavor::Msvc,
-        ("linux", "x86_64") => Flavor::Gnu,
-        _ => panic!(
-            "pw64-game: the native C build supports Windows (clang-cl) and x86_64 Linux \
-             (clang) only, not {target_arch}-{target_os}: the C needs every address below \
-             4 GB with bit 31 set (fixed image base, RDRAM window) — macOS/arm64 can't map \
-             there; see docs/notes/native-build.md §10"
-        ),
+    let os = pw64_cbuild::Os::from_target(&target_os, &target_arch).unwrap_or_else(|| {
+        panic!(
+            "pw64-game: the native C build supports x86_64 Windows, x86_64 Linux, \
+             aarch64 Linux and aarch64 Android only, not {target_arch}-{target_os} (macOS: see \
+             docs/notes/option-a.md \"Flipping the default\")"
+        )
+    });
+    let flavor = match os {
+        pw64_cbuild::Os::Windows => Flavor::Msvc,
+        pw64_cbuild::Os::Linux | pw64_cbuild::Os::LinuxArm64 | pw64_cbuild::Os::Android => {
+            Flavor::Gnu
+        }
     };
     // Crash diagnosis: when set, write a link map so a RIP from the
     // pw64-platform crash log resolves to a C symbol. It must be part of
@@ -102,7 +105,18 @@ fn main() {
     // + /HIGHENTROPYVA, ASLR above 4 GB; Linux: PIE). The C objects are
     // RIP-relative either way (MSVC_FLAGS / GNU_FLAGS -fPIE), and every C
     // address reaches a 32-bit slot through the vaddr regions.
-    let reloc = std::env::var_os("CARGO_FEATURE_RELOC").is_some();
+    // aarch64 Linux is relocatable only: no fixed-window build there (the
+    // `reloc` path is the future default everywhere, and rustc's aarch64
+    // linker is the system `cc`/GNU ld, which has no `--image-base`). The
+    // `pw64_reloc` cfg is what the crate's code tests (feature or arm64).
+    // Android likewise: the app is a `.so` loaded by the Java side, at
+    // whatever address the bionic linker picks.
+    let reloc = std::env::var_os("CARGO_FEATURE_RELOC").is_some()
+        || matches!(os, pw64_cbuild::Os::LinuxArm64 | pw64_cbuild::Os::Android);
+    println!("cargo::rustc-check-cfg=cfg(pw64_reloc)");
+    if reloc {
+        println!("cargo:rustc-cfg=pw64_reloc");
+    }
     let base_args = match flavor {
         _ if reloc => &[][..],
         Flavor::Msvc => LOW_BASE_LINK_ARGS,
@@ -167,7 +181,7 @@ fn main() {
     let include_root = mirror_include_tree(&decomp, &out, &patches);
     let repo = manifest.join("../..");
     let cc = match std::env::var("PW64_CC").unwrap_or_default().as_str() {
-        "" | "zig" => zig_cc(flavor, &find_zig(&repo), &native, &decomp, &include_root),
+        "" | "zig" => zig_cc(os, &find_zig(&repo), &native, &decomp, &include_root),
         "clang-cl" | "clang" => legacy_cc(flavor, &native, &decomp, &include_root),
         other => panic!("PW64_CC={other:?}: use zig (default) or clang-cl/clang (legacy LLVM)"),
     };
@@ -314,7 +328,7 @@ struct CcCommand {
 /// `/DEFAULTLIB` directives, so the CRT is whatever rustc links (msvcrt, or
 /// libcmt under crt-static).
 fn zig_cc(
-    flavor: Flavor,
+    os: pw64_cbuild::Os,
     zig: &Path,
     native: &Path,
     decomp: &Path,
@@ -328,10 +342,6 @@ fn zig_cc(
         pw64_cbuild::ZIG_VERSION,
         GET_ZIG
     );
-    let os = match flavor {
-        Flavor::Msvc => pw64_cbuild::Os::Windows,
-        Flavor::Gnu => pw64_cbuild::Os::Linux,
-    };
     let native_s = slash(native);
     let mut args = vec!["clang".to_string()];
     for f in pw64_cbuild::zig_flags(os) {
@@ -351,7 +361,7 @@ fn zig_cc(
     let debug = std::env::var("DEBUG").unwrap_or_default();
     if !matches!(debug.as_str(), "" | "false" | "0" | "none") {
         args.push("-g".into());
-        if flavor == Flavor::Msvc {
+        if os == pw64_cbuild::Os::Windows {
             args.push("-gcodeview".into());
         }
     }

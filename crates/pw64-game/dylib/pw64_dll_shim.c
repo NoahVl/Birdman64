@@ -50,6 +50,16 @@ typedef __SIZE_TYPE__ size_t;
 #define PW64_THUNK(name)                                                     \
     __asm__(".text\n.globl " #name "\n.def " #name ";.scl 2;.type 32;.endef\n" \
             ".p2align 4\n" #name ":\n\tjmp *pw64_imp_" #name "(%rip)\n");
+#elif defined(__aarch64__)
+/* x16 (IP0) is the AAPCS64 intra-procedure-call scratch register that
+ * linker veneers/PLT stubs use: a callee may not expect it preserved. The
+ * slot is module-local (-Bsymbolic, version script), so adrp/:lo12: reach
+ * it directly with no GOT. */
+#define PW64_THUNK(name)                                                     \
+    __asm__(".text\n.globl " #name "\n.hidden " #name "\n.type " #name        \
+            ",%function\n.p2align 4\n" #name ":\n\tadrp x16, pw64_imp_" #name \
+            "\n\tldr x16, [x16, :lo12:pw64_imp_" #name "]\n\tbr x16\n.size "   \
+            #name ",.-" #name "\n");
 #else
 #define PW64_THUNK(name)                                                     \
     __asm__(".text\n.globl " #name "\n.hidden " #name "\n.type " #name        \

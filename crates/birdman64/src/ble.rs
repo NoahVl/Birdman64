@@ -17,6 +17,9 @@
 //!
 //! End-to-end unverified — see the "unverified" list in docs/notes/input.md.
 
+// Android: never started (btleplug's Android backend needs JNI setup).
+#![cfg_attr(target_os = "android", allow(dead_code))]
+
 use btleplug::api::{
     Central, CentralEvent, Characteristic, Manager as _, Peripheral as _, ScanFilter,
     ValueNotification, WriteType,

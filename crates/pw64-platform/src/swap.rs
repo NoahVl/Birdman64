@@ -101,7 +101,14 @@ pub extern "C-unwind" fn pw64_rsp() -> u32 {
         // Through the vaddr layer: the stacks may be relocated (option-a.md S6).
         crate::vaddr::to_vaddr(rsp as usize)
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: reads the architectural stack pointer.
+    unsafe {
+        let sp: u64;
+        core::arch::asm!("mov {sp}, sp", sp = out(reg) sp, options(nomem));
+        crate::vaddr::to_vaddr(sp as usize)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     0
 }
 

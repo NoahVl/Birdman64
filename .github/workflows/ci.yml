@@ -87,6 +87,84 @@ jobs:
       - name: tests
         run: cargo test --workspace
 
+  # Android arm64 (docs/notes/android.md): compile + clippy only, no device
+  # tests and no APK signing yet. The decomp C is built by zig as on every
+  # target (no bionic needed: -nostdinc); rustc links the app library with
+  # the NDK clang. The cdylib step proves that link (NativeActivity entry,
+  # liblog/libandroid/libaaudio).
+  android:
+    name: Android arm64 · clippy, cdylib
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # decomp/ (read-only reference, needed by build.rs)
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        id: zig
+        with:
+          path: tools/zig
+          key: zig-0.16.0-tools-${{ runner.os }}
+      - name: zig (get_zig example, sha256-checked)
+        if: steps.zig.outputs.cache-hit != 'true'
+        run: cargo run -p pw64-cbuild --example get_zig --features fetch
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+          # No local-cache: its restore dropped the NDK's clang symlink
+          # (aarch64-linux-android26-clang: "bin/clang: No such file").
+      - name: NDK toolchain env
+        run: |
+          bin="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CC_aarch64_linux_android=$bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+      - name: clippy
+        run: >
+          cargo clippy --target aarch64-linux-android --all-targets
+          -p birdman64 -p pw64-game -p pw64-platform -p pw64-cbuild -- -D warnings
+      - name: app library (cdylib)
+        # Same 16 KB LOAD alignment as build-apk.sh (Android 15+ devices).
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: -C link-arg=-Wl,-z,max-page-size=16384
+        run: cargo rustc -p birdman64 --lib --crate-type cdylib --target aarch64-linux-android
+
+  # Release-flavour APK (docs/notes/android.md): no game C, zig as
+  # libzig.so, licences, stripped, not debuggable. Always debug-signed here:
+  # the release key is used only by release.yml, never on push/PR.
+  android-apk:
+    name: Android release-flavour APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-apk # own cache (release profile, cargo-about binary)
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+      - name: cargo-about (THIRD_PARTY_LICENSES.html)
+        run: cargo about --version || cargo install cargo-about --locked --version 0.9.2 --features cli
+      - name: build-apk.sh --release-flavour
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: bash packaging/android/build-apk.sh --release-flavour
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Birdman64-android-arm64-debugsigned
+          path: target/android-apk/Birdman64-android-arm64-debugsigned.apk
+
   # First-run module build (docs/notes/first-run-build.md T12), both release
   # platforms, every push: builds the game module with zig via the
   # pw64-cbuild example (network-free: the checked-out decomp is

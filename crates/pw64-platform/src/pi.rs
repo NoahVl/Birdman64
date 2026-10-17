@@ -9,9 +9,9 @@
 //! they funnel into these functions, and `uvMemRead` already assembles values
 //! big-endian byte by byte (memory.c:185).
 
-use crate::vaddr;
 use crate::os::mesg::{OSMesg, OSMesgQueue};
 use crate::os::{reschedule, with};
+use crate::vaddr;
 use anyhow::Result;
 use pw64_rom::Rom;
 use std::ffi::c_void;
@@ -83,8 +83,16 @@ fn dir_rom_candidates(dir: &Path) -> Vec<PathBuf> {
 
 /// Workspace root next to `crates/pw64-platform` (so `cargo run` from any
 /// working directory finds the repo's `rom/` and `decomp/`).
+#[cfg(not(target_os = "android"))]
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// Android: no checkout on the device, and the builder's path stays out of
+/// the APK.
+#[cfg(target_os = "android")]
+fn workspace_root() -> PathBuf {
+    PathBuf::from(".")
 }
 
 /// Every ROM path to try, in order. `explicit`/`$PW64_ROM` stay single-path

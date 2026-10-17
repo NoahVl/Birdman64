@@ -125,11 +125,11 @@ mod sys {
 }
 
 // macOS/arm64 can't map anything below 4 GB (`__PAGEZERO`): native-build.md §10.
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
 compile_error!(
     "pw64-platform: the OS core needs thread stacks at fixed addresses in \
      0x80800000..0xA0000000 (below 4 GB, bit 31 set); implemented for Windows (VirtualAlloc) \
-     and Linux (mmap MAP_FIXED_NOREPLACE) only — see docs/notes/native-build.md §10"
+     and Linux/Android (mmap MAP_FIXED_NOREPLACE) only — see docs/notes/native-build.md §10"
 );
 
 /// Windows: reserves (MEM_RESERVE, no commit) the whole stack window, so
@@ -180,11 +180,16 @@ pub fn reserve_region_at(base: usize) -> bool {
     #[cfg(windows)]
     // SAFETY: plain Win32 reservation at a fixed address; failure is checked.
     let ok = unsafe {
-        sys::VirtualAlloc(base as *mut _, WINDOW_SIZE, sys::MEM_RESERVE, sys::PAGE_NOACCESS) as usize
+        sys::VirtualAlloc(
+            base as *mut _,
+            WINDOW_SIZE,
+            sys::MEM_RESERVE,
+            sys::PAGE_NOACCESS,
+        ) as usize
             == base
     };
-    #[cfg(target_os = "linux")]
-    let ok = linux_reserve(base, WINDOW_SIZE, libc::MAP_FIXED_NOREPLACE);
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let ok = linux_reserve(base, WINDOW_SIZE, crate::MAP_FIXED_NOREPLACE);
     if ok {
         BASE.store(base, Ordering::Relaxed);
         RESERVED.store(true, Ordering::Release);
@@ -195,7 +200,7 @@ pub fn reserve_region_at(base: usize) -> bool {
 /// Linux: a PROT_NONE, uncommitted mapping of `[base, base + len)` (`flag`:
 /// MAP_FIXED_NOREPLACE for a fresh reservation, MAP_FIXED to return a slot
 /// to it). True if it landed at `base`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn linux_reserve(base: usize, len: usize, flag: i32) -> bool {
     // SAFETY: anonymous mapping; NOREPLACE never clobbers (old kernels take
     // it as a hint, hence the check), MAP_FIXED only over our own reservation.
@@ -329,7 +334,7 @@ fn set_teb_stack_limit(v: usize) {
     unsafe { core::arch::asm!("mov gs:[0x10], {}", in(reg) v, options(nostack)) };
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn map_fixed(slot: usize, in_reservation: bool) -> bool {
     // MAP_FIXED_NOREPLACE (Linux 4.17+) fails with EEXIST instead of
     // clobbering an existing mapping; older kernels treat it as a hint, so
@@ -340,7 +345,7 @@ fn map_fixed(slot: usize, in_reservation: bool) -> bool {
     let fixed = if in_reservation {
         libc::MAP_FIXED
     } else {
-        libc::MAP_FIXED_NOREPLACE
+        crate::MAP_FIXED_NOREPLACE
     };
     // SAFETY: anonymous mapping at a free fixed address (or over our own
     // reservation; CURSOR hands each slot out once); failure is checked.
@@ -384,7 +389,7 @@ impl Drop for LowStack {
                 sys::VirtualFree(self.slot as *mut _, 0, sys::MEM_RELEASE);
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         if self.in_reservation {
             // Back to PROT_NONE: the window stays reserved.
             assert!(linux_reserve(self.slot, SLOT_SIZE, libc::MAP_FIXED));
@@ -473,7 +478,10 @@ mod tests {
             assert_eq!(of(usize::MAX - 2, 4), None);
         }
         // The default window's vaddrs are not slots of a relocated one.
-        assert_eq!(stack_slot_in(0x7_4000_0000, SEARCH_START + 0x2_0000, 4), None);
+        assert_eq!(
+            stack_slot_in(0x7_4000_0000, SEARCH_START + 0x2_0000, 4),
+            None
+        );
     }
 
     /// Creating a stack (PAGE_GUARD) must not move the caller's TEB

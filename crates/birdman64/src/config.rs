@@ -84,6 +84,12 @@ pub struct Config {
     pub oled: Oled,
     pub rom: Rom,
     pub ui: Ui,
+    /// `[touch]`: on-screen control offsets moved by the player (Android),
+    /// control name → (dx, dy) as fractions of the screen size
+    /// (`touch::Offsets`).
+    pub touch: Vec<(String, (f32, f32))>,
+    /// `[touch] hidden`: only the menu button shows (a pad is used).
+    pub touch_hidden: bool,
     /// Keys skipped at load (wrong type or invalid value; see `ignored_keys`).
     pub ignored: Vec<String>,
 }
@@ -654,8 +660,84 @@ fn from_table(table: &toml::Table) -> Config {
         }
     }
 
+    if let Some(v) = table.get("touch") {
+        match v.as_table() {
+            Some(t) => {
+                cfg.touch_hidden = bool_of(t, "hidden", "touch.hidden", &mut ignored, false);
+                for (k, v) in t.iter().filter(|(k, _)| *k != "hidden") {
+                    match touch_offset(v) {
+                        Some(o) => cfg.touch.push((k.clone(), o)),
+                        None => ignore(
+                            &mut ignored,
+                            &format!("touch.{k}"),
+                            v,
+                            "use [dx, dy], fractions of the screen between -1 and 1",
+                        ),
+                    }
+                }
+            }
+            None => ignore(&mut ignored, "touch", v, "must be a [touch] table"),
+        }
+    }
+
     cfg.ignored = ignored;
     cfg
+}
+
+/// One `[touch]` value: a two-number array, each in -1..=1.
+fn touch_offset(v: &toml::Value) -> Option<(f32, f32)> {
+    let [x, y] = v.as_array()?.as_slice() else {
+        return None;
+    };
+    let (x, y) = (coerce_f32(x)?, coerce_f32(y)?);
+    ((-1.0..=1.0).contains(&x) && (-1.0..=1.0).contains(&y)).then_some((x, y))
+}
+
+/// Writes the touch control offsets into `[touch]` (replacing the old
+/// ones; `hidden` stays). Same file discipline as `save_settings`.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn save_touch(offsets: &[(&str, (f32, f32))]) -> Result<(), String> {
+    let table = read_table()?;
+    write_table(&with_touch(table, offsets, None))
+}
+
+/// Writes `[touch] hidden` (true: only the menu button shows).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn save_touch_hidden(hidden: bool) -> Result<(), String> {
+    let mut table = read_table()?;
+    let offsets: Vec<(String, (f32, f32))> = from_table(&table).touch;
+    let offsets: Vec<(&str, (f32, f32))> = offsets.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    table = with_touch(table, &offsets, Some(hidden));
+    write_table(&table)
+}
+
+/// Rebuilds `[touch]` in a round-trip table (separate from the file I/O
+/// for tests): the given offsets (rounded to 4 decimals), `hidden` from
+/// `hidden` or kept as it was (written only when true). Empty → removed.
+fn with_touch(
+    mut table: toml::Table,
+    offsets: &[(&str, (f32, f32))],
+    hidden: Option<bool>,
+) -> toml::Table {
+    let old_hidden = table
+        .get("touch")
+        .and_then(|t| t.get("hidden"))
+        .and_then(coerce_bool)
+        .unwrap_or(false);
+    let round = |f: f32| toml::Value::Float((f64::from(f) * 1e4).round() / 1e4);
+    let mut t: toml::Table = offsets
+        .iter()
+        .map(|&(k, (x, y))| (k.to_string(), toml::Value::Array(vec![round(x), round(y)])))
+        .collect();
+    if hidden.unwrap_or(old_hidden) {
+        t.insert("hidden".into(), true.into());
+    }
+    if t.is_empty() {
+        table.remove("touch");
+    } else {
+        table.insert("touch".into(), toml::Value::Table(t));
+    }
+    table
 }
 
 /// Parsed `pw64.toml`. The process-wide settings, loaded on first use.
@@ -1150,6 +1232,32 @@ mod tests {
     /// (the preset variant is exercised in `low_end_preset_defaults_removed`).
     fn apply(t: &mut toml::Table, u: &SavedSettings) -> Result<(), String> {
         super::apply(t, u, false)
+    }
+
+    #[test]
+    fn touch_offsets_parse_and_round_trip() {
+        let c = parse("[touch]\nz = [0.05, -0.1]\na = [2.0, 0.0]\nr = \"x\"\n").unwrap();
+        assert_eq!(c.touch, vec![("z".to_string(), (0.05, -0.1))]);
+        assert_eq!(c.ignored, vec!["touch.a", "touch.r"]);
+        let t = with_touch(
+            toml::Table::new(),
+            &[("z", (0.05, -0.1)), ("menu", (0.0, 0.25))],
+            None,
+        );
+        let c = from_table(&t);
+        assert_eq!(c.touch.len(), 2);
+        assert!(c.touch.contains(&("menu".to_string(), (0.0, 0.25))));
+        assert!(!c.touch_hidden);
+        assert!(
+            !with_touch(t.clone(), &[], None).contains_key("touch"),
+            "empty removes"
+        );
+        // `hidden` survives an offsets save and isn't read as an offset.
+        let t = with_touch(t, &[], Some(true));
+        let t = with_touch(t, &[("a", (0.1, 0.1))], None);
+        let c = from_table(&t);
+        assert!(c.touch_hidden && c.ignored.is_empty());
+        assert_eq!(c.touch, vec![("a".to_string(), (0.1, 0.1))]);
     }
 
     #[test]

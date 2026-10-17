@@ -27,7 +27,7 @@ pub mod vi;
 // signal handler on Linux; same `[crash]` report.
 #[cfg(windows)]
 pub mod crash;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[path = "crash_linux.rs"]
 pub mod crash;
 
@@ -726,7 +726,7 @@ pub fn run(cfg: &RunConfig) -> Stop {
 /// `OSThread` exists; here it gets a thread of its own at priority 1).
 pub fn boot(entry: unsafe extern "C-unwind" fn(*mut c_void), arg: *mut c_void) {
     const BOOT_KEY: usize = 1;
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "android"))]
     crash::install(); // report RIP/address for a fault inside the C
     let arg = arg as usize;
     create_thread(

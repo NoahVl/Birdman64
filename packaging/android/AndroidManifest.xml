@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Birdman64 for Android: a NativeActivity (no Java code) that loads
+  libbirdman64.so and calls its android_main. build-apk.sh packages it;
+  docs/notes/android.md has the details. The package id is a placeholder
+  until the first release. versionName and versionCode come from the
+  Cargo.toml version (build-apk.sh).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="app.birdman64">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+
+    <!-- First-run build (release flavour): downloads the open-source decomp
+         once (docs/notes/android.md). A normal permission: no prompt. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- wgpu: Vulkan first, GLES 3 as the fallback. -->
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <!-- No android:isGame / appCategory="game": on the test device (120 Hz
+         panel) that classification brought a 60 fps game frame-rate
+         override for the app, which held even with a requested rate
+         (ANativeWindow_setFrameRate). Hiding the system bars is done in code. -->
+    <application
+        android:label="Birdman64"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:hasCode="false"
+        android:hasFragileUserData="true"
+        android:extractNativeLibs="true">
+        <!-- Landscape only; a pad connecting (keyboard|navigation) or any
+             other listed change must not restart the activity: the game
+             thread and its OS core live for the whole process. -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|locale|layoutDirection|fontScale|touchscreen|colorMode"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+            <meta-data android:name="android.app.lib_name" android:value="birdman64" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

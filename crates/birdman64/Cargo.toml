@@ -5,6 +5,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# The app is a library (lib.rs) behind a thin desktop exe (main.rs). Android
+# builds the same library as the APK's `.so`, overriding the crate type at
+# build time: `cargo rustc -p birdman64 --lib --crate-type cdylib`
+# (docs/notes/android.md), so desktop builds produce no extra artifact.
+[lib]
+name = "birdman64"
+path = "src/lib.rs"
+
 [features]
 # Release build (`release.yml`): `windows_subsystem = "windows"`, i.e. no
 # console window for a double-clicked exe. Off by default: developers keep
@@ -34,8 +42,6 @@ env_logger.workspace = true
 futures.workspace = true
 gilrs.workspace = true
 uuid.workspace = true
-# First-run ROM picker (rom_setup.rs): native dialog, no winit/wgpu coupling.
-rfd.workspace = true
 # first-run: fetch the decomp + build the game module (firstrun.rs).
 pw64-cbuild = { workspace = true, features = ["fetch"], optional = true }
 serde.workspace = true
@@ -48,6 +54,20 @@ toml.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true
 resvg.workspace = true
+
+# First-run ROM picker (rom_setup.rs): native dialog, no winit/wgpu coupling.
+# No Android backend (src/android/rfd.rs stands in there).
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rfd.workspace = true
+
+# Android (src/android.rs): winit's NativeActivity backend (android-activity,
+# re-exported as `winit::platform::android::activity`); libc for the
+# stderr → logcat pipe; jni (the version android-activity uses) for the
+# immersive mode and cutout insets, which only Java APIs offer.
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { workspace = true, features = ["android-native-activity"] }
+libc.workspace = true
+jni = "0.22.4"
 
 [build-dependencies]
 # Windows exe resource (pw64.rc: icon + VERSIONINFO; build.rs gates on the

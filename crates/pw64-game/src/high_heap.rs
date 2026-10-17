@@ -81,11 +81,16 @@ fn reserve(base: usize) -> bool {
     {
         // SAFETY: plain reservation at a fixed address; checked.
         let p = unsafe {
-            sys::VirtualAlloc(base as *mut _, ARENA_SIZE, sys::MEM_RESERVE, sys::PAGE_NOACCESS)
+            sys::VirtualAlloc(
+                base as *mut _,
+                ARENA_SIZE,
+                sys::MEM_RESERVE,
+                sys::PAGE_NOACCESS,
+            )
         };
         p as usize == base
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     // SAFETY: anonymous PROT_NONE mapping that never clobbers (old kernels
     // take NOREPLACE as a hint, hence the check).
     unsafe {
@@ -93,7 +98,10 @@ fn reserve(base: usize) -> bool {
             base as *mut libc::c_void,
             ARENA_SIZE,
             libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | libc::MAP_FIXED_NOREPLACE,
+            libc::MAP_PRIVATE
+                | libc::MAP_ANONYMOUS
+                | libc::MAP_NORESERVE
+                | pw64_platform::MAP_FIXED_NOREPLACE,
             -1,
             0,
         );
@@ -109,10 +117,11 @@ fn commit(addr: usize, len: usize) -> bool {
     #[cfg(windows)]
     {
         // SAFETY: pages inside our own reservation.
-        let p = unsafe { sys::VirtualAlloc(addr as *mut _, len, sys::MEM_COMMIT, sys::PAGE_READWRITE) };
+        let p =
+            unsafe { sys::VirtualAlloc(addr as *mut _, len, sys::MEM_COMMIT, sys::PAGE_READWRITE) };
         !p.is_null()
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     // SAFETY: pages inside our own reservation.
     unsafe {
         libc::mprotect(
@@ -134,8 +143,13 @@ pub fn enable() -> Option<usize> {
     if cur != 0 {
         return Some(cur);
     }
-    // 1 TB, 2 TB, ...: far above everything else we map.
-    let base = (1..16).map(|k| k << 40).find(|&a| reserve(a))?;
+    // 1 TB, 2 TB, ...: far above everything else we map. Then 128..384 GB
+    // for 39-bit VA kernels (common aarch64 Linux: user space ends at
+    // 512 GB), still above the RDRAM/stack candidates (< 96 GB).
+    let base = (1..16)
+        .map(|k| k << 40)
+        .chain((2..6).map(|k| k << 36))
+        .find(|&a| reserve(a))?;
     BASE.store(base, Ordering::Release);
     Some(base)
 }

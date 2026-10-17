@@ -1,5 +1,6 @@
 //! Crash tracer, Linux flavour of `crash.rs` (native-build.md §8): a
-//! SIGSEGV/SIGBUS/SIGILL/SIGFPE handler that prints the faulting RIP/RSP and
+//! SIGSEGV/SIGBUS/SIGILL/SIGFPE handler that prints the faulting RIP/RSP
+//! (aarch64: PC/SP) and
 //! access address in the same `[crash]` format, then puts the previous
 //! handler back and returns, so the fault re-raises into it (Rust's
 //! stack-overflow reporter, or the default core dump). RIPs in the game
@@ -51,7 +52,8 @@ fn module_range() -> (usize, usize) {
 
 /// `(start, end)` of this exe's loaded image (mirror of pw64-game memmap):
 /// linker-defined symbols, so async-signal-safe.
-fn exe_image_range() -> (usize, usize) {
+#[cfg(not(target_os = "android"))]
+pub fn exe_image_range() -> (usize, usize) {
     unsafe extern "C" {
         // Defined by the linker (lld and GNU ld): first byte of the first
         // PT_LOAD and the end of .bss.
@@ -62,6 +64,133 @@ fn exe_image_range() -> (usize, usize) {
         (&raw const __executable_start) as usize,
         (&raw const _end) as usize,
     )
+}
+
+/// Android: the "exe" is the app's `.so` (loaded by the Java side), and
+/// bionic's linker defines no `__executable_start` for it. The range is the
+/// PT_LOAD span of the object holding this function, found once with
+/// `dl_iterate_phdr`. That is not async-signal-safe, so only this function
+/// (never the handler) computes it; [`install`] calls it before the handler
+/// exists, and the handler reads [`cached_image_range`] only.
+#[cfg(target_os = "android")]
+pub fn exe_image_range() -> (usize, usize) {
+    if let Some(r) = cached_image_range() {
+        return r;
+    }
+    let r = image_containing(exe_image_range as *const () as usize);
+    IMAGE.0.store(r.0, Ordering::Relaxed);
+    IMAGE.1.store(r.1, Ordering::Relaxed);
+    // Release: a reader that sees the flag sees both halves.
+    IMAGE_DONE.store(true, Ordering::Release);
+    r
+}
+
+#[cfg(target_os = "android")]
+static IMAGE: (AtomicUsize, AtomicUsize) = (AtomicUsize::new(0), AtomicUsize::new(0));
+#[cfg(target_os = "android")]
+static IMAGE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The image range once computed (plain atomic loads: async-signal-safe).
+#[cfg(target_os = "android")]
+fn cached_image_range() -> Option<(usize, usize)> {
+    IMAGE_DONE.load(Ordering::Acquire).then(|| {
+        (
+            IMAGE.0.load(Ordering::Relaxed),
+            IMAGE.1.load(Ordering::Relaxed),
+        )
+    })
+}
+
+/// The image range as the signal handler may read it: never computes on
+/// Android (an empty range, matching nothing, if `install` didn't run).
+#[cfg(target_os = "android")]
+fn handler_image_range() -> (usize, usize) {
+    cached_image_range().unwrap_or((0, 0))
+}
+
+/// Linker symbols elsewhere: always async-signal-safe.
+#[cfg(not(target_os = "android"))]
+fn handler_image_range() -> (usize, usize) {
+    exe_image_range()
+}
+
+/// PT_LOAD span `(start, end)` of the loaded object containing `addr`, or
+/// `(0, 0)` (an empty range, matches nothing).
+#[cfg(target_os = "android")]
+fn image_containing(addr: usize) -> (usize, usize) {
+    unsafe extern "C" fn cb(
+        info: *mut libc::dl_phdr_info,
+        _size: usize,
+        data: *mut libc::c_void,
+    ) -> libc::c_int {
+        // SAFETY: bionic passes a valid info whose phdr array has phnum
+        // entries; `data` is the `(addr, start, end)` below.
+        unsafe {
+            let st = &mut *(data as *mut (usize, usize, usize));
+            let info = &*info;
+            let phdrs = core::slice::from_raw_parts(info.dlpi_phdr, info.dlpi_phnum as usize);
+            let (mut lo, mut hi, mut hit) = (usize::MAX, 0, false);
+            for p in phdrs.iter().filter(|p| p.p_type == libc::PT_LOAD) {
+                let s = info.dlpi_addr as usize + p.p_vaddr as usize;
+                let e = s + p.p_memsz as usize;
+                hit |= (s..e).contains(&st.0);
+                lo = lo.min(s);
+                hi = hi.max(e);
+            }
+            if hit {
+                (st.1, st.2) = (lo, hi);
+                return 1; // stop iterating
+            }
+            0
+        }
+    }
+    let mut st = (addr, 0usize, 0usize);
+    // SAFETY: the callback only reads what bionic hands it and writes `st`.
+    unsafe { libc::dl_iterate_phdr(Some(cb), (&raw mut st).cast()) };
+    (st.1, st.2)
+}
+
+/// Return addresses of the current thread, innermost first, into `ips`
+/// (glibc `backtrace(3)`). Returns the count.
+#[cfg(not(target_os = "android"))]
+fn return_addresses(ips: &mut [usize; 48]) -> usize {
+    let mut raw = [core::ptr::null_mut::<libc::c_void>(); 48];
+    // SAFETY: glibc backtrace(3) into a 48-slot buffer.
+    let n = unsafe { libc::backtrace(raw.as_mut_ptr(), raw.len() as libc::c_int) }.max(0) as usize;
+    for (o, i) in ips.iter_mut().zip(&raw[..n]) {
+        *o = *i as usize;
+    }
+    n
+}
+
+/// Bionic has no `backtrace(3)`: walk with libunwind's `_Unwind_Backtrace`
+/// (Rust's std links it on Android), the same frames glibc's would give.
+#[cfg(target_os = "android")]
+fn return_addresses(ips: &mut [usize; 48]) -> usize {
+    unsafe extern "C" {
+        fn _Unwind_Backtrace(
+            trace: unsafe extern "C" fn(*mut libc::c_void, *mut libc::c_void) -> libc::c_int,
+            arg: *mut libc::c_void,
+        ) -> libc::c_int;
+        fn _Unwind_GetIP(ctx: *mut libc::c_void) -> usize;
+    }
+    unsafe extern "C" fn step(ctx: *mut libc::c_void, arg: *mut libc::c_void) -> libc::c_int {
+        // SAFETY: `arg` is the `(buffer, count)` below; `ctx` is the
+        // unwinder's live frame context.
+        unsafe {
+            let st = &mut *(arg as *mut (&mut [usize; 48], usize));
+            if st.1 == st.0.len() {
+                return 5; // _URC_END_OF_STACK: buffer full
+            }
+            st.0[st.1] = _Unwind_GetIP(ctx);
+            st.1 += 1;
+        }
+        0 // _URC_NO_REASON: keep going
+    }
+    let mut st = (ips, 0usize);
+    // SAFETY: the callback writes only into `st`.
+    unsafe { _Unwind_Backtrace(step, (&raw mut st).cast()) };
+    st.1
 }
 
 /// Pure code-address formatting for the crash lines (mirror: crash.rs):
@@ -103,9 +232,8 @@ fn write_images(
 /// frames (std's backtrace prints names only, no addresses).
 pub fn panic_frames(skip: u32) -> String {
     let (exe, module) = (exe_image_range(), module_range());
-    let mut ips = [core::ptr::null_mut::<libc::c_void>(); 48];
-    // SAFETY: glibc backtrace(3) into a 48-slot buffer.
-    let n = unsafe { libc::backtrace(ips.as_mut_ptr(), ips.len() as libc::c_int) }.max(0) as usize;
+    let mut ips = [0usize; 48];
+    let n = return_addresses(&mut ips);
     let mut s = String::new();
     let _ = write_images(&mut s, exe, module);
     s.push_str("\nframes:");
@@ -141,21 +269,46 @@ impl core::fmt::Write for Buf {
     }
 }
 
+/// The interrupted PC and SP from the signal's `ucontext_t`, plus their
+/// names for the report (x86_64 `gregs[REG_RIP/REG_RSP]`, aarch64
+/// `mcontext.pc/.sp`).
+///
+/// # Safety
+/// `uc` is the ucontext the kernel passed to an `SA_SIGINFO` handler.
+#[cfg(target_arch = "x86_64")]
+unsafe fn pc_sp(uc: &libc::ucontext_t) -> (u64, u64, &'static str, &'static str) {
+    let g = &uc.uc_mcontext.gregs;
+    (
+        g[libc::REG_RIP as usize] as u64,
+        g[libc::REG_RSP as usize] as u64,
+        "RIP",
+        "RSP",
+    )
+}
+
+/// See the x86_64 twin.
+///
+/// # Safety
+/// `uc` is the ucontext the kernel passed to an `SA_SIGINFO` handler.
+#[cfg(target_arch = "aarch64")]
+unsafe fn pc_sp(uc: &libc::ucontext_t) -> (u64, u64, &'static str, &'static str) {
+    (uc.uc_mcontext.pc, uc.uc_mcontext.sp, "PC", "SP")
+}
+
 extern "C" fn handler(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     // SAFETY: the kernel passes a valid siginfo/ucontext for SA_SIGINFO.
-    let (addr, rip, rsp) = unsafe {
+    let (addr, (rip, rsp, pc_name, sp_name)) = unsafe {
         let uc = &*(ctx as *const libc::ucontext_t);
-        (
-            (*info).si_addr() as usize,
-            uc.uc_mcontext.gregs[libc::REG_RIP as usize] as u64,
-            uc.uc_mcontext.gregs[libc::REG_RSP as usize] as u64,
-        )
+        ((*info).si_addr() as usize, pc_sp(uc))
     };
     let mut buf = Buf { b: [0; 512], n: 0 };
-    let (exe, module) = (exe_image_range(), module_range());
-    let _ = write!(buf, "[crash] signal {sig} at RIP ");
+    let (exe, module) = (handler_image_range(), module_range());
+    let _ = write!(buf, "[crash] signal {sig} at {pc_name} ");
     let _ = write_rip(&mut buf, rip, exe, module);
-    let _ = write!(buf, " RSP 0x{rsp:x}, fault address 0x{addr:x}\n[crash] ");
+    let _ = write!(
+        buf,
+        " {sp_name} 0x{rsp:x}, fault address 0x{addr:x}\n[crash] "
+    );
     let _ = write_images(&mut buf, exe, module);
     // Where the module's `.map` is (cache layout: next to the module): with
     // the `pw64game+0x<off>` form above, the faulting function is a lookup.
@@ -187,6 +340,9 @@ pub fn install() {
     if !prev.is_empty() {
         return;
     }
+    // Android: computes and caches the image range eagerly, before the
+    // handler can run (it only reads the cache).
+    let _ = exe_image_range();
     for sig in SIGNALS {
         // SAFETY: plain sigaction setup; SA_ONSTACK uses the alternate stack
         // Rust gives its threads, so a guard-page hit can still report.

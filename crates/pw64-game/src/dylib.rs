@@ -71,6 +71,12 @@ pub fn game() -> &'static Game {
         .expect("game module not loaded (pw64_game::dylib::load)")
 }
 
+/// The loaded module, or `None` before [`load`] (the settings screen's
+/// "any time" switches run in unit tests, which load no module).
+pub fn try_game() -> Option<&'static Game> {
+    GAME.get()
+}
+
 /// `[start, end)` of the module image once loaded, else `None` (no panic).
 pub fn loaded_range() -> Option<(usize, usize)> {
     GAME.get().map(|g| g.range)
@@ -267,7 +273,9 @@ mod sys {
     }
 }
 
-#[cfg(target_os = "linux")]
+// Android: the same `dlopen`, from an absolute path in app storage (the
+// module is import-free, so no namespace/library-path setup is involved).
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod sys {
     use core::ffi::{CStr, c_void};
     use std::os::unix::ffi::OsStrExt;

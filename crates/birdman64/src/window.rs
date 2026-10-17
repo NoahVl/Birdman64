@@ -33,6 +33,8 @@ use winit::window::{Fullscreen, Icon, Window, WindowId};
 /// the 60 Hz VI path).
 pub(crate) type PendingRate = Arc<Mutex<Option<Option<os::vi::PresentRate>>>>;
 
+// Android: no input thread sends Toast / Pause (yet).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 enum UserEvent {
     /// New framebuffer work is in the slot.
     Frame,
@@ -65,6 +67,7 @@ pub fn notify_settings() {
 
 /// Called by the input thread for a controller toast (U7): shows `text`
 /// for 6 s in the window's bottom-left corner.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn notify_toast(text: String) {
     if let Some(p) = PROXY.get() {
         let _ = p.send_event(UserEvent::Toast(text));
@@ -74,6 +77,7 @@ pub fn notify_toast(text: String) {
 /// Called by the input thread when the last controller disconnected (U26).
 /// Same route as [`notify_toast`]: the decision (the player's setting, a
 /// running game, no automation) is made on the window thread.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn request_pause() {
     if let Some(p) = PROXY.get() {
         let _ = p.send_event(UserEvent::Pause);
@@ -114,7 +118,10 @@ const MAX_QUEUED_OPS: usize = 32;
 
 pub(crate) struct Gpu {
     pub(crate) window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
+    /// `None` only on Android between `suspended` and `resumed`: the native
+    /// window is destroyed then, so the surface (and its swapchain) is
+    /// dropped with it and nothing configures or presents.
+    surface: Option<wgpu::Surface<'static>>,
     /// Kept for the surface capability check before each reconfigure.
     adapter: wgpu::Adapter,
     /// The last reconfigure was skipped (`configure_surface`): log once.
@@ -133,6 +140,10 @@ pub(crate) struct Gpu {
     /// Live frame rate + V-Sync (the settings overlay changes both live);
     /// startup values from `opts::fps(true)` / `opts::vsync()`.
     pub(crate) fps: opts::Fps,
+    /// Android: the surface is recreated on every `resumed` (the native
+    /// window is destroyed while the app is in the background).
+    #[cfg(target_os = "android")]
+    instance: wgpu::Instance,
     pub(crate) vsync: bool,
     /// OLED care (O3, live): the HUD drifts and dims by these; startup
     /// values from `opts::oled_drift()` / `opts::oled_brightness()`.
@@ -337,11 +348,14 @@ impl Gpu {
         // mode's rate, but the display now runs at the chosen video mode's.
         let mhz = match (self.display_mode, self.exclusive_mhz) {
             (opts::DisplayMode::Exclusive, Some(mhz)) => Some(mhz),
-            _ => self
-                .window
-                .current_monitor()
-                .and_then(|m| m.refresh_rate_millihertz()),
+            _ => monitor_mhz(&self.window),
         };
+        // Android: vote the chosen fixed rate (not the panel's top rate).
+        #[cfg(target_os = "android")]
+        crate::android::set_fps_cap(match self.fps {
+            opts::Fps::Hz(hz) => hz * 1000,
+            opts::Fps::Monitor | opts::Fps::Uncapped => 0,
+        });
         let rate = opts::present_rate(self.fps, mhz, self.vsync);
         let tearing = opts::allows_tearing(self.fps, mhz);
         let mode = opts::present_mode(self.vsync, rate.is_some(), tearing, &self.present_modes);
@@ -373,12 +387,10 @@ impl Gpu {
     /// skipped configure is retried by `surface_ready` before each redraw
     /// (Wayland never reports the old configuration as outdated).
     fn configure_surface(&mut self) {
-        if self
-            .surface
-            .get_capabilities(&self.adapter)
-            .formats
-            .is_empty()
-        {
+        let Some(surface) = &self.surface else {
+            return;
+        };
+        if surface.get_capabilities(&self.adapter).formats.is_empty() {
             if !self.surface_unsupported {
                 eprintln!(
                     "[window] surface not presentable by {} right now; retrying",
@@ -393,7 +405,22 @@ impl Gpu {
             "[window] surface configure {}x{} {:?}",
             self.config.width, self.config.height, self.config.present_mode
         );
-        self.surface.configure(&self.device, &self.config);
+        surface.configure(&self.device, &self.config);
+    }
+
+    /// The next surface texture, or `None` (no surface, or a failed acquire:
+    /// logged, and reconfigured unless it only timed out).
+    fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
+        match self.surface.as_ref()?.get_current_texture() {
+            Ok(t) => Some(t),
+            Err(e) => {
+                self.log_surface_error(&e);
+                if !matches!(e, wgpu::SurfaceError::Timeout) {
+                    self.configure_surface();
+                }
+                None
+            }
+        }
     }
 
     /// Logs a failed `get_current_texture` (the first few, then every 600th):
@@ -408,6 +435,9 @@ impl Gpu {
 
     /// Before a redraw: retries a skipped configure; false = skip this frame.
     fn surface_ready(&mut self) -> bool {
+        if self.surface.is_none() {
+            return false;
+        }
         if self.surface_unsupported {
             self.configure_surface();
         }
@@ -541,6 +571,11 @@ struct App {
     /// Redraws until that capture (set by the trigger; the panel fades in
     /// over egui's animation time, so the first overlay frame is invisible).
     settings_shot_frame: u8,
+    /// Android: the on-screen touch controls (state + their egui pass).
+    #[cfg(target_os = "android")]
+    touch: crate::touch::Controls,
+    #[cfg(target_os = "android")]
+    touch_painter: crate::touch::Painter,
 }
 
 /// PCI vendor ids of the DRM devices (`/sys/class/drm/cardN/device/vendor`,
@@ -586,6 +621,11 @@ pub fn run(setup: bool, ask_rom: bool) -> ! {
         );
         builder.with_x11();
     }
+    #[cfg(target_os = "android")]
+    {
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+        builder.with_android_app(crate::android::app());
+    }
     let el = match builder.build() {
         Ok(el) => el,
         Err(e) => {
@@ -620,6 +660,17 @@ pub fn run(setup: bool, ask_rom: bool) -> ! {
         hint_shown: false,
         settings_shot: crate::hle::env_list("PW64_SETTINGS_SHOT").first().copied(),
         settings_shot_frame: 0,
+        #[cfg(target_os = "android")]
+        touch: {
+            let mut t = crate::touch::Controls::new();
+            t.set_offsets(crate::touch::Offsets::from_config(
+                &crate::config::get().touch,
+            ));
+            crate::touch::set_hidden_setting(crate::config::get().touch_hidden);
+            t
+        },
+        #[cfg(target_os = "android")]
+        touch_painter: crate::touch::Painter::new(),
     };
     if let Err(e) = el.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
@@ -700,6 +751,47 @@ fn queue_rate(
     }
 }
 
+/// The refresh rate of the window's display, mHz. Android: winit has none;
+/// `android.rs` reads it via JNI (None until the first read, about a second
+/// after start; the 1 s present re-read then switches to the present tick).
+pub(crate) fn monitor_mhz(window: &Window) -> Option<u32> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
+        crate::android::refresh_mhz()
+    }
+    #[cfg(not(target_os = "android"))]
+    window
+        .current_monitor()
+        .and_then(|m| m.refresh_rate_millihertz())
+}
+
+/// The touch controls' layout for this surface: density from the scale
+/// factor, insets from NativeActivity's content rect (the area not under
+/// system bars; empty until the first report) and the display cutout
+/// (`android::cutout_insets`: targetSdk 35 windows draw under it).
+#[cfg(target_os = "android")]
+fn touch_layout(g: &Gpu) -> crate::touch::Layout {
+    let (w, h) = (g.config.width as f32, g.config.height as f32);
+    let r = crate::android::app().content_rect();
+    let mut insets = if r.right > r.left && r.bottom > r.top {
+        crate::touch::Insets {
+            left: r.left as f32,
+            top: r.top as f32,
+            right: w - r.right as f32,
+            bottom: h - r.bottom as f32,
+        }
+    } else {
+        crate::touch::Insets::default()
+    };
+    let [cl, ct, cr, cb] = crate::android::cutout_insets();
+    insets.left = insets.left.max(cl);
+    insets.top = insets.top.max(ct);
+    insets.right = insets.right.max(cr);
+    insets.bottom = insets.bottom.max(cb);
+    crate::touch::Layout::new(w, h, g.window.scale_factor() as f32, insets, 1.0)
+}
+
 impl App {
     fn start(&mut self, el: &ActiveEventLoop) {
         // D3: the default widescreen is this monitor's aspect (wider than
@@ -708,6 +800,10 @@ impl App {
         // runs never set it: their dumps stay 4:3 unless PW64_WIDESCREEN.
         if let Some(m) = el.primary_monitor() {
             let s = m.size();
+            // Android: landscape only, but a start from the (portrait) lock
+            // screen reports the portrait size: long side over short side.
+            #[cfg(target_os = "android")]
+            let s = winit::dpi::PhysicalSize::new(s.width.max(s.height), s.width.min(s.height));
             opts::set_widescreen_monitor_default(s.width, s.height);
         }
         let monitor = el.primary_monitor();
@@ -835,9 +931,7 @@ impl App {
         // V-Sync (`PW64_VSYNC`, default off — matrix in framerate.md).
         let vsync = opts::vsync();
         let fps = opts::fps(true);
-        let monitor = window
-            .current_monitor()
-            .and_then(|m| m.refresh_rate_millihertz());
+        let monitor = monitor_mhz(&window);
         let rate = opts::present_rate(fps, monitor, vsync);
         // Present mode (opts::present_mode): V-Sync → Fifo; else with a
         // present tick Mailbox (the newest frame goes out at the next vblank
@@ -898,7 +992,7 @@ impl App {
         self.last_rate = Some(rate);
         self.gpu = Some(Gpu {
             window,
-            surface,
+            surface: Some(surface),
             adapter,
             surface_unsupported: false,
             surface_errors: 0,
@@ -909,6 +1003,8 @@ impl App {
             scale,
             filter,
             fps,
+            #[cfg(target_os = "android")]
+            instance,
             vsync,
             oled_drift: opts::oled_drift(),
             oled_brightness: opts::oled_brightness(),
@@ -964,7 +1060,9 @@ impl App {
         // U14: a running.lock left by the previous run means that one never
         // got to a clean quit (crash, power loss): say so once, over the
         // first frames, before this run's marker is created below.
-        let stale_lock = paths::running_lock().is_file();
+        // Not on Android: there a process is normally ended by a kill (swiped
+        // away, memory, an update), so the marker is nearly always stale.
+        let stale_lock = !cfg!(target_os = "android") && paths::running_lock().is_file();
         let Some(g) = &self.gpu else { return };
         let (slot, proxy) = (self.slot.clone(), self.proxy.clone());
         let stop_proxy = self.proxy.clone();
@@ -1045,6 +1143,13 @@ impl App {
         // W4: gamepad play is no keyboard/mouse activity to Windows; keep
         // the display on while the game runs (cleared in `quit`).
         crate::sys::keep_display_awake(true);
+        // Android: the ROM / first-run step finished while the app was in
+        // the background (no surface): start paused, as `suspended` would
+        // have paused a running game.
+        #[cfg(target_os = "android")]
+        if self.gpu.as_ref().is_some_and(|g| g.surface.is_none()) && !settings::is_open() {
+            self.open_settings();
+        }
     }
 
     /// First run: the build worker reported. Done → load the module and
@@ -1076,16 +1181,7 @@ impl App {
             g.window.request_redraw();
             return;
         }
-        let tex = match g.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(e) => {
-                g.log_surface_error(&e);
-                if !matches!(e, wgpu::SurfaceError::Timeout) {
-                    g.configure_surface();
-                }
-                return;
-            }
-        };
+        let Some(tex) = g.acquire() else { return };
         let view = tex.texture.create_view(&Default::default());
         let (next, shot) = s.render(g, &view);
         if shot && g.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
@@ -1118,15 +1214,8 @@ impl App {
             g.window.request_redraw();
             return true;
         }
-        let tex = match g.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(e) => {
-                g.log_surface_error(&e);
-                if !matches!(e, wgpu::SurfaceError::Timeout) {
-                    g.configure_surface();
-                }
-                return true;
-            }
+        let Some(tex) = g.acquire() else {
+            return true;
         };
         let view = tex.texture.create_view(&Default::default());
         let (keep, shot) = s.render(g, &view);
@@ -1248,20 +1337,13 @@ impl App {
             }
             return;
         }
-        let tex = match g.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(e) => {
-                g.log_surface_error(&e);
-                if !matches!(e, wgpu::SurfaceError::Timeout) {
-                    g.configure_surface();
-                }
-                // W2: while the overlay is open the game is paused (no
-                // Frame events), so only this keeps the overlay alive.
-                if settings::is_open() {
-                    g.window.request_redraw();
-                }
-                return;
+        let Some(tex) = g.acquire() else {
+            // W2: while the overlay is open the game is paused (no Frame
+            // events), so only this keeps the overlay alive.
+            if settings::is_open() {
+                g.window.request_redraw();
             }
+            return;
         };
         let view = tex.texture.create_view(&Default::default());
         // W6: a display switch fell back (unsupported exclusive mode).
@@ -1291,6 +1373,19 @@ impl App {
             let n = g.shots.swap_remove(i);
             let path = format!("tmp/win_{n:05}.png");
             crate::hle::shot_png(&g.device, &g.queue, &tex.texture, &path);
+        }
+        // Android touch controls: after the shot readback (they are not
+        // part of the picture), hidden under the overlay.
+        #[cfg(target_os = "android")]
+        if !settings::is_open() {
+            // A relayout mid-touch drops the fingers: republish, or what
+            // they held would stay held in the game.
+            if self.touch.set_layout(touch_layout(g))
+                | self.touch.set_hidden(crate::touch::hidden_setting())
+            {
+                input::set_touch(self.touch.pad());
+            }
+            self.touch_painter.render(g, &view, &self.touch);
         }
         // The overlay draws over the game frame (own pass on the surface);
         // closed, it costs nothing. While open it keeps requesting redraws:
@@ -1350,6 +1445,25 @@ impl App {
             // second (the next frame applies it; unchanged readings queue
             // nothing and reconfigure nothing).
             g.present_dirty = true;
+            // Android: a 180° turn moves the cutout to the other side.
+            #[cfg(target_os = "android")]
+            crate::android::refresh_cutout();
+        }
+        // "Move touch controls" (Android): the overlay closes into the
+        // touch edit mode, the game stays paused.
+        #[cfg(target_os = "android")]
+        if overlay_closed && self.overlay.as_mut().is_some_and(|o| o.take_touch_edit()) {
+            // Before the close reroutes the pad: the game keeps an idle one.
+            input::set_game_blocked(true);
+            if let Some(o) = &mut self.overlay {
+                o.close();
+            }
+            self.touch.begin_edit();
+            input::set_touch(crate::touch::TouchPad::IDLE);
+            if let Some(g) = &self.gpu {
+                g.window.request_redraw();
+            }
+            return;
         }
         if overlay_closed {
             self.close_settings();
@@ -1425,9 +1539,18 @@ impl App {
         self.show_cursor();
         // No window yet: nothing could draw the overlay, and a paused game
         // with no visible way out would look hung.
+        // A keyboard Esc / F10 during the touch edit mode ends it (saved);
+        // that reopens the overlay through here.
+        #[cfg(target_os = "android")]
+        if self.touch.editing() {
+            self.end_touch_edit();
+            return;
+        }
         let Some(g) = &self.gpu else { return };
         // Nothing sticks while the overlay owns the input.
         input::release_all_keys();
+        #[cfg(target_os = "android")]
+        self.touch.reset();
         os::set_paused(true);
         self.overlay
             .get_or_insert_with(settings::Overlay::new)
@@ -1461,6 +1584,19 @@ impl App {
         }
     }
 
+    /// Leaves the touch edit mode (Done, Back, going to the background):
+    /// saves the offsets as `[touch]` and returns to the pause menu (the
+    /// game was paused all along).
+    #[cfg(target_os = "android")]
+    fn end_touch_edit(&mut self) {
+        self.touch.end_edit();
+        if let Err(e) = crate::config::save_touch(&self.touch.offsets().to_config()) {
+            eprintln!("[touch] layout not saved: {e}");
+        }
+        input::set_game_blocked(false);
+        self.open_settings();
+    }
+
     fn close_settings(&mut self) {
         if let Some(o) = &mut self.overlay {
             o.close(); // flips the flag + hands the pads back
@@ -1481,8 +1617,59 @@ impl App {
 
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
-        if self.gpu.is_none() {
+        // Android: the system bars come back whenever the activity returns
+        // to the front; hide them again (and re-read the cutout).
+        #[cfg(target_os = "android")]
+        crate::android::apply_window_mode();
+        let Some(g) = &mut self.gpu else {
             self.start(el);
+            return;
+        };
+        // Desktop: only the first `resumed` matters.
+        #[cfg(not(target_os = "android"))]
+        let _ = g;
+        // Android: back from the background with a new native window: a new
+        // surface for it. The game stays paused in the settings overlay
+        // (`suspended`) until the player resumes it.
+        #[cfg(target_os = "android")]
+        {
+            crate::audio::set_suspended(false);
+            match g.instance.create_surface(g.window.clone()) {
+                Ok(s) => {
+                    g.surface = Some(s);
+                    let size = g.window.inner_size();
+                    (g.config.width, g.config.height) = (size.width.max(1), size.height.max(1));
+                    g.configure_surface();
+                    g.window.request_redraw();
+                }
+                Err(e) => eprintln!("[window] resumed: no surface ({e}); waiting"),
+            }
+        }
+    }
+
+    /// Android: the app went to the background and its native window is
+    /// about to be destroyed (the process may be killed from here on). The
+    /// game pauses through the settings overlay, the same pause model as
+    /// U26's "pause in background"; the surface (and its swapchain) is
+    /// dropped and a new one made in `resumed`. The audio stream stops
+    /// (the game thread applies it from the pause loop) and restarts in
+    /// `resumed`. The EEPROM needs no flush: every save write is persisted
+    /// and fsynced as it happens (pw64-platform headless.rs `persist`).
+    #[cfg(target_os = "android")]
+    fn suspended(&mut self, _: &ActiveEventLoop) {
+        if self.touch.editing() {
+            self.end_touch_edit();
+        }
+        input::release_all_keys();
+        self.touch.reset();
+        crate::audio::set_suspended(true);
+        if self.game_started() && !settings::is_open() {
+            self.open_settings();
+        }
+        if let Some(g) = &mut self.gpu {
+            // Nothing may still use the old swapchain: let queued work end.
+            let _ = g.device.poll(wgpu::PollType::wait_indefinitely());
+            g.surface = None;
         }
     }
 
@@ -1641,6 +1828,35 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // Android: gamepad keys (BUTTON_*, the d-pad, Back) feed the
+                // pad slots; everything else is an ordinary keyboard key.
+                #[cfg(target_os = "android")]
+                if self.rom_screen.is_none() {
+                    let pressed = event.state == ElementState::Pressed;
+                    match input::android_key(event.physical_key, pressed, event.repeat) {
+                        input::AndroidKey::Pad => {
+                            // A physical pad is in use: the touch controls
+                            // hide until the next touch.
+                            if pressed && self.touch.visible() && !self.touch.editing() {
+                                self.touch.hide();
+                                input::set_touch(crate::touch::TouchPad::IDLE);
+                            }
+                            if settings::is_open() {
+                                self.request_overlay_redraw();
+                            }
+                            return;
+                        }
+                        input::AndroidKey::Back => {
+                            if self.touch.editing() {
+                                self.end_touch_edit();
+                            } else {
+                                self.toggle_settings();
+                            }
+                            return;
+                        }
+                        input::AndroidKey::Keyboard => {}
+                    }
+                }
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
@@ -1705,6 +1921,63 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if !alt_enter {
                     input::on_key(code, pressed);
+                }
+            }
+            // Android: in the game, touches drive the on-screen controls
+            // (touch.rs; multi-touch by finger id). On the ROM screen and
+            // the settings overlay a tap acts like a mouse click.
+            #[cfg(target_os = "android")]
+            WindowEvent::Touch(t) => {
+                use winit::event::TouchPhase;
+                let p = (t.location.x as f32, t.location.y as f32);
+                if self.game_started() && !settings::is_open() {
+                    let phase = match t.phase {
+                        TouchPhase::Started => crate::touch::Phase::Start,
+                        TouchPhase::Moved => crate::touch::Phase::Move,
+                        TouchPhase::Ended | TouchPhase::Cancelled => crate::touch::Phase::End,
+                    };
+                    if self.touch.editing() {
+                        let action = self.touch.edit_touch(t.id, phase, p);
+                        if action == Some(crate::touch::EditAction::Done) {
+                            self.end_touch_edit();
+                        }
+                        self.request_overlay_redraw();
+                        return;
+                    }
+                    let menu = self.touch.on_touch(t.id, phase, p);
+                    input::set_touch(self.touch.pad());
+                    if menu {
+                        self.toggle_settings();
+                    }
+                    return;
+                }
+                // Fingers held when the overlay opened are released there.
+                self.touch.reset();
+                let pressed = match t.phase {
+                    TouchPhase::Started => true,
+                    TouchPhase::Ended | TouchPhase::Cancelled => false,
+                    TouchPhase::Moved => return,
+                };
+                self.cursor = p;
+                let (x, y) = self.cursor;
+                if let (Some(s), Some(g)) = (&mut self.rom_screen, &self.gpu) {
+                    let scale = g.window.scale_factor() as f32;
+                    s.pointer_moved(x, y, scale);
+                    s.pointer_button(x, y, scale, pressed);
+                    g.window.request_redraw();
+                }
+                // First-run setup screen (error Retry / Quit buttons).
+                #[cfg(feature = "first-run")]
+                if let (Some(s), Some(g)) = (&mut self.setup, &self.gpu) {
+                    let scale = g.window.scale_factor() as f32;
+                    s.pointer_moved(x, y, scale);
+                    s.pointer_button(x, y, scale, pressed);
+                    g.window.request_redraw();
+                }
+                if let (true, Some(o)) = (settings::is_open(), &mut self.overlay) {
+                    o.pointer_moved(x, y);
+                    o.pointer_button(x, y, pressed);
+                    self.request_overlay_redraw();
                 }
             }
             // A file dropped onto the window: the ROM screen's way in.

@@ -14,9 +14,48 @@ use pw64_game::memmap::{hle_readable, hle_writable};
 use pw64_platform::{ai, headless, pi, vaddr};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::{config, opts};
+
+/// The app is in the background (Android `suspended` → `resumed`, window
+/// thread). The cpal stream belongs to the game thread, which applies this
+/// in [`sync_suspend`] (from the pause loop and every retrace). Never set
+/// on desktop (nor are the calls compiled there).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+static SUSPENDED: AtomicBool = AtomicBool::new(false);
+
+/// Window thread: stop (`true`) or restart the output stream; applied by
+/// the game thread within a few ms (the overlay's pause loop runs the hook
+/// every 2 ms).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn set_suspended(suspended: bool) {
+    SUSPENDED.store(suspended, Ordering::Release);
+}
+
+/// Game thread: pauses / resumes the output stream to match
+/// [`set_suspended`]. Cheap when nothing changed.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn sync_suspend() {
+    let want = SUSPENDED.load(Ordering::Acquire);
+    AUDIO.with(|g| {
+        let Ok(g) = g.try_borrow() else { return };
+        let Some(a) = g.as_ref() else { return };
+        let Ok(mut a) = a.try_borrow_mut() else {
+            return;
+        };
+        if a.stream_paused == want {
+            return;
+        }
+        a.stream_paused = want;
+        if let Some(o) = &a.out {
+            match o.set_playing(!want) {
+                Ok(()) => eprintln!("[audio] stream {}", if want { "paused" } else { "resumed" }),
+                Err(e) => eprintln!("[audio] stream {e}"),
+            }
+        }
+    });
+}
 
 /// Output volume, permille (0..1000): set live by the settings screen, read
 /// per AI buffer in the sink. An atomic so the window thread doesn't need the
@@ -107,6 +146,8 @@ struct Audio {
     scaled: Vec<i16>,
     /// `PW64_AUDIO_STATS`: last periodic report (wall time, output counters).
     report: Option<(std::time::Instant, pw64_audio::output::OutputCounters)>,
+    /// The output stream is paused ([`sync_suspend`]).
+    stream_paused: bool,
 }
 
 /// Seconds between `PW64_AUDIO_STATS` reports.
@@ -196,6 +237,7 @@ pub fn install() {
         sum_sq: 0.0,
         scaled: Vec::new(),
         report,
+        stream_paused: false,
     }));
     AUDIO.with(|g| *g.borrow_mut() = Some(a.clone()));
     let h = a.clone();

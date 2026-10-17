@@ -197,11 +197,10 @@ module in `$XDG_CACHE_HOME`. dlopen needs the cache on an exec-mountable fs
 document `--appimage-extract-and-run`; the tar.gz is the fallback). Build the
 exe on an old-glibc runner. The .so needs no libc symbols at all.
 
-## Android (out of scope)
+## Android
 
-Nothing here blocks it: the runtime/module split and thunk binding are OS
-neutral; Android would need its own way to obtain the module (on-device
-compiler or ROM recompile).
+Same launcher and builder on the device, zig shipped in the APK as
+`libzig.so`: android.md "Building the game module on the device".
 
 ## Spike results (16 threads, Win 10)
 

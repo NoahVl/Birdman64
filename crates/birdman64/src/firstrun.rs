@@ -46,6 +46,13 @@ impl std::fmt::Display for Failure {
     }
 }
 
+/// What the setup screen calls the player's machine.
+const DEVICE: &str = if cfg!(target_os = "android") {
+    "phone"
+} else {
+    "PC"
+};
+
 fn log_path() -> PathBuf {
     paths::cache_dir().join("build.log")
 }
@@ -139,51 +146,6 @@ fn load_failure(path: &Path, e: &str) -> Failure {
     f
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn load_error_classification() {
-        // Windows: quarantine / missing file.
-        assert_eq!(
-            load_problem(
-                "could not load C:\\cache\\x.dll: The specified module could not be found. (0x7e)"
-            ),
-            LoadProblem::Blocked
-        );
-        assert_eq!(
-            load_problem("could not load C:\\cache\\x.dll: Access is denied. (0x5)"),
-            LoadProblem::Blocked
-        );
-        // Linux dlopen variants.
-        assert_eq!(
-            load_problem(
-                "could not load /c/x.so: libpw64game.so: cannot open shared object file: No such file or directory"
-            ),
-            LoadProblem::Blocked
-        );
-        assert_eq!(
-            load_problem("could not load /c/x.so: Permission denied"),
-            LoadProblem::Blocked
-        );
-        // The fixed base was taken.
-        assert_eq!(
-            load_problem("x.dll loaded at 0xc0000000, not 0xb0000000 (address range taken)"),
-            LoadProblem::RangeTaken
-        );
-        // Everything else is Other (a rebuild is the only fix).
-        assert_eq!(
-            load_problem("x.dll: missing symbol pw64_dll_abi; delete it to rebuild the game"),
-            LoadProblem::Other
-        );
-        assert_eq!(
-            load_problem("could not load x.dll: something completely different"),
-            LoadProblem::Other
-        );
-    }
-}
-
 /// Headless, scripted and `--build-game` runs: the cached module or a build
 /// with progress on stderr, then load it. Prints the reason and exits 1 on
 /// failure (no dialog: nobody may be watching).
@@ -237,6 +199,20 @@ fn find_zig() -> Result<PathBuf, PathBuf> {
         let p = PathBuf::from(p);
         return if p.is_file() { Ok(p) } else { Err(p) };
     }
+    bundled_zig()
+}
+
+/// Android: the APK ships zig as `lib/arm64-v8a/libzig.so`; the installer
+/// extracts it next to our own library, the only place an app may exec
+/// files from on Android 10+ (docs/notes/android.md).
+#[cfg(target_os = "android")]
+fn bundled_zig() -> Result<PathBuf, PathBuf> {
+    let p = crate::android::native_lib_dir().join("libzig.so");
+    if p.is_file() { Ok(p) } else { Err(p) }
+}
+
+#[cfg(not(target_os = "android"))]
+fn bundled_zig() -> Result<PathBuf, PathBuf> {
     let exe = if cfg!(windows) { "zig.exe" } else { "zig" };
     let dir = std::env::current_exe()
         .ok()
@@ -333,15 +309,20 @@ fn run_build(
         fraction: 0.0,
     });
     let zig = find_zig().map_err(|p| {
-        (
-            fail(format!(
+        let message = if cfg!(target_os = "android") {
+            format!(
+                "The bundled compiler ({}) is missing. Please install Birdman64 again.",
+                p.display()
+            )
+        } else {
+            format!(
                 "The bundled compiler ({}) is missing or was blocked, often by antivirus \
                  software. Extract the Birdman64 zip again, or allow Birdman64 in your \
                  antivirus, then try again.",
                 p.display()
-            )),
-            format!("zig not found at {}", p.display()),
-        )
+            )
+        };
+        (fail(message), format!("zig not found at {}", p.display()))
     })?;
     let manifest = manifest::parse(manifest::DECOMP_MANIFEST)
         .map_err(|e| (fail("This copy of Birdman64 is damaged."), e))?;
@@ -390,6 +371,10 @@ fn fetch_failure(e: &FetchError, cache: &Path) -> Failure {
 
 fn build_failure(e: &BuildError, cache: &Path) -> Failure {
     match e {
+        BuildError::Toolchain(_) if cfg!(target_os = "android") => fail(
+            "The bundled compiler couldn't run on this device. Please report this and \
+             attach the log file.",
+        ),
         BuildError::Toolchain(_) => fail(
             "The bundled compiler (toolchain/zig) couldn't run: it is missing or was \
              blocked, often by antivirus software. Extract the Birdman64 zip again, or \
@@ -647,7 +632,7 @@ impl Screen {
                 ui.set_max_width(560.0);
                 ui.add_space((ui.available_height() * 0.22).max(8.0));
                 ui.label(
-                    egui::RichText::new("Preparing Birdman64 for your PC")
+                    egui::RichText::new(format!("Preparing Birdman64 for your {DEVICE}"))
                         .size(26.0)
                         .strong(),
                 );
@@ -657,12 +642,12 @@ impl Screen {
                     self.error_ui(ui, &f);
                     return;
                 }
-                ui.label(
+                ui.label(format!(
                     "Birdman64 downloads the game's open-source code from GitHub (about \
-                     1 MB) and builds it on your PC. Your ROM never leaves your computer. \
-                     This usually takes under a minute; next time the game starts right \
-                     away.",
-                );
+                     1 MB) and builds it on your {DEVICE}. Your ROM never leaves your \
+                     {DEVICE}. This usually takes under a minute; next time the game \
+                     starts right away."
+                ));
                 ui.add_space(24.0);
                 ui.label(egui::RichText::new(step_label(p.step)).size(17.0));
                 ui.add_space(8.0);
@@ -687,24 +672,33 @@ impl Screen {
         ui.add_space(10.0);
         ui.label(egui::RichText::new(format!("Details: {}", f.log.display())).weak());
         ui.add_space(20.0);
+        // Android has no file manager to open the app's private files dir.
+        let log_button = !cfg!(target_os = "android");
         ui.horizontal(|ui| {
             // Center the three buttons ("Open log folder" needs more width).
             // Quit last, as in most dialogs.
             let (small, wide) = (egui::vec2(90.0, 32.0), egui::vec2(120.0, 32.0));
-            let total = small.x + wide.x + small.x + 24.0;
+            let total = if log_button {
+                small.x + wide.x + small.x + 24.0
+            } else {
+                small.x + small.x + 12.0
+            };
             ui.add_space((ui.available_width() - total).max(0.0) / 2.0);
             if ui.add_sized(small, egui::Button::new("Retry")).clicked() {
                 self.retry = true;
             }
             ui.add_space(12.0);
-            if ui
-                .add_sized(wide, egui::Button::new("Open log folder"))
-                .clicked()
+            if log_button
+                && ui
+                    .add_sized(wide, egui::Button::new("Open log folder"))
+                    .clicked()
                 && let Some(dir) = f.log.parent()
             {
                 crate::paths::open_in_file_manager(dir);
             }
-            ui.add_space(12.0);
+            if log_button {
+                ui.add_space(12.0);
+            }
             if ui.add_sized(small, egui::Button::new("Quit")).clicked() {
                 self.quit = true;
             }
@@ -714,6 +708,51 @@ impl Screen {
             egui::RichText::new("Enter or A = Retry, Esc or B = Quit")
                 .weak()
                 .size(12.0),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_error_classification() {
+        // Windows: quarantine / missing file.
+        assert_eq!(
+            load_problem(
+                "could not load C:\\cache\\x.dll: The specified module could not be found. (0x7e)"
+            ),
+            LoadProblem::Blocked
+        );
+        assert_eq!(
+            load_problem("could not load C:\\cache\\x.dll: Access is denied. (0x5)"),
+            LoadProblem::Blocked
+        );
+        // Linux dlopen variants.
+        assert_eq!(
+            load_problem(
+                "could not load /c/x.so: libpw64game.so: cannot open shared object file: No such file or directory"
+            ),
+            LoadProblem::Blocked
+        );
+        assert_eq!(
+            load_problem("could not load /c/x.so: Permission denied"),
+            LoadProblem::Blocked
+        );
+        // The fixed base was taken.
+        assert_eq!(
+            load_problem("x.dll loaded at 0xc0000000, not 0xb0000000 (address range taken)"),
+            LoadProblem::RangeTaken
+        );
+        // Everything else is Other (a rebuild is the only fix).
+        assert_eq!(
+            load_problem("x.dll: missing symbol pw64_dll_abi; delete it to rebuild the game"),
+            LoadProblem::Other
+        );
+        assert_eq!(
+            load_problem("could not load x.dll: something completely different"),
+            LoadProblem::Other
         );
     }
 }

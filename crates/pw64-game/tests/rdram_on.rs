@@ -17,14 +17,17 @@ fn range_free(base: usize, len: usize) -> bool {
         // PAGE_NOACCESS); the result is only compared.
         unsafe { VirtualAlloc(base as *mut u8, len, 0x2000, 0x01) as usize == base }
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     // SAFETY: PROT_NONE anonymous mapping that never clobbers; checked.
     unsafe {
         let p = libc::mmap(
             base as *mut libc::c_void,
             len,
             libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | libc::MAP_FIXED_NOREPLACE,
+            libc::MAP_PRIVATE
+                | libc::MAP_ANONYMOUS
+                | libc::MAP_NORESERVE
+                | pw64_platform::MAP_FIXED_NOREPLACE,
             -1,
             0,
         );
@@ -51,10 +54,19 @@ fn on_mode_regions_without_audits() {
     let miss = std::panic::catch_unwind(|| vaddr::to_host(0xA800_0000));
     let msg = miss.unwrap_err();
     let msg = msg.downcast_ref::<String>().map_or("", String::as_str);
-    assert!(msg.contains("0xa8000000") && msg.contains("no C-visible region"), "{msg}");
+    assert!(
+        msg.contains("0xa8000000") && msg.contains("no C-visible region"),
+        "{msg}"
+    );
     assert!(std::panic::catch_unwind(|| vaddr::to_vaddr(0x7_9999_0000)).is_err());
     // No audit pieces: the old windows are not reserved (macOS can't map
     // there), and the Rust heap is the system one.
-    assert!(range_free(RDRAM_BASE, RDRAM_SIZE), "old RDRAM window reserved");
-    assert!(range_free(SEARCH_START, 0x10_0000), "old stack window reserved");
+    assert!(
+        range_free(RDRAM_BASE, RDRAM_SIZE),
+        "old RDRAM window reserved"
+    );
+    assert!(
+        range_free(SEARCH_START, 0x10_0000),
+        "old stack window reserved"
+    );
 }
