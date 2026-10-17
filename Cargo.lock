@@ -330,7 +330,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "birdman64"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "btleplug",
@@ -2774,7 +2774,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "pw64-audio"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "cpal",
  "pw64-audio-data",
@@ -2782,7 +2782,7 @@ dependencies = [
 
 [[package]]
 name = "pw64-audio-data"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -2790,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "pw64-cbuild"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "sha2",
  "ureq",
@@ -2799,7 +2799,7 @@ dependencies = [
 
 [[package]]
 name = "pw64-extract"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "png",
@@ -2812,7 +2812,7 @@ dependencies = [
 
 [[package]]
 name = "pw64-formats"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "pw64-rom",
@@ -2820,7 +2820,7 @@ dependencies = [
 
 [[package]]
 name = "pw64-game"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "cc",
  "libc",
@@ -2831,7 +2831,7 @@ dependencies = [
 
 [[package]]
 name = "pw64-gfx"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "bytemuck",
  "log",
@@ -2842,11 +2842,11 @@ dependencies = [
 
 [[package]]
 name = "pw64-kernel"
-version = "1.1.0"
+version = "1.2.0"
 
 [[package]]
 name = "pw64-platform"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "corosensei",
@@ -2857,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "pw64-rom"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -2867,7 +2867,7 @@ dependencies = [
 
 [[package]]
 name = "pw64-viewer"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "png",

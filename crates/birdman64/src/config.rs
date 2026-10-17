@@ -22,6 +22,8 @@
 //!
 //! vsync = false            # V-Sync: display-paced ticks (`PW64_VSYNC`)
 //! fill_screen = true       # no letterbox bars (`PW64_FILL_SCREEN`; default: follows widescreen)
+//! infinite_lod = false     # models at full detail at any distance (`PW64_INFINITE_LOD`, restart)
+//! infinite_view_distance = false # the whole island in view (`PW64_INFINITE_VIEW_DISTANCE`, restart)
 //! display_mode = "windowed" # "windowed", "borderless" or "exclusive" (`PW64_DISPLAY_MODE`)
 //! fullscreen_resolution = "1920x1080@60" # exclusive video mode WxH[@Hz] (`PW64_FULLSCREEN_RES`)
 //! linux_window = "auto"    # Linux: "auto", "wayland" or "x11" (`PW64_LINUX_WINDOW`)
@@ -167,6 +169,10 @@ pub struct Graphics {
     /// No letterbox bars around world views (`PW64_FILL_SCREEN`); None =
     /// default follows `widescreen` (`opts::fill_default`).
     pub fill_screen: Option<bool>,
+    /// Most detailed model LOD at any distance (`PW64_INFINITE_LOD`).
+    pub infinite_lod: bool,
+    /// Whole island in view (`PW64_INFINITE_VIEW_DISTANCE`).
+    pub infinite_view_distance: bool,
     /// How the window goes fullscreen, "windowed" / "borderless" /
     /// "exclusive" (`opts::parse_display_mode`).
     pub display_mode: Option<String>,
@@ -193,6 +199,8 @@ impl Default for Graphics {
             fps: None,
             vsync: false,
             fill_screen: None,
+            infinite_lod: false,
+            infinite_view_distance: false,
             display_mode: None,
             fullscreen_resolution: None,
             linux_window: None,
@@ -478,6 +486,20 @@ fn from_table(table: &toml::Table) -> Config {
                 cfg.graphics.vsync = bool_of(g, "vsync", "graphics.vsync", &mut ignored, false);
                 cfg.graphics.fill_screen =
                     opt_bool_of(g, "fill_screen", "graphics.fill_screen", &mut ignored);
+                cfg.graphics.infinite_lod = bool_of(
+                    g,
+                    "infinite_lod",
+                    "graphics.infinite_lod",
+                    &mut ignored,
+                    false,
+                );
+                cfg.graphics.infinite_view_distance = bool_of(
+                    g,
+                    "infinite_view_distance",
+                    "graphics.infinite_view_distance",
+                    &mut ignored,
+                    false,
+                );
                 cfg.graphics.display_mode = checked_string(
                     g,
                     "display_mode",
@@ -729,6 +751,10 @@ pub struct SavedSettings {
     /// Fill screen (None = leave as-is, `Some(None)` = remove the key: the
     /// default follows widescreen).
     pub fill_screen: Option<Option<bool>>,
+    /// Infinite LOD (None = leave as-is; off removes the key).
+    pub infinite_lod: Option<bool>,
+    /// Infinite view distance (None = leave as-is; off removes the key).
+    pub infinite_view_distance: Option<bool>,
     /// How the window goes fullscreen ("windowed" / "borderless" /
     /// "exclusive"); None = leave as-is.
     pub display_mode: Option<&'static str>,
@@ -904,6 +930,7 @@ fn builtin_default(section: &str, key: &str, low_end: bool) -> Option<toml::Valu
             })
         }
         ("graphics", "vsync") => Some(opts::VSYNC_DEFAULT.into()),
+        ("graphics", "infinite_lod" | "infinite_view_distance") => Some(false.into()),
         ("graphics", "display_mode") => Some(opts::DISPLAY_MODE_DEFAULT.into()),
         ("graphics", "volume") => Some(float(Graphics::default().volume)),
         // U25: the title shows the frame rate only when the player asked.
@@ -1013,6 +1040,12 @@ pub(crate) fn apply(
         }
         if let Some(v) = u.vsync {
             put("vsync", v.into());
+        }
+        if let Some(v) = u.infinite_lod {
+            put("infinite_lod", v.into());
+        }
+        if let Some(v) = u.infinite_view_distance {
+            put("infinite_view_distance", v.into());
         }
         if let Some(v) = u.display_mode {
             put("display_mode", v.into());
@@ -1759,6 +1792,49 @@ mod tests {
         assert_eq!(fill(&table), Some(true));
         apply(&mut table, &upd(Some(None))).unwrap();
         assert_eq!(fill(&table), None, "back to the default removes the key");
+    }
+
+    #[test]
+    fn visibility_settings_round_trip_and_reset_independently() {
+        let mut table: toml::Table = toml::from_str("[graphics]\nfuture_thing = 7\n").unwrap();
+        apply(
+            &mut table,
+            &SavedSettings {
+                infinite_lod: Some(true),
+                infinite_view_distance: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let loaded = parse(&toml::to_string(&table).unwrap()).unwrap();
+        assert!(loaded.graphics.infinite_lod);
+        assert!(loaded.graphics.infinite_view_distance);
+        apply(
+            &mut table,
+            &SavedSettings {
+                infinite_lod: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let loaded = parse(&toml::to_string(&table).unwrap()).unwrap();
+        assert!(!loaded.graphics.infinite_lod);
+        assert!(loaded.graphics.infinite_view_distance);
+        assert!(table["graphics"].get("infinite_lod").is_none());
+        apply(
+            &mut table,
+            &SavedSettings {
+                infinite_view_distance: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(table["graphics"].get("infinite_view_distance").is_none());
+        assert_eq!(table["graphics"]["future_thing"].as_integer(), Some(7));
+        let invalid =
+            parse("[graphics]\ninfinite_lod = \"yes\"\ninfinite_view_distance = 2\n").unwrap();
+        assert!(!invalid.graphics.infinite_lod);
+        assert!(!invalid.graphics.infinite_view_distance);
     }
 
     #[test]

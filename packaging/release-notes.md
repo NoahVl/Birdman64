@@ -1,28 +1,32 @@
-## What's new in 1.1.0
+## What's new in 1.2.0
+
+Big thanks to **@djultra64** for contributing the new Infinite LOD and
+Infinite view distance options, a first contribution to Birdman64!
 
 ### Added
 
-- Two-player split-screen: pick 1 Player or 2 Players on the title menu.
-  Both players fly the same test at once, each with their own pilot,
-  controller, HUD, objectives, sounds, results, replay and photos. Works with
-  every vehicle and bonus game (hang glider, rocket belt, gyrocopter,
-  cannonball, sky diving, jumble hopper, birdman) and with Free flight, which
-  you can start from the test menu.
-- A Split-screen page in the settings/pause menu: Assign player 2 (picks
-  the next controller you press, including a second pad of the same model),
-  Split layout (top/bottom or side by side), Pilots collide, and Share best
-  score (when player 2 scores higher, the run counts for player 1's save
-  file and class totals). The Assign row names player 2's controller.
-- Split-screen: each player's radar shows the other player as a cyan arrow.
+- Linux: `linux_window` setting in `pw64.toml` (`auto`, `wayland` or `x11`)
+  to choose between a native Wayland window and X11 (XWayland).
+- Two new Display & graphics options, both off by default and applied after a
+  restart: Infinite LOD draws every model at full detail however far away, and
+  Infinite view distance lets you see the whole island instead of the haze
+  about 2 km out (it can lower the frame rate, more so in split-screen).
+  Contributed by @djultra64.
+
+### Changed
+
+- The controller's D-pad now moves the stick, so it works in menus and can steer.
+  Rebind any D-pad direction to another button (C buttons, A, ...) under
+  Settings > Controls.
 
 ### Fixed
 
-- The game no longer crashes when a matrix translation goes out of range,
-  which could happen after saving a photo.
-- Snowy levels in widescreen: falling snow no longer shrinks the picture to
-  a 4:3 box, and now covers the whole screen.
-- Settings: when rebinding a controller button times out, the
-  "No button pressed" message now stays visible.
+- Linux (Wayland) on laptops with an NVIDIA GPU next to an AMD or Intel one:
+  the picture no longer freezes before the main menu, and the game no longer
+  crashes right after choosing Start game. The game now opens its window
+  through X11 (XWayland) on these laptops.
+- Linux: the first-start ROM tip now names the AppImage (or the birdman64
+  program) instead of Birdman64.exe.
 
 **Windows:** download `Birdman64-windows-x64.zip`. **Linux:** download the `.AppImage`.
 

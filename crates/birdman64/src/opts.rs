@@ -266,6 +266,26 @@ pub fn fill_screen() -> bool {
     )
 }
 
+/// Infinite LOD: models always at their most detailed level. Env
+/// `PW64_INFINITE_LOD` > config > off; read once before boot (restart-only).
+pub fn infinite_lod() -> bool {
+    precedence(
+        env_opt("PW64_INFINITE_LOD", "use 0 or 1", parse_vsync),
+        Some(crate::config::get().graphics.infinite_lod),
+        false,
+    )
+}
+
+/// Infinite view distance: the whole island in view. Env
+/// `PW64_INFINITE_VIEW_DISTANCE` > config > off; read once before boot.
+pub fn infinite_view_distance() -> bool {
+    precedence(
+        env_opt("PW64_INFINITE_VIEW_DISTANCE", "use 0 or 1", parse_vsync),
+        Some(crate::config::get().graphics.infinite_view_distance),
+        false,
+    )
+}
+
 /// The default for `fill_screen` given the widescreen setting.
 pub(crate) fn fill_default(widescreen: Option<f32>) -> bool {
     widescreen.is_some()

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-14
+
 ### Added
 
 - Performance overlay (Pause menu > Performance overlay): a small corner readout
@@ -15,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   The old "Show FPS" option is now the counter here.
 - Linux: `linux_window` setting in `pw64.toml` (`auto`, `wayland` or `x11`)
   to choose between a native Wayland window and X11 (XWayland).
+- Two new Display & graphics options, both off by default and applied after a
+  restart: Infinite LOD draws every model at full detail however far away, and
+  Infinite view distance lets you see the whole island instead of the haze
+  about 2 km out (it can lower the frame rate, more so in split-screen).
+  Contributed by djultra64.
 
 ### Changed
 
@@ -110,7 +117,9 @@ First public release.
   tar.gz, with checksums and build provenance attestations.
 - `--version`, and crash reports written to `crash.log` in the data folder.
 
-[Unreleased]: https://github.com/NoahVl/Birdman64/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/NoahVl/Birdman64/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/NoahVl/Birdman64/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/NoahVl/Birdman64/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/NoahVl/Birdman64/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/NoahVl/Birdman64/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/NoahVl/Birdman64/releases/tag/v1.0.0

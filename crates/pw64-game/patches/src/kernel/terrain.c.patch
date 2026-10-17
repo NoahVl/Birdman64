@@ -1,0 +1,23 @@
+--- a/src/kernel/terrain.c
++++ b/src/kernel/terrain.c
+@@ -401,7 +401,9 @@ typedef struct Unk802C5BC0 {
+     s8 unkC;
+ } Unk802C5BC0;
+ 
+-Unk802C5BC0 D_802C5BC0[64];
++// PW64: was 64, which long views (infinite view distance) overran; at most
++// one entry per terrain cell, as the per-cell D_80263060[1040] (chan.c).
++Unk802C5BC0 D_802C5BC0[1040];
+ s32 D_802C5FC0;
+ 
+ void uvTerra_8022EE90(UnkStruct_80204D94* arg0, ParsedUVTR* arg1, f32 arg2) {
+@@ -601,9 +603,6 @@ void _uvTerraDraw(UnkStruct_80204D94* arg0, u8 arg1) {
+                 temp_s0_3->unk8 = uvSqrtF(SQ(temp_fs4) + (SQ(temp_ft4) + SQ(temp_ft5)));
+ 
+                 D_802C5FC0++;
+-                if (D_802C5FC0 >= 0x40) {
+-                    _uvDebugPrintf("_uvTerraDraw: _nqs >= %d\n", 0x40);
+-                }
+             }
+         }
+     }
