@@ -142,9 +142,9 @@ enum Row {
     /// Graphics: the restart banner's "Restart now" row (U16). Only on the
     /// page while restart-only changes are pending (the banner's row).
     RestartNow,
-    /// Main (Android only): move the on-screen touch controls.
+    /// Main (Android/iOS only): move the on-screen touch controls.
     TouchLayout,
-    /// Main (Android only): on-screen buttons shown / only the menu button.
+    /// Main (Android/iOS only): on-screen buttons shown / only the menu button.
     TouchHidden,
 }
 
@@ -777,9 +777,9 @@ impl Overlay {
         std::mem::take(&mut self.quit_requested)
     }
 
-    /// "Move touch controls" was chosen (Android): taken by the window
+    /// "Move touch controls" was chosen (Android/iOS): taken by the window
     /// when the overlay closes, which then keeps the game paused.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "android", target_os = "ios")), allow(dead_code))]
     pub fn take_touch_edit(&mut self) -> bool {
         std::mem::take(&mut self.touch_edit_requested)
     }
@@ -1303,9 +1303,9 @@ impl Overlay {
                     Row::OpenSaveFolder,
                     Row::Quit,
                 ];
-                // Android: the touch controls' edit mode and the "only
-                // menu" switch, under Controls.
-                if cfg!(target_os = "android") {
+                // Android/iOS: the touch controls' edit mode and the
+                // "only menu" switch, under Controls.
+                if cfg!(any(target_os = "android", target_os = "ios")) {
                     rows.insert(2, Row::TouchLayout);
                     rows.insert(3, Row::TouchHidden);
                 }

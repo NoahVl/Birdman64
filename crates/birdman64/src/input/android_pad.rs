@@ -5,7 +5,9 @@
 //! [`Button`] at the same position, so the `[input.gamepad]` bindings, pad
 //! capture, the settings trigger and the overlay navigation behave as for
 //! desktop pads. The state lands in the same `gamepads` list the gilrs
-//! thread fills (one entry, id [`PAD_ID`]).
+//! thread fills (one entry, id [`PAD_ID`]). The on-screen touch controls'
+//! state lives in [`super::touch_pad`] (shared with iOS); this module reads
+//! it on every republish, so keys, axes and touch land in one publish.
 //!
 //! TODO(android): analog sticks and triggers. winit 0.30 turns joystick
 //! MotionEvents into `Touch` events (X/Y only, no source), so the axes
@@ -65,9 +67,6 @@ struct State {
     /// Some axis event arrived: the d-pad stops doubling as the stick.
     axes_seen: bool,
     settings_down: bool,
-    /// The on-screen touch controls (`touch.rs`): N64 bits, merged after
-    /// the bindings (they are labelled with N64 names, never rebound).
-    touch: TouchPad,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
@@ -84,7 +83,6 @@ static STATE: Mutex<State> = Mutex::new(State {
     },
     axes_seen: false,
     settings_down: false,
-    touch: TouchPad::IDLE,
 });
 
 /// Android gamepad keycode → the gilrs button at the same position
@@ -156,29 +154,20 @@ pub fn android_key(key: PhysicalKey, pressed: bool, repeat: bool) -> AndroidKey 
     if pressed {
         st.held.push(button);
     }
-    republish(&mut st, settings_btn);
+    republish_state(&mut st, settings_btn);
     AndroidKey::Pad
-}
-
-/// The touch controls' state (window thread, on every touch event).
-pub fn set_touch(touch: TouchPad) {
-    let mut st = STATE.lock().unwrap();
-    if st.touch != touch {
-        st.touch = touch;
-        republish(&mut st, crate::settings::pad_button());
-    }
 }
 
 /// Releases everything held (pad keys, axes, touch): the window lost focus
 /// or the app went to the background, where the release events never come.
 /// Called by `input::release_all_keys` before it locks the sources (lock
-/// order: this `STATE`, then `SOURCES`).
+/// order: this `STATE` and the touch state, then `SOURCES`).
 pub fn release_all() {
+    super::touch_pad::clear();
     let mut st = STATE.lock().unwrap();
     st.held.clear();
     st.axes = Axes::default();
-    st.touch = TouchPad::IDLE;
-    republish(&mut st, crate::settings::pad_button());
+    republish_state(&mut st, crate::settings::pad_button());
 }
 
 /// TODO(android) hook: the analog axes of the pad, once something delivers
@@ -189,7 +178,7 @@ pub fn set_axes(axes: Axes) {
     let mut st = STATE.lock().unwrap();
     st.axes = axes;
     st.axes_seen = true;
-    republish(&mut st, crate::settings::pad_button());
+    republish_state(&mut st, crate::settings::pad_button());
 }
 
 /// One pad's N64 state from the resolved gamepad bindings (the gilrs
@@ -265,14 +254,24 @@ fn nav_pad(held: &[Button], a: &Axes) -> Pad {
     }
 }
 
+/// Republishes the whole pad from the current state: `touch_pad` calls
+/// this when only its state changed (keys, axes and touch land in one
+/// publish).
+pub(crate) fn republish() {
+    let settings_btn = crate::settings::pad_button();
+    let mut st = STATE.lock().unwrap();
+    republish_state(&mut st, settings_btn);
+}
+
 /// Publishes the pad (window thread) and edge-detects the settings trigger.
-fn republish(st: &mut State, settings_btn: Button) {
+fn republish_state(st: &mut State, settings_btn: Button) {
     let settings_down = FOCUSED.load(Ordering::Relaxed) && st.held.contains(&settings_btn);
     if settings_down && !st.settings_down {
         crate::window::notify_settings();
     }
     st.settings_down = settings_down;
-    let pad = game_pad(&st.held, &st.axes, st.axes_seen, &st.touch);
+    let touch = super::touch_pad::touch();
+    let pad = game_pad(&st.held, &st.axes, st.axes_seen, &touch);
     let nav = nav_pad(&st.held, &st.axes);
     let mut s = SOURCES.lock().unwrap();
     s.gamepads = vec![(PAD_ID, PAD_NAME.to_string(), pad)];

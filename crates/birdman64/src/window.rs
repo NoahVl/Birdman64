@@ -574,10 +574,10 @@ struct App {
     /// Redraws until that capture (set by the trigger; the panel fades in
     /// over egui's animation time, so the first overlay frame is invisible).
     settings_shot_frame: u8,
-    /// Android: the on-screen touch controls (state + their egui pass).
-    #[cfg(target_os = "android")]
+    /// Android/iOS: the on-screen touch controls (state + their egui pass).
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     touch: crate::touch::Controls,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     touch_painter: crate::touch::Painter,
 }
 
@@ -664,7 +664,7 @@ pub fn run(setup: bool, ask_rom: bool) -> ! {
         hint_shown: false,
         settings_shot: crate::hle::env_list("PW64_SETTINGS_SHOT").first().copied(),
         settings_shot_frame: 0,
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         touch: {
             let mut t = crate::touch::Controls::new();
             t.set_offsets(crate::touch::Offsets::from_config(
@@ -673,7 +673,7 @@ pub fn run(setup: bool, ask_rom: bool) -> ! {
             crate::touch::set_hidden_setting(crate::config::get().touch_hidden);
             t
         },
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         touch_painter: crate::touch::Painter::new(),
     };
     if let Err(e) = el.run_app(&mut app) {
@@ -771,28 +771,35 @@ pub(crate) fn monitor_mhz(window: &Window) -> Option<u32> {
 }
 
 /// The touch controls' layout for this surface: density from the scale
-/// factor, insets from NativeActivity's content rect (the area not under
-/// system bars; empty until the first report) and the display cutout
-/// (`android::cutout_insets`: targetSdk 35 windows draw under it).
-#[cfg(target_os = "android")]
+/// factor, insets from the platform — Android: NativeActivity's content
+/// rect (the area not under the system bars; empty until the first report)
+/// and the display cutout (`android::cutout_insets`: targetSdk 35 windows
+/// draw under it); iOS: no cutout reader yet, the default margins apply.
+#[cfg(any(target_os = "android", target_os = "ios"))]
 fn touch_layout(g: &Gpu) -> crate::touch::Layout {
     let (w, h) = (g.config.width as f32, g.config.height as f32);
-    let r = crate::android::app().content_rect();
-    let mut insets = if r.right > r.left && r.bottom > r.top {
-        crate::touch::Insets {
-            left: r.left as f32,
-            top: r.top as f32,
-            right: w - r.right as f32,
-            bottom: h - r.bottom as f32,
-        }
-    } else {
-        crate::touch::Insets::default()
+    #[cfg(target_os = "android")]
+    let insets = {
+        let r = crate::android::app().content_rect();
+        let mut i = if r.right > r.left && r.bottom > r.top {
+            crate::touch::Insets {
+                left: r.left as f32,
+                top: r.top as f32,
+                right: w - r.right as f32,
+                bottom: h - r.bottom as f32,
+            }
+        } else {
+            crate::touch::Insets::default()
+        };
+        let [cl, ct, cr, cb] = crate::android::cutout_insets();
+        i.left = i.left.max(cl);
+        i.top = i.top.max(ct);
+        i.right = i.right.max(cr);
+        i.bottom = i.bottom.max(cb);
+        i
     };
-    let [cl, ct, cr, cb] = crate::android::cutout_insets();
-    insets.left = insets.left.max(cl);
-    insets.top = insets.top.max(ct);
-    insets.right = insets.right.max(cr);
-    insets.bottom = insets.bottom.max(cb);
+    #[cfg(target_os = "ios")]
+    let insets = crate::touch::Insets::default();
     crate::touch::Layout::new(w, h, g.window.scale_factor() as f32, insets, 1.0)
 }
 
@@ -804,9 +811,10 @@ impl App {
         // runs never set it: their dumps stay 4:3 unless PW64_WIDESCREEN.
         if let Some(m) = el.primary_monitor() {
             let s = m.size();
-            // Android: landscape only, but a start from the (portrait) lock
-            // screen reports the portrait size: long side over short side.
-            #[cfg(target_os = "android")]
+            // Android/iOS: landscape only, but a start from the (portrait)
+            // lock screen reports the portrait size: long side over short
+            // side.
+            #[cfg(any(target_os = "android", target_os = "ios"))]
             let s = winit::dpi::PhysicalSize::new(s.width.max(s.height), s.width.min(s.height));
             opts::set_widescreen_monitor_default(s.width, s.height);
         }
@@ -830,21 +838,25 @@ impl App {
                 (m.scale_factor() * 100.0).round()
             ))
         );
-        let window = Arc::new(
-            el.create_window(
-                Window::default_attributes()
-                    .with_title("Birdman64")
-                    .with_window_icon(window_icon())
-                    .with_inner_size(winit::dpi::LogicalSize::new(width, height))
-                    .with_min_inner_size(winit::dpi::LogicalSize::new(160.0, 120.0)),
-            )
-            .unwrap_or_else(|e| {
-                crate::fatal(&format!("Birdman64 could not create its window. ({e})"))
-            }),
-        );
+        let base = Window::default_attributes()
+            .with_title("Birdman64")
+            .with_window_icon(window_icon());
+        // Android: the requested size letterboxes inside the activity; iOS:
+        // windows are always the whole screen (a requested size makes winit
+        // draw a smaller view), so it gets no size and no centring.
+        #[cfg(target_os = "ios")]
+        let attrs = base;
+        #[cfg(not(target_os = "ios"))]
+        let attrs = base
+            .with_inner_size(winit::dpi::LogicalSize::new(width, height))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(160.0, 120.0));
+        let window = Arc::new(el.create_window(attrs).unwrap_or_else(|e| {
+            crate::fatal(&format!("Birdman64 could not create its window. ({e})"))
+        }));
         // U19: centre on the monitor the size came from (winit's default
         // placement is OS-dependent). The window's outer size is known only
         // after creation, so this has to follow it (one frame at worst).
+        #[cfg(not(target_os = "ios"))]
         if let Some(m) = &monitor {
             let (mp, ms) = (m.position(), m.size());
             let outer = window.outer_size();
@@ -1383,9 +1395,9 @@ impl App {
             let path = format!("tmp/win_{n:05}.png");
             crate::hle::shot_png(&g.device, &g.queue, &tex.texture, &path);
         }
-        // Android touch controls: after the shot readback (they are not
-        // part of the picture), hidden under the overlay.
-        #[cfg(target_os = "android")]
+        // Touch controls (Android/iOS): after the shot readback (they are
+        // not part of the picture), hidden under the overlay.
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         if !settings::is_open() {
             // A relayout mid-touch drops the fingers: republish, or what
             // they held would stay held in the game.
@@ -1459,9 +1471,9 @@ impl App {
             #[cfg(target_os = "android")]
             crate::android::refresh_cutout();
         }
-        // "Move touch controls" (Android): the overlay closes into the
+        // "Move touch controls" (Android/iOS): the overlay closes into the
         // touch edit mode, the game stays paused.
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         if overlay_closed && self.overlay.as_mut().is_some_and(|o| o.take_touch_edit()) {
             // Before the close reroutes the pad: the game keeps an idle one.
             input::set_game_blocked(true);
@@ -1553,7 +1565,7 @@ impl App {
         // with no visible way out would look hung.
         // A keyboard Esc / F10 during the touch edit mode ends it (saved);
         // that reopens the overlay through here.
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         if self.touch.editing() {
             self.end_touch_edit();
             return;
@@ -1561,7 +1573,7 @@ impl App {
         let Some(g) = &self.gpu else { return };
         // Nothing sticks while the overlay owns the input.
         input::release_all_keys();
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         self.touch.reset();
         os::set_paused(true);
         self.overlay
@@ -1599,7 +1611,7 @@ impl App {
     /// Leaves the touch edit mode (Done, Back, going to the background):
     /// saves the offsets as `[touch]` and returns to the pause menu (the
     /// game was paused all along).
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     fn end_touch_edit(&mut self) {
         self.touch.end_edit();
         if let Err(e) = crate::config::save_touch(&self.touch.offsets().to_config()) {
@@ -1935,10 +1947,10 @@ impl ApplicationHandler<UserEvent> for App {
                     input::on_key(code, pressed);
                 }
             }
-            // Android: in the game, touches drive the on-screen controls
-            // (touch.rs; multi-touch by finger id). On the ROM screen and
-            // the settings overlay a tap acts like a mouse click.
-            #[cfg(target_os = "android")]
+            // Android/iOS: in the game, touches drive the on-screen
+            // controls (touch.rs; multi-touch by finger id). On the ROM
+            // screen and the settings overlay a tap acts like a mouse click.
+            #[cfg(any(target_os = "android", target_os = "ios"))]
             WindowEvent::Touch(t) => {
                 use winit::event::TouchPhase;
                 let p = (t.location.x as f32, t.location.y as f32);

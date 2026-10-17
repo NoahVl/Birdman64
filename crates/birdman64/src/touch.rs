@@ -1,12 +1,12 @@
-//! On-screen touch controls (Android): a floating analog stick on the left,
+//! On-screen touch controls (Android/iOS): a floating analog stick on the left,
 //! A/B/Z/R, the four C buttons and Start on the right, and a menu button
 //! that opens the settings overlay. The result is one more N64 pad source
-//! ([`TouchPad`]), merged into controller 1 by `input/android_pad.rs`, so
+//! ([`TouchPad`]), merged into controller 1 by `input/touch_pad.rs`, so
 //! the game sees a normal controller.
 //!
 //! Layout, hit-testing and the multi-touch state machine are pure (unit
 //! tests run on desktop); only [`Painter`] (egui, own pass after the
-//! toasts and the `PW64_WIN_SHOT` readback) is Android-only. PNG frame
+//! toasts and the `PW64_WIN_SHOT` readback) is gated to those platforms. PNG frame
 //! dumps use the game thread's own renderer and never see the controls.
 //!
 //! Stick: **floating**. A finger that lands in the left part of the screen
@@ -25,7 +25,7 @@
 //! TODO(android): opacity and size sliders in the settings screen
 //! ([`OPACITY`], the `scale` argument of [`Layout::new`]).
 
-#![cfg_attr(not(target_os = "android"), allow(dead_code))]
+#![cfg_attr(not(any(target_os = "android", target_os = "ios")), allow(dead_code))]
 
 use crate::input::{
     CONT_A, CONT_B, CONT_C_DOWN, CONT_C_LEFT, CONT_C_RIGHT, CONT_C_UP, CONT_R, CONT_START, CONT_Z,
@@ -654,12 +654,17 @@ impl Controls {
         self.drag.map(|(_, g, _)| g)
     }
 
+    /// Android only in the window (`window.rs` calls it from the pad-key
+    /// path: a physical pad hides the controls); unit tests exercise it
+    /// everywhere.
+    #[cfg(any(target_os = "android", test))]
     pub fn visible(&self) -> bool {
         self.visible
     }
 
     /// A physical pad was used: hide and release everything. The next
     /// touch shows the controls again.
+    #[cfg(any(target_os = "android", test))]
     pub fn hide(&mut self) {
         self.visible = false;
         self.fingers.clear();
@@ -764,21 +769,21 @@ impl Controls {
 
 /// Draws the controls with egui over the frame (own pass, `LoadOp::Load`),
 /// like the toasts.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 pub struct Painter {
     ctx: egui::Context,
     renderer: Option<egui_wgpu::Renderer>,
     started: std::time::Instant,
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 impl Default for Painter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 impl Painter {
     pub fn new() -> Self {
         Self {
@@ -814,7 +819,7 @@ impl Painter {
 }
 
 /// The shapes, in egui points (px / `ppp`).
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 fn draw(ctx: &egui::Context, ppp: f32, c: &Controls) {
     use egui::{Color32, Pos2, Shape, Stroke};
     let painter = ctx.layer_painter(egui::LayerId::background());

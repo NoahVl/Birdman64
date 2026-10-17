@@ -123,9 +123,13 @@ pub(crate) fn start(first: Option<&std::ffi::OsStr>, rom_arg: Option<std::path::
     // Documents folder, paths.rs), so make it the cwd and create the
     // `rom/` folder the player drops ROMs into — the app itself, not the
     // system, must own it (android.rs does the same for its app dirs).
+    // First, stdout/stderr go nowhere on iOS (no console): send both into
+    // `<Documents>/birdman64.log` so the startup lines below, env_logger
+    // records and panic reports land in a file the Files app shows.
     #[cfg(target_os = "ios")]
     {
         let docs = paths::data_dir().to_path_buf();
+        redirect_ios_logs(&docs);
         let _ = std::env::set_current_dir(&docs);
         let _ = std::fs::create_dir_all(docs.join("rom"));
     }
@@ -245,6 +249,32 @@ pub(crate) fn start(first: Option<&std::ffi::OsStr>, rom_arg: Option<std::path::
         std::process::exit(exit_code(stop));
     }
     window::run(setup, ask_rom);
+}
+
+/// iOS: stdout and stderr go nowhere (an app has no console). Redirect both
+/// into `<data dir>/birdman64.log` with `dup2` — `eprintln!` output,
+/// env_logger records and panic reports then land in a file the player can
+/// reach through the Files app (the data dir is the app's Documents folder,
+/// paths.rs). The previous run's log is kept as `birdman64-previous.log`.
+/// Silent on failure: a lost log must not stop the app (the two startup
+/// lines before this run in the simulator's own capture).
+#[cfg(target_os = "ios")]
+fn redirect_ios_logs(data_dir: &std::path::Path) {
+    let log = data_dir.join("birdman64.log");
+    let _ = std::fs::rename(&log, data_dir.join("birdman64-previous.log"));
+    let Ok(file) = std::fs::File::create(&log) else {
+        return;
+    };
+    use std::os::unix::io::AsRawFd as _;
+    let fd = file.as_raw_fd();
+    // SAFETY: `dup2` of a regular file's descriptor over the std streams,
+    // which always exist (libc owns fds 0-2). `file` drops right after —
+    // the duplicated descriptors keep the file description alive.
+    unsafe {
+        libc::dup2(fd, libc::STDOUT_FILENO);
+        libc::dup2(fd, libc::STDERR_FILENO);
+    }
+    eprintln!("[paths] log file: {}", log.display());
 }
 
 /// U12: true when `exe` sits inside `temp` (the usual `%TEMP%`) under a

@@ -20,7 +20,7 @@
 //! above.
 
 // Android/iOS: the gilrs thread (`spawn`) and its helpers never run (no gilrs
-// backend there); `android_pad` feeds the slots on Android.
+// backend there); `android_pad` feeds the slots on Android, `touch_pad` on iOS.
 #![cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))]
 
 use crate::config;
@@ -32,10 +32,16 @@ use std::time::Duration;
 use winit::keyboard::KeyCode;
 
 // Android: no gilrs backend; the window feeds pad key events instead.
+// iOS: no gilrs and no Android keycodes — the touch controls are the only
+// pad source for now (`touch_pad` publishes them itself).
 #[cfg(target_os = "android")]
 mod android_pad;
 #[cfg(target_os = "android")]
-pub use android_pad::{AndroidKey, android_key, set_touch};
+pub use android_pad::{AndroidKey, android_key};
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod touch_pad;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub use touch_pad::set_touch;
 
 // libultra `os_cont.h` button bits.
 pub const CONT_A: u16 = 0x8000;
@@ -1727,12 +1733,14 @@ pub fn overlay_pad() -> Pad {
     *OVERLAY_PAD.lock().unwrap()
 }
 
-/// Window lost focus: release every held key (no stuck buttons). Android:
-/// also the pad keys and touch controls (`android_pad`; its lock is taken
-/// and released first, the order its own publishes use).
+/// Window lost focus: release every held key (no stuck buttons). Android/iOS:
+/// also the pad keys and touch controls (`android_pad` / `touch_pad`; their
+/// locks are taken and released first, the order their own publishes use).
 pub fn release_all_keys() {
     #[cfg(target_os = "android")]
     android_pad::release_all();
+    #[cfg(target_os = "ios")]
+    touch_pad::release_all();
     // Focus loss / suspend / pause: a tap latched meanwhile must not fire
     // in the game later.
     pw64_platform::headless::clear_latch();

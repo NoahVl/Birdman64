@@ -229,6 +229,15 @@ jobs:
         run: bash packaging/ios/build-ipa.sh
       - name: simulator app
         run: bash packaging/ios/build-ipa.sh --sim
+      - name: zip the simulator app (keeps file permissions)
+        # Dev build with the game C linked in: a CI artifact only, never a
+        # release asset.
+        run: ditto -c -k --keepParent target/ios/sim/Payload/Birdman64.app Birdman64-sim.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-sim-app
+          retention-days: 14
+          path: Birdman64-sim.zip
       - name: simulator smoke run
         run: |
           set -euo pipefail

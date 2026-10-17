@@ -239,7 +239,7 @@ impl Screen {
                     {
                         ui.label(
                             egui::RichText::new(
-                                "In the Files app, open On My iPhone → Birdman64 and copy \
+                                "In the Files app, open On My iPhone > Birdman64 and copy \
                                  the file there, then choose Check again.",
                             )
                             .size(17.0)
@@ -289,7 +289,13 @@ impl Screen {
                 ui.horizontal(|ui| {
                     let (small, wide) = (egui::vec2(90.0, 32.0), egui::vec2(120.0, 32.0));
                     let open = self.folder.is_some();
-                    let total = wide.x + small.x + 12.0 + if open { wide.x + 12.0 } else { 0.0 };
+                    // iOS apps don't quit themselves (the system swipes
+                    // them away), so no Quit row.
+                    let quit = !cfg!(target_os = "ios");
+                    let total = wide.x
+                        + 12.0
+                        + if open { wide.x + 12.0 } else { 0.0 }
+                        + if quit { small.x + 12.0 } else { 0.0 };
                     ui.add_space((ui.available_width() - total).max(0.0) / 2.0);
                     if ui
                         .add_sized(wide, egui::Button::new("Check again"))
@@ -306,13 +312,15 @@ impl Screen {
                             crate::paths::open_in_file_manager(dir);
                         }
                     }
-                    ui.add_space(12.0);
-                    if ui.add_sized(small, egui::Button::new("Quit")).clicked() {
-                        self.quit = true;
+                    if quit {
+                        ui.add_space(12.0);
+                        if ui.add_sized(small, egui::Button::new("Quit")).clicked() {
+                            self.quit = true;
+                        }
                     }
                 });
                 ui.add_space(8.0);
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 ui.label(
                     egui::RichText::new("Enter = Check again, Esc = Quit")
                         .weak()
