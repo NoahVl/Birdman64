@@ -115,7 +115,7 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: tests
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
   # Android arm64 (docs/notes/android.md): compile + clippy only, no device
   # tests and no APK signing yet. The decomp C is built by zig as on every
@@ -194,6 +194,67 @@ jobs:
         with:
           name: Birdman64-android-arm64-debugsigned
           path: target/android-apk/Birdman64-android-arm64-debugsigned.apk
+
+  # iOS arm64 (macos-14): clippy for the device target, then the ipa builds
+  # (device + simulator) and a simulator smoke run: the app must reach the
+  # ROM screen without a ROM and leave a screenshot of it. Device IPA is a
+  # dev build with the game C linked in: a CI artifact only, never a release
+  # asset (unsigned — installing it is out of scope). continue-on-error
+  # while the iOS port is new.
+  ios:
+    name: iOS arm64 · clippy, ipa, simulator smoke
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # decomp/ (read-only reference, needed by build.rs)
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        id: zig
+        with:
+          path: tools/zig
+          key: zig-0.16.0-tools-${{ runner.os }}
+      - name: zig (get_zig example, sha256-checked)
+        if: steps.zig.outputs.cache-hit != 'true'
+        run: cargo run -p pw64-cbuild --example get_zig --features fetch
+      - name: clippy
+        run: cargo clippy --target aarch64-apple-ios --all-targets -p birdman64 -- -D warnings
+      - name: device ipa (unsigned dev build)
+        run: bash packaging/ios/build-ipa.sh
+      - name: simulator app
+        run: bash packaging/ios/build-ipa.sh --sim
+      - name: simulator smoke run
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available -j \
+            | python3 -c 'import json,sys;d=json.load(sys.stdin)["devices"];print(next(d[k][0]["udid"] for k in d if k.startswith("com.apple.CoreSimulator.SimRuntime.iOS")))') \
+            || { echo "no available iOS simulator"; exit 1; }
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" target/ios/sim/Payload/Birdman64.app
+          SIMCTL_CHILD_PW64_NO_AUDIO=1 xcrun simctl launch --console-pty "$UDID" \
+            app.birdman64 > ios-sim.log 2>&1 || true
+          sleep 30
+          xcrun simctl io "$UDID" screenshot ios-sim.png
+          tail -20 ios-sim.log
+          xcrun simctl terminate "$UDID" app.birdman64 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-sim
+          path: |
+            ios-sim.png
+            ios-sim.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-dev-ipa
+          retention-days: 7
+          path: target/ios/Birdman64.ipa
 
   # First-run module build (docs/notes/first-run-build.md T12), both release
   # platforms, every push: builds the game module with zig via the

@@ -149,6 +149,18 @@ fn compute() -> PathBuf {
         return p.clone();
     }
     let env = std::env::var_os("PW64_DATA_DIR").map(PathBuf::from);
+    // iOS: the app's Documents folder. It is the only user-visible storage
+    // (the Files app shows it: Info.plist's UIFileSharingEnabled), so it is
+    // the data dir (pw64.toml, pw64.eep, crash.log) and the ROM scan root;
+    // the relative `rom/` scan looks there too (start() makes it the cwd
+    // and creates `rom/`). Only an explicit `PW64_DATA_DIR` overrides it.
+    #[cfg(target_os = "ios")]
+    if env.is_none()
+        && let Some(docs) = documents_dir()
+    {
+        let _ = std::fs::create_dir_all(&docs);
+        return docs;
+    }
     let exe = std::env::current_exe().ok();
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let exe_dir = exe.as_ref().and_then(|e| e.parent());
@@ -340,6 +352,25 @@ fn dir_writable(dir: &Path) -> bool {
 #[cfg(windows)]
 fn per_user_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Birdman64"))
+}
+
+/// iOS: the app's Documents folder, straight from Foundation
+/// (`NSSearchPathForDirectoriesInDomains`): no XDG, no `%APPDATA%`.
+/// `None` if the system returns nothing (never seen in practice).
+#[cfg(target_os = "ios")]
+fn documents_dir() -> Option<PathBuf> {
+    use objc2_foundation::{NSSearchPathDirectory, NSSearchPathDomainMask as DomainMask};
+    // DocumentDirectory = 9, per `NSSearchPathDirectory` (the type carries
+    // the constants).
+    const DOCUMENT_DIRECTORY: NSSearchPathDirectory = NSSearchPathDirectory(9);
+    let dirs = objc2_foundation::NSSearchPathForDirectoriesInDomains(
+        DOCUMENT_DIRECTORY,
+        DomainMask::UserDomainMask,
+        true,
+    );
+    dirs.into_iter()
+        .next()
+        .map(|s| PathBuf::from(s.to_string()))
 }
 
 #[cfg(not(windows))]

@@ -19,9 +19,9 @@
 //! `p2_input` choice. Without it everything merges into controller 1, as
 //! above.
 
-// Android: the gilrs thread (`spawn`) and its helpers never run (no gilrs
-// backend there); `android_pad` feeds the slots instead.
-#![cfg_attr(target_os = "android", allow(dead_code))]
+// Android/iOS: the gilrs thread (`spawn`) and its helpers never run (no gilrs
+// backend there); `android_pad` feeds the slots on Android.
+#![cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))]
 
 use crate::config;
 use gilrs::{Axis, Button, Gilrs};

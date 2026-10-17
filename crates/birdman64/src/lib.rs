@@ -31,11 +31,22 @@ mod pad_art;
 mod pad_sprites;
 mod paths;
 mod perf;
-// rfd has no Android backend: a log-only stand-in with the same API
-// (dialogs need JNI there; TODO with the SAF ROM picker).
+// rfd has no Android or iOS backend: log-only stand-ins with the same API
+// (Android: dialogs need JNI there, TODO with the SAF ROM picker; iOS v1
+// has no picker at all — the ROM is dropped into the Documents folder).
 #[cfg(target_os = "android")]
 #[path = "android/rfd.rs"]
 mod rfd;
+#[cfg(target_os = "ios")]
+#[path = "ios/rfd.rs"]
+mod rfd;
+// iOS apps cannot exec anything: the game module is always linked in
+// (static-game), so first-run's on-machine zig build has to stay off.
+#[cfg(all(feature = "first-run", target_os = "ios"))]
+compile_error!(
+    "the first-run feature runs zig at runtime, which iOS apps cannot do: \
+     build iOS with static-game"
+);
 mod rom_screen;
 mod rom_setup;
 mod settings;
@@ -108,6 +119,16 @@ pub(crate) fn start(first: Option<&std::ffi::OsStr>, rom_arg: Option<std::path::
     // One line, every launch: where pw64.toml / pw64.eep / crash.log live
     // (dev builds: the cwd; see paths.rs for the full rule order).
     eprintln!("[paths] data dir: {}", paths::data_dir().display());
+    // iOS: the relative `rom/` scan looks in the data dir (the app's
+    // Documents folder, paths.rs), so make it the cwd and create the
+    // `rom/` folder the player drops ROMs into — the app itself, not the
+    // system, must own it (android.rs does the same for its app dirs).
+    #[cfg(target_os = "ios")]
+    {
+        let docs = paths::data_dir().to_path_buf();
+        let _ = std::env::set_current_dir(&docs);
+        let _ = std::fs::create_dir_all(docs.join("rom"));
+    }
     // The EEPROM save file goes to the data dir too (`PW64_EEP` keeps
     // priority); must be set before the OS core can first touch it.
     pw64_platform::headless::set_default_eep_path(paths::data_dir().join("pw64.eep"));
@@ -133,7 +154,9 @@ pub(crate) fn start(first: Option<&std::ffi::OsStr>, rom_arg: Option<std::path::
         return;
     }
     // Diagnostic first: list BLE devices and exit (`PW64_BLE_LIST=1`,
-    // ble.rs) — needs no ROM, so it runs before loading one.
+    // ble.rs) — needs no ROM, so it runs before loading one. Not on iOS:
+    // btleplug there would touch CoreBluetooth with no usage string.
+    #[cfg(not(target_os = "ios"))]
     if std::env::var_os("PW64_BLE_LIST").is_some() {
         ble::list_and_exit();
     }
@@ -199,9 +222,11 @@ pub(crate) fn start(first: Option<&std::ffi::OsStr>, rom_arg: Option<std::path::
     // Gamepads → controller 1 (`PW64_NO_INPUT`: no gamepad thread); the BLE
     // thread (`ble.rs`) feeds its virtual pads through the same merge; it
     // starts once BLE is switched on (here or later in the settings).
-    // Android: gilrs has no backend there and btleplug's needs JNI setup, so
-    // neither starts; pads arrive as window key events (input/android_pad.rs).
-    #[cfg(not(target_os = "android"))]
+    // Android and iOS: gilrs has no backend on Android and btleplug's needs
+    // JNI setup there (and would touch CoreBluetooth without a usage string
+    // on iOS), so neither starts; pads arrive as window key events
+    // (input/android_pad.rs) until the native pad backends land.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if std::env::var_os("PW64_NO_INPUT").is_none() {
         input::spawn();
         ble::init();

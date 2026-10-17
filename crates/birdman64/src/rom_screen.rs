@@ -45,15 +45,20 @@ pub struct Screen {
 
 /// The folder the `pi::load_rom(None)` scan covers that a player can put a
 /// file into: the AppImage's own folder (the exe dir is the read-only mount),
-/// else the exe's folder. None on Android: there is no exe folder (the
-/// process is the system's app process), the ROM screen has its own advice.
-#[cfg_attr(target_os = "android", allow(clippy::needless_return))] // see above
+/// else the exe's folder. None on Android/iOS: Android has no exe folder (the
+/// process is the system's app process), and on iOS the scan is the Documents
+/// folder (paths.rs), which a player reaches through Files — the ROM screen's
+/// own advice says so.
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(clippy::needless_return)
+)] // see above
 fn rom_folder() -> Option<PathBuf> {
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     return None;
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let beside = |p: PathBuf| p.parent().map(PathBuf::from);
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     std::env::var_os("APPIMAGE")
         .map(PathBuf::from)
         .and_then(beside)
@@ -230,24 +235,43 @@ impl Screen {
                 self.ui_android(ui);
                 #[cfg(not(target_os = "android"))]
                 {
-                    ui.label(
-                        egui::RichText::new("Drag the file onto this window.")
+                    #[cfg(target_os = "ios")]
+                    {
+                        ui.label(
+                            egui::RichText::new(
+                                "In the Files app, open On My iPhone → Birdman64 and copy \
+                                 the file there, then choose Check again.",
+                            )
                             .size(17.0)
                             .strong(),
-                    );
-                    ui.add_space(8.0);
-                    match &self.folder {
-                        Some(dir) => {
-                            ui.label("Or copy it into this folder and choose Check again:");
-                            ui.label(egui::RichText::new(dir.display().to_string()).monospace());
-                        }
-                        None => {
-                            ui.label(
-                                "Or copy it next to the Birdman64 program and choose Check again.",
-                            );
+                        );
+                    }
+                    #[cfg(not(target_os = "ios"))]
+                    {
+                        ui.label(
+                            egui::RichText::new("Drag the file onto this window.")
+                                .size(17.0)
+                                .strong(),
+                        );
+                        ui.add_space(8.0);
+                        match &self.folder {
+                            Some(dir) => {
+                                ui.label("Or copy it into this folder and choose Check again:");
+                                ui.label(
+                                    egui::RichText::new(dir.display().to_string()).monospace(),
+                                );
+                            }
+                            None => {
+                                ui.label(
+                                    "Or copy it next to the Birdman64 program and choose \
+                                     Check again.",
+                                );
+                            }
                         }
                     }
+                    #[cfg(target_os = "linux")]
                     ui.add_space(8.0);
+                    #[cfg(target_os = "linux")]
                     ui.label(
                         egui::RichText::new(
                             "(This system has no file chooser Birdman64 can open; installing \
