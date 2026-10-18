@@ -149,6 +149,9 @@ pub(crate) struct Gpu {
     /// values from `opts::oled_drift()` / `opts::oled_brightness()`.
     pub(crate) oled_drift: bool,
     pub(crate) oled_brightness: f32,
+    /// Movable HUD offsets (live; "Move HUD" edits them, hud_edit.rs);
+    /// startup value from `opts::hud_offsets()`.
+    pub(crate) hud_offsets: pw64_gfx::hud::HudOffsets,
     /// The current display mode (`PW64_DISPLAY_MODE`, the settings screen's
     /// Display mode row); kept in sync by [`Self::set_display_mode`].
     pub(crate) display_mode: opts::DisplayMode,
@@ -578,6 +581,11 @@ struct App {
     touch: crate::touch::Controls,
     #[cfg(target_os = "android")]
     touch_painter: crate::touch::Painter,
+    /// "Move HUD" edit mode while it is on (the game is paused).
+    hud_edit: Option<crate::hud_edit::Editor>,
+    hud_painter: crate::hud_edit::Painter,
+    /// The left mouse button is down (the HUD edit mode's mouse drag).
+    mouse_down: bool,
 }
 
 /// PCI vendor ids of the DRM devices (`/sys/class/drm/cardN/device/vendor`,
@@ -674,6 +682,9 @@ pub fn run(setup: bool, ask_rom: bool) -> ! {
         },
         #[cfg(target_os = "android")]
         touch_painter: crate::touch::Painter::new(),
+        hud_edit: None,
+        hud_painter: crate::hud_edit::Painter::new(),
+        mouse_down: false,
     };
     if let Err(e) = el.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
@@ -793,6 +804,32 @@ fn touch_layout(g: &Gpu) -> crate::touch::Layout {
     insets.right = insets.right.max(cr);
     insets.bottom = insets.bottom.max(cb);
     crate::touch::Layout::new(w, h, g.window.scale_factor() as f32, insets, 1.0)
+}
+
+/// The HUD edit mode's geometry in window px: the output area, window px
+/// per N64 px, the HUD element bounds of the shown framebuffer (renderer
+/// target px → window px, as `fb_present` scales it) and the perf card.
+fn hud_geometry(g: &Gpu, shown: Option<u32>, perf: Option<[f32; 4]>) -> crate::hud_edit::Geometry {
+    let [x, y, w, h] = g
+        .renderer
+        .output_rect((g.config.width, g.config.height))
+        .map(|v| v as f32);
+    let (fw, fh) = g.renderer.fb_size();
+    let (sx, sy) = (w / fw.max(1) as f32, h / fh.max(1) as f32);
+    let mut base = [None; pw64_gfx::hud::HUD_ELEMS];
+    if let Some(b) = shown.and_then(|fb| g.renderer.fb_hud_bounds(fb)) {
+        for (out, r) in base.iter_mut().zip(b) {
+            *out = r.map(|r| [x + r[0] * sx, y + r[1] * sy, x + r[2] * sx, y + r[3] * sy]);
+        }
+    }
+    crate::hud_edit::Geometry {
+        surface: (g.config.width as f32, g.config.height as f32),
+        area: [x, y, x + w, y + h],
+        k: h / pw64_gfx::N64_HEIGHT,
+        base,
+        perf,
+        dp: g.window.scale_factor() as f32,
+    }
 }
 
 impl App {
@@ -974,6 +1011,7 @@ impl App {
                 filter: opts::tex_filter(),
                 fill_view: opts::fill_screen(),
                 oled: Default::default(),
+                hud_offsets: opts::hud_offsets(),
             },
         );
         let (scale, filter) = (opts::scale(), opts::scale_filter());
@@ -1011,6 +1049,7 @@ impl App {
             vsync,
             oled_drift: opts::oled_drift(),
             oled_brightness: opts::oled_brightness(),
+            hud_offsets: opts::hud_offsets(),
             display_mode,
             fullscreen_res,
             fullscreen_kind: match display_mode {
@@ -1265,6 +1304,7 @@ impl App {
                 [0.0; 2]
             },
         };
+        g.renderer.options.hud_offsets = g.hud_offsets;
         for op in &q.ops {
             g.renderer.fb_apply(op);
         }
@@ -1358,6 +1398,22 @@ impl App {
         for msg in pw64_platform::headless::take_toasts() {
             self.toast.show(&msg, 10);
         }
+        // "Move HUD": a drag moved something. The paused frame is drawn
+        // again with the new offsets (the real gauges move), the perf card
+        // takes its new spot.
+        if let Some(e) = &mut self.hud_edit
+            && e.take_dirty()
+        {
+            g.hud_offsets = e.offsets;
+            g.renderer.options.hud_offsets = e.offsets;
+            if let Some(fb) = self.shown {
+                g.renderer.fb_redraw(fb);
+            }
+            crate::perf::set_cfg(crate::perf::Cfg {
+                pos: e.perf_pos,
+                ..crate::perf::cfg()
+            });
+        }
         // The shown framebuffer target, letterboxed (downsampled with the
         // `PW64_SCALE` filter when supersampled; 1:1 otherwise).
         g.renderer.fb_present(self.shown, &view, g.filter);
@@ -1391,7 +1447,16 @@ impl App {
             {
                 input::set_touch(self.touch.pad());
             }
-            self.touch_painter.render(g, &view, &self.touch);
+            // Dimmed under the HUD edit mode: the player sees what a
+            // gauge has to clear.
+            self.touch_painter
+                .render(g, &view, &self.touch, self.hud_edit.is_some());
+        }
+        // "Move HUD": outlines, hint and Reset / Done over everything but
+        // the overlay; the geometry it draws is what the next drag uses.
+        if let Some(e) = &mut self.hud_edit {
+            e.geo = hud_geometry(g, self.shown, self.perf.rect());
+            self.hud_painter.render(g, &view, e);
         }
         // The overlay draws over the game frame (own pass on the surface);
         // closed, it costs nothing. While open it keeps requesting redraws:
@@ -1468,6 +1533,26 @@ impl App {
             self.touch.begin_edit();
             input::set_touch(crate::touch::TouchPad::IDLE);
             if let Some(g) = &self.gpu {
+                g.window.request_redraw();
+            }
+            return;
+        }
+        // "Move HUD": the same, into the HUD edit mode.
+        if overlay_closed && self.overlay.as_mut().is_some_and(|o| o.take_hud_edit()) {
+            input::set_game_blocked(true);
+            if let Some(o) = &mut self.overlay {
+                o.close();
+            }
+            #[cfg(target_os = "android")]
+            {
+                self.touch.reset();
+                input::set_touch(crate::touch::TouchPad::IDLE);
+            }
+            if let Some(g) = &self.gpu {
+                self.hud_edit = Some(crate::hud_edit::Editor::new(
+                    g.hud_offsets,
+                    crate::perf::cfg().pos,
+                ));
                 g.window.request_redraw();
             }
             return;
@@ -1555,6 +1640,11 @@ impl App {
             self.end_touch_edit();
             return;
         }
+        // Same for the HUD edit mode (also the pad's settings trigger).
+        if self.hud_edit.is_some() {
+            self.end_hud_edit();
+            return;
+        }
         let Some(g) = &self.gpu else { return };
         // Nothing sticks while the overlay owns the input.
         input::release_all_keys();
@@ -1604,6 +1694,42 @@ impl App {
         }
         input::set_game_blocked(false);
         self.open_settings();
+    }
+
+    /// Leaves the HUD edit mode (Done, Esc / the settings trigger, Back,
+    /// going to the background): applies and saves the offsets (`[hud]`)
+    /// and the perf card's spot (`[perf] pos`), back to the pause menu.
+    fn end_hud_edit(&mut self) {
+        let Some(e) = self.hud_edit.take() else {
+            return;
+        };
+        self.mouse_down = false;
+        if let Some(g) = &mut self.gpu {
+            g.hud_offsets = e.offsets;
+            g.renderer.options.hud_offsets = e.offsets;
+        }
+        crate::perf::set_cfg(crate::perf::Cfg {
+            pos: e.perf_pos,
+            ..crate::perf::cfg()
+        });
+        let moved = crate::hud_edit::to_config(&e.offsets);
+        if let Err(err) = config::save_hud(&moved, e.perf_pos) {
+            eprintln!("[hud] layout not saved: {err}");
+        }
+        input::set_game_blocked(false);
+        self.open_settings();
+    }
+
+    /// One pointer event for the HUD edit mode (touch or the left mouse
+    /// button); Done leaves it.
+    fn hud_pointer(&mut self, id: u64, phase: crate::hud_edit::Phase, p: (f32, f32)) {
+        let Some(e) = &mut self.hud_edit else {
+            return;
+        };
+        if e.pointer(id, phase, p) == Some(crate::hud_edit::Action::Done) {
+            self.end_hud_edit();
+        }
+        self.request_overlay_redraw();
     }
 
     fn close_settings(&mut self) {
@@ -1668,6 +1794,9 @@ impl ApplicationHandler<UserEvent> for App {
     fn suspended(&mut self, _: &ActiveEventLoop) {
         if self.touch.editing() {
             self.end_touch_edit();
+        }
+        if self.hud_edit.is_some() {
+            self.end_hud_edit();
         }
         input::release_all_keys();
         self.touch.reset();
@@ -1811,6 +1940,9 @@ impl ApplicationHandler<UserEvent> for App {
                     o.pointer_moved(self.cursor.0, self.cursor.1);
                     self.request_overlay_redraw();
                 }
+                if self.mouse_down && self.hud_edit.is_some() {
+                    self.hud_pointer(0, crate::hud_edit::Phase::Move, pos);
+                }
             }
             WindowEvent::MouseInput {
                 state,
@@ -1834,6 +1966,17 @@ impl ApplicationHandler<UserEvent> for App {
                     let pressed = state == ElementState::Pressed;
                     o.pointer_button(self.cursor.0, self.cursor.1, pressed);
                     self.request_overlay_redraw();
+                }
+                // "Move HUD": the left button drags like a finger.
+                if self.hud_edit.is_some() && !settings::is_open() {
+                    let pressed = state == ElementState::Pressed;
+                    self.mouse_down = pressed;
+                    let phase = if pressed {
+                        crate::hud_edit::Phase::Start
+                    } else {
+                        crate::hud_edit::Phase::End
+                    };
+                    self.hud_pointer(0, phase, self.cursor);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -1945,6 +2088,15 @@ impl ApplicationHandler<UserEvent> for App {
                         TouchPhase::Moved => crate::touch::Phase::Move,
                         TouchPhase::Ended | TouchPhase::Cancelled => crate::touch::Phase::End,
                     };
+                    if self.hud_edit.is_some() {
+                        let phase = match phase {
+                            crate::touch::Phase::Start => crate::hud_edit::Phase::Start,
+                            crate::touch::Phase::Move => crate::hud_edit::Phase::Move,
+                            crate::touch::Phase::End => crate::hud_edit::Phase::End,
+                        };
+                        self.hud_pointer(t.id, phase, p);
+                        return;
+                    }
                     if self.touch.editing() {
                         let action = self.touch.edit_touch(t.id, phase, p);
                         if action == Some(crate::touch::EditAction::Done) {

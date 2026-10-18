@@ -153,6 +153,11 @@ pub struct DrawCall {
     /// left/right world view stretched to the output edge
     /// (`Renderer::split_world_placement`, `pw64_widescreen_tag`).
     pub split: Option<[f32; 4]>,
+    /// Movable flight-HUD element (the native game's `G_NOOP` "PWE" tags,
+    /// `interp::HUD_ELEM_TAG`, `pw64_hud_element`); 0 = none. A hud
+    /// `Wide::Fixed` draw outside split-screen moves by
+    /// `RenderOptions::hud_offsets[elem]` (`crate::hud`).
+    pub elem: u8,
 }
 
 /// Horizontal HUD anchor in widescreen: a `Wide::Fixed` draw is shifted by

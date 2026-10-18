@@ -39,6 +39,10 @@
 //! cpu = false              # busiest thread's load (% of one core)
 //! gpu = false              # GPU load estimate
 //! corner = "top_right"     # top_left, top_right, bottom_left, bottom_right
+//! pos = [0.02, 0.3]        # moved in "Move HUD": card top-left as fractions of the window (wins over corner)
+//!
+//! [hud]                    # flight-HUD elements moved in "Move HUD" (pause menu)
+//! speed = [0.0, -40.0]     # element = [dx, dy] in N64 pixels (`PW64_HUD_OFFSETS`)
 //!
 //! [input]                  # settings-screen triggers (default: F10 / Select)
 //! settings_key = "F10"
@@ -104,6 +108,9 @@ pub struct Config {
     pub touch: Vec<(String, (f32, f32))>,
     /// `[touch] hidden`: only the menu button shows (a pad is used).
     pub touch_hidden: bool,
+    /// `[hud]`: flight-HUD elements moved by the player ("Move HUD"),
+    /// element name → (dx, dy) in N64 px (`hud_edit::offsets_from`).
+    pub hud: Vec<(String, (f32, f32))>,
     /// Keys skipped at load (wrong type or invalid value; see `ignored_keys`).
     pub ignored: Vec<String>,
 }
@@ -667,6 +674,17 @@ fn from_table(table: &toml::Table) -> Config {
                 ) {
                     cfg.perf.corner = crate::perf::Corner::parse(&c).unwrap_or_default();
                 }
+                if let Some(v) = p.get("pos") {
+                    match pair_in(v, 0.0, 1.0) {
+                        Some(pos) => cfg.perf.pos = Some(pos),
+                        None => ignore(
+                            &mut ignored,
+                            "perf.pos",
+                            v,
+                            "use [x, y], fractions of the window between 0 and 1",
+                        ),
+                    }
+                }
             }
             None => ignore(&mut ignored, "perf", v, "must be a [perf] table"),
         }
@@ -774,17 +792,99 @@ fn from_table(table: &toml::Table) -> Config {
         }
     }
 
+    if let Some(v) = table.get("hud") {
+        match v.as_table() {
+            Some(t) => {
+                for (k, v) in t {
+                    match pair_in(v, -HUD_OFFSET_MAX, HUD_OFFSET_MAX) {
+                        Some(o) if crate::hud_edit::element_id(k).is_some() => {
+                            cfg.hud.push((k.clone(), o));
+                        }
+                        Some(_) => ignore(&mut ignored, &format!("hud.{k}"), v, "unknown element"),
+                        None => ignore(
+                            &mut ignored,
+                            &format!("hud.{k}"),
+                            v,
+                            "use [dx, dy] in N64 pixels between -320 and 320",
+                        ),
+                    }
+                }
+            }
+            None => ignore(&mut ignored, "hud", v, "must be a [hud] table"),
+        }
+    }
+
     cfg.ignored = ignored;
     cfg
 }
 
-/// One `[touch]` value: a two-number array, each in -1..=1.
-fn touch_offset(v: &toml::Value) -> Option<(f32, f32)> {
+/// `[hud]` offsets beyond this (N64 px, the whole screen width) are invalid.
+const HUD_OFFSET_MAX: f32 = 320.0;
+
+/// A two-number array, each in `lo..=hi`.
+fn pair_in(v: &toml::Value, lo: f32, hi: f32) -> Option<(f32, f32)> {
     let [x, y] = v.as_array()?.as_slice() else {
         return None;
     };
     let (x, y) = (coerce_f32(x)?, coerce_f32(y)?);
-    ((-1.0..=1.0).contains(&x) && (-1.0..=1.0).contains(&y)).then_some((x, y))
+    ((lo..=hi).contains(&x) && (lo..=hi).contains(&y)).then_some((x, y))
+}
+
+/// One `[touch]` value: a two-number array, each in -1..=1.
+fn touch_offset(v: &toml::Value) -> Option<(f32, f32)> {
+    pair_in(v, -1.0, 1.0)
+}
+
+/// Writes the "Move HUD" result: `[hud]` (the moved elements, replacing the
+/// old table; empty removes it) and `[perf] pos` (None removes the key).
+pub fn save_hud(
+    offsets: &[(&str, (f32, f32))],
+    perf_pos: Option<(f32, f32)>,
+) -> Result<(), String> {
+    let table = read_table()?;
+    write_table(&with_hud(table, offsets, perf_pos)?)
+}
+
+/// [`save_hud`]'s table edit (separate from the file I/O for tests).
+fn with_hud(
+    mut table: toml::Table,
+    offsets: &[(&str, (f32, f32))],
+    perf_pos: Option<(f32, f32)>,
+) -> Result<toml::Table, String> {
+    let round = |f: f32, scale: f64| toml::Value::Float((f64::from(f) * scale).round() / scale);
+    let t: toml::Table = offsets
+        .iter()
+        .map(|&(k, (x, y))| {
+            let v = toml::Value::Array(vec![round(x, 10.0), round(y, 10.0)]);
+            (k.to_string(), v)
+        })
+        .collect();
+    if t.is_empty() {
+        table.remove("hud");
+    } else {
+        table.insert("hud".into(), toml::Value::Table(t));
+    }
+    let perf = table
+        .entry("perf")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let toml::Value::Table(perf) = perf else {
+        return Err("[perf] is not a table in pw64.toml; not saved".to_string());
+    };
+    match perf_pos {
+        Some((x, y)) => {
+            perf.insert(
+                "pos".into(),
+                toml::Value::Array(vec![round(x, 1e4), round(y, 1e4)]),
+            );
+        }
+        None => {
+            perf.remove("pos");
+        }
+    }
+    if perf.is_empty() {
+        table.remove("perf");
+    }
+    Ok(table)
 }
 
 /// Writes the touch control offsets into `[touch]` (replacing the old
@@ -1305,6 +1405,16 @@ pub(crate) fn apply(
                 pt.insert(k.into(), v);
             }
         }
+        // The free position from "Move HUD" (None: the corner applies).
+        match p.pos {
+            Some((x, y)) => {
+                let r = |f: f32| toml::Value::Float((f64::from(f) * 1e4).round() / 1e4);
+                pt.insert("pos".into(), toml::Value::Array(vec![r(x), r(y)]));
+            }
+            None => {
+                pt.remove("pos");
+            }
+        }
         if pt.is_empty() {
             table.remove("perf");
         }
@@ -1407,6 +1517,42 @@ mod tests {
         let c = from_table(&t);
         assert!(c.touch_hidden && c.ignored.is_empty());
         assert_eq!(c.touch, vec![("a".to_string(), (0.1, 0.1))]);
+    }
+
+    /// "Move HUD": `[hud]` element offsets (N64 px) and `[perf] pos` parse,
+    /// reject junk, and round-trip through `with_hud` without touching the
+    /// other `[perf]` keys; empty / None remove them.
+    #[test]
+    fn hud_offsets_and_perf_pos_round_trip() {
+        let c = parse(
+            "[hud]\nspeed = [0.0, -40.5]\nradar = [500, 0]\nbogus = [1, 1]\n\
+             [perf]\ncorner = \"top_left\"\npos = [0.25, 0.5]\n",
+        )
+        .unwrap();
+        assert_eq!(c.hud, vec![("speed".to_string(), (0.0, -40.5))]);
+        assert_eq!(c.perf.pos, Some((0.25, 0.5)));
+        assert_eq!(c.ignored, vec!["hud.bogus", "hud.radar"]);
+        assert!(
+            parse("[perf]\npos = [1.5, 0]\n")
+                .unwrap()
+                .perf
+                .pos
+                .is_none()
+        );
+        let t: toml::Table = toml::from_str("[perf]\ngraph = true\n").unwrap();
+        let t = with_hud(t, &[("timer", (3.04, -12.0))], Some((0.1, 0.9))).unwrap();
+        let c = from_table(&t);
+        assert_eq!(c.hud, vec![("timer".to_string(), (3.0, -12.0))]);
+        assert_eq!(c.perf.pos, Some((0.1, 0.9)));
+        assert!(c.perf.graph, "other [perf] keys kept");
+        let t = with_hud(t, &[], None).unwrap();
+        assert!(!t.contains_key("hud"));
+        assert!(t["perf"].get("pos").is_none());
+        assert!(
+            !with_hud(toml::Table::new(), &[], None)
+                .unwrap()
+                .contains_key("perf")
+        );
     }
 
     #[test]

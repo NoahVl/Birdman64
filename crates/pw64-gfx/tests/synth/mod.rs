@@ -475,6 +475,9 @@ fn strip_placement(mut s: String) -> String {
     if let Some(a) = s.find(", split: None") {
         s.replace_range(a..a + ", split: None".len(), "");
     }
+    if let Some(a) = s.find(", elem: 0") {
+        s.replace_range(a..a + ", elem: 0".len(), "");
+    }
     s
 }
 

@@ -154,6 +154,9 @@ pub struct Interpreter {
     /// an 'X' marker and the active rect; reset per run.
     split_x: [f32; 2],
     split: Option<[f32; 4]>,
+    /// Current movable HUD element (`HUD_ELEM_TAG` markers, 0 = none);
+    /// reset per run.
+    elem: u8,
     /// Commands executed by the last run (TEXRECT + its halves count once).
     commands: usize,
     /// Bumped by every TMEM load (see [`BindMemo`]).
@@ -195,6 +198,22 @@ pub const HUD_TAG_OFF: u32 = 0x5057_4830;
 /// (`x0 << 12 | x1`), `Y` its top-down rows (`row0 << 12 | row1`) and turns
 /// the view on for the following draws ([`crate::DrawCall::split`]); `0` off.
 pub const SPLIT_TAG: u32 = 0x5057_5300;
+/// `G_NOOP` w1 movable HUD element marker ("PWE" + element id in the low
+/// byte, `pw64_hud_element` in `pw64_widescreen.c`; 0 = none): the
+/// following draws belong to that element ([`crate::frame::DrawCall::elem`],
+/// moved by `RenderOptions::hud_offsets`). Emitted unconditionally, like
+/// the "PWH" tags.
+pub const HUD_ELEM_TAG: u32 = 0x5057_4500;
+
+/// The element id a `HUD_ELEM_TAG` marker word selects (`None`: not a
+/// marker, or an id past [`crate::hud::HUD_ELEMS`]).
+pub fn hud_elem_tag(w1: u32) -> Option<u8> {
+    if w1 & 0xFFFF_FF00 != HUD_ELEM_TAG {
+        return None;
+    }
+    let id = w1 as u8;
+    ((id as usize) < crate::hud::HUD_ELEMS).then_some(id)
+}
 
 /// The anchor an `ANCHOR_TAG` marker word selects (`None`: not a marker).
 pub fn anchor_tag(w1: u32) -> Option<Anchor> {
@@ -289,6 +308,7 @@ impl Interpreter {
             hud: false,
             split_x: [0.0; 2],
             split: None,
+            elem: 0,
             commands: 0,
             tmem_gen: 0,
             bind_memo: [None; 8],
@@ -440,6 +460,10 @@ impl Interpreter {
             // draws so the renderer can drift + dim them (OLED care).
             op::G_NOOP if w1 == HUD_TAG_ON || w1 == HUD_TAG_OFF => {
                 self.hud = w1 == HUD_TAG_ON;
+            }
+            // Movable HUD element (pw64_hud_element).
+            op::G_NOOP if hud_elem_tag(w1).is_some() => {
+                self.elem = hud_elem_tag(w1).unwrap_or(0);
             }
             // Split-screen HUD view (pw64_hud_split_tag).
             op::G_NOOP if w1 & 0xFFFF_FF00 == SPLIT_TAG => {
@@ -1036,6 +1060,7 @@ impl Interpreter {
             && last.vanchor == self.vanchor
             && last.hud == self.hud
             && last.split == self.split
+            && last.elem == self.elem
         {
             last.vertex_count += count;
             if let (Wide::Stretch(a), Wide::Stretch(b)) = (&mut last.wide, wide) {
@@ -1057,6 +1082,7 @@ impl Interpreter {
             stretch_y,
             hud: self.hud,
             split: self.split,
+            elem: self.elem,
         });
     }
 
@@ -1580,6 +1606,39 @@ mod tests {
         assert!(f.draws.iter().all(|d| d.split.is_none()));
         assert_eq!(anchor_tag(SPLIT_TAG | b'X' as u32), None);
         assert_eq!(vanchor_tag(SPLIT_TAG | b'Y' as u32), None);
+
+        // Movable HUD elements ("PWE" + id): tag the following draws (and
+        // split merges), 0 clears, resets per run; disjoint from every
+        // other tag space; ids past HUD_ELEMS are ignored.
+        let etag = |id: u8| (0xC000_0000, HUD_ELEM_TAG | id as u32);
+        let mut cmds = vec![etag(1)];
+        cmds.extend(tri(ident));
+        cmds.push(etag(6));
+        cmds.extend(tri(ident));
+        cmds.push(etag(0));
+        cmds.extend(tri(ident));
+        cmds.push((0xB800_0000, 0));
+        let elems = mem.push_words(&words(&cmds));
+        let f = Interpreter::new().run(&mem, elems);
+        let got: Vec<_> = f.draws.iter().map(|d| d.elem).collect();
+        assert_eq!(got, [1, 1, 6, 6, 0, 0]);
+        let f = it.run(&mem, main);
+        assert!(f.draws.iter().all(|d| d.elem == 0), "elem resets per run");
+        assert_eq!(hud_elem_tag(HUD_ELEM_TAG | 3), Some(3));
+        assert_eq!(hud_elem_tag(HUD_ELEM_TAG | 0xFF), None);
+        for other in [
+            WIDE_TAG_ON,
+            WIDE_TAG_OFF,
+            HUD_TAG_ON,
+            HUD_TAG_OFF,
+            ANCHOR_TAG | b'L' as u32,
+            VANCHOR_TAG | b'T' as u32,
+            SPLIT_TAG | b'X' as u32,
+        ] {
+            assert_eq!(hud_elem_tag(other), None, "{other:#x}");
+        }
+        assert_eq!(anchor_tag(HUD_ELEM_TAG | b'L' as u32), None);
+        assert_eq!(vanchor_tag(HUD_ELEM_TAG | b'T' as u32), None);
     }
 
     /// TEXRECT consumes exactly the two following half commands; the command

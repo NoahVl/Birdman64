@@ -92,6 +92,9 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
   `os::set_paused` kept), drag a control (C diamond as one group), Reset / Done;
   Done / Back saves `[touch] <group> = [dx, dy]` (fractions of the screen,
   clamped on screen) and reopens the pause menu.
+- Pause menu "Move HUD" (settings.md "Move HUD"): drag gauges off the touch controls
+  instead of moving the controls; touch controls shown faint meanwhile. Touch ids go
+  to `hud_edit::Editor` before the touch edit mode / game input.
 - Sizes in dp (winit scale factor = density), scaled to the screen (fit 0.7-1.3),
   36 dp side / 12 dp top-bottom margins, or inset + 8 dp where an inset is larger.
   targetSdk 35 is edge to edge: the window draws under the cutout and

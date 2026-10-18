@@ -316,6 +316,7 @@ impl Hle {
                             filter: opts::tex_filter(),
                             fill_view: fill,
                             oled: Default::default(),
+                            hud_offsets: opts::hud_offsets(),
                         },
                     )
                 })
@@ -462,7 +463,13 @@ impl Hle {
     /// the GPU target when rendering, and queued for the sink.
     fn submit(&mut self, fb: u32, frame: Arc<Frame>) {
         if let Some(renderer) = self.gpu.as_mut() {
-            DUMP_RENDER.time(|| renderer.fb_draw(fb, &frame));
+            // `fb_apply` keeps the task for `fb_redraw` (PW64_DUMP_HUD_REDRAW).
+            DUMP_RENDER.time(|| {
+                renderer.fb_apply(&FbOp::Draw {
+                    fb,
+                    frame: frame.clone(),
+                })
+            });
         }
         if self.sink.is_some() {
             self.ops.push(FbOp::Draw {
@@ -568,10 +575,33 @@ impl Hle {
         if r.black {
             return;
         }
+        // `PW64_DUMP_HUD_REDRAW=<name=dx,dy;..>` (dev): dump the shown frame
+        // redrawn with these HUD offsets, like the "Move HUD" edit mode
+        // does on the paused frame (`fb_redraw`), then restore it; logs the
+        // element bounds. Compare with a `PW64_HUD_OFFSETS` run.
+        let redraw = std::env::var("PW64_DUMP_HUD_REDRAW").ok();
+        if self.dump_frames.due(r.number)
+            && let (Some(renderer), Some(shown), Some(spec)) =
+                (self.gpu.as_mut(), self.shown, redraw.as_deref())
+        {
+            let keep = renderer.options.hud_offsets;
+            renderer.options.hud_offsets = crate::hud_edit::parse_env(spec);
+            renderer.fb_redraw(shown);
+            renderer.options.hud_offsets = keep;
+            if let Some(b) = renderer.fb_hud_bounds(shown) {
+                let drawn: Vec<String> = (0..b.len())
+                    .filter_map(|e| b[e].map(|r| format!("{e}:{r:.0?}")))
+                    .collect();
+                eprintln!("[hud] retrace {} bounds {}", r.number, drawn.join(" "));
+            }
+        }
         if self.dump_frames.due(r.number)
             && let (Some(renderer), Some(shown)) = (self.gpu.as_mut(), self.shown)
             && let Some(rgba) = DUMP_RENDER.time(|| renderer.fb_read_rgba(shown))
         {
+            if redraw.is_some() {
+                renderer.fb_redraw(shown);
+            }
             write_png(
                 &format!("tmp/frame_{:05}.png", r.number),
                 &rgba,
@@ -600,13 +630,14 @@ impl Hle {
                 for (i, d) in frame.draws.iter().enumerate() {
                     let _ = writeln!(
                         s,
-                        "draw {i}: verts {}+{} 3d={} wide {:?} {:?} hud {} scissor {:?} {:?} tex {:?} prim {:?} env {:?} blend {:?}",
+                        "draw {i}: verts {}+{} 3d={} wide {:?} {:?} hud {} elem {} scissor {:?} {:?} tex {:?} prim {:?} env {:?} blend {:?}",
                         d.first_vertex,
                         d.vertex_count,
                         d.is_3d,
                         d.wide,
                         d.anchor,
                         d.hud,
+                        d.elem,
                         d.scissor,
                         d.pipeline,
                         d.textures.each_ref().map(|t| t.as_ref().map(|t| t.key)),

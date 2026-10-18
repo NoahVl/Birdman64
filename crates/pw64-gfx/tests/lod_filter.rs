@@ -126,6 +126,7 @@ fn frame(
         stretch_y: [0.0; 2],
         hud: false,
         split: None,
+        elem: 0,
     };
     Frame {
         vertices: verts,

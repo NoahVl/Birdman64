@@ -607,6 +607,31 @@ identity tests (`interp_identity`, `render_identity`, all existing placement ass
 - Identity: `tests/synth strip_placement` strips `, hud: false` like
   `stretch_y`/`vanchor`; `interp_identity`/`render_identity` unchanged.
 
+## Movable HUD (`RenderOptions::hud_offsets`, `crate::hud`, birdman64 `hud_edit.rs`)
+- Tag: `G_NOOP` w1 `HUD_ELEM_TAG` "PWE"+id (`0x50574500|id`, ids < `HUD_ELEMS` = 16, 0 = none),
+  `pw64_hud_element(id)` (emits on change only), unconditional like PWH. Ids `PW64_HUD_*` in
+  `pw64_native.h` = names in `hud_edit::ELEMENTS`. Set next to each gauge helper's anchor call
+  (hud.c.patch); messages = low fuel/start text/FINISHED; reticle, camera shutter, demo controller = 0;
+  0 again at the HUD end. font.c stores elem in bits 16..23 of the per-message tag word and re-emits it.
+- `Interpreter.elem` (reset per run) → `DrawCall::elem` (merge key); identity tests strip `, elem: 0`.
+- Units: N64 px of the 4:3 area, relative to the anchored spot (so edge anchors, fill, any
+  resolution keep working); target px = `round(off · rh/240)` like the OLED drift (added to it).
+  Only `hud && Wide::Fixed && split.is_none()` draws; split-screen HUDs ignore offsets.
+- `hud_layout` (per `draw_frame`): bounds per element in target px without offset = vertices of
+  hud Fixed elem draws clipped to their scissor; 2D draws per 6-vertex rect (texrects merge into one
+  draw), trimmed to the texture's opaque texels (`opaque_part`, alpha bbox cached per key: the
+  altimeter sprite is transparent down to row 239); untextured shade-alpha-0 Normal quads skipped
+  (gauge spacers). Offsets clamped (`hud::clamp_offset`) so bounds stay in the output area. All
+  offsets zero → no clamp work, bit-identical.
+- fb targets keep `last: Arc<Frame>` (set by `fb_apply` Draw only) + `hud: HudBounds`;
+  `fb_redraw(fb)` replays the last task (edit mode on the paused frame). Exact in flight except a
+  19×8 px invisible diff (shadow?) at 850 retraces; `fb_hud_bounds(fb)` for hit-testing (resample
+  scales it, copy carries it).
+- Dev: `PW64_HUD_OFFSETS="speed=0,-60;radar=-40,30"` (wins over `[hud]`); dumps with
+  `PW64_DUMP_HUD_REDRAW=<same syntax>` redraw the shown frame with those offsets (= edit mode) and
+  log `[hud] retrace N bounds id:[x0,y0,x1,y1]` (dump px); it matched a `PW64_HUD_OFFSETS` run.
+- Verified hg/rb/gc/cb (4:3, 16:9 + fill): moved elements move, others byte-identical.
+
 ## Texture packs (`PW64_TEX_PACKS=<dir>`, `crates/birdman64/src/packs.rs`)
 - Which pack runs: `PW64_TEX_PACKS=<dir>` wins; else `[graphics] texture_pack` names a folder of the data dir's
   `packs/` (the settings screen's "Texture pack" row picks it, "Open texture packs folder" creates/opens that

@@ -24,6 +24,7 @@ mod config;
 #[cfg(feature = "first-run")]
 mod firstrun;
 mod hle;
+mod hud_edit;
 mod input;
 mod opts;
 mod packs;

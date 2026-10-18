@@ -299,8 +299,8 @@ impl Layout {
         let c = |x: f32, y: f32, r: f32| Circle { x, y, r: r * u };
         let stick_radius = 56.0 * u;
         let stick_rest = (left + stick_radius, bottom - stick_radius - 12.0 * u);
-        // Right cluster, N64-like: A low, B up-left of it, the C diamond
-        // above-right, R above the diamond.
+        // Right cluster, N64-like: Z up-left of the C diamond, A low, B
+        // between them, R above the diamond.
         let (cx, cy, cd) = (right - 62.0 * u, bottom - 170.0 * u, 40.0 * u);
         let buttons = vec![
             (Control::A, c(right - 104.0 * u, bottom - 44.0 * u, 34.0)),
@@ -310,16 +310,8 @@ impl Layout {
             (Control::CLeft, c(cx - cd, cy, 22.0)),
             (Control::CRight, c(cx + cd, cy, 22.0)),
             (Control::R, c(right - 34.0 * u, cy - cd - 64.0 * u, 26.0)),
-            // Z: the N64's trigger under the stick hand, here above the
-            // stick's rest spot.
-            (
-                Control::Z,
-                c(
-                    left + 30.0 * u,
-                    stick_rest.1 - stick_radius - 52.0 * u,
-                    28.0,
-                ),
-            ),
+            // Z (photos) on the right: the left thumb steers while aiming.
+            (Control::Z, c(right - 170.0 * u, bottom - 200.0 * u, 28.0)),
             (Control::Start, c(w / 2.0, bottom - 20.0 * u, 20.0)),
             (Control::Menu, c(left + 18.0 * u, top + 18.0 * u, 18.0)),
         ];
@@ -788,7 +780,15 @@ impl Painter {
         }
     }
 
-    pub fn render(&mut self, gpu: &crate::window::Gpu, view: &wgpu::TextureView, c: &Controls) {
+    /// `dim`: the HUD edit mode is on (every control drawn faint, so the
+    /// player sees what the HUD has to clear).
+    pub fn render(
+        &mut self,
+        gpu: &crate::window::Gpu,
+        view: &wgpu::TextureView,
+        c: &Controls,
+        dim: bool,
+    ) {
         if c.layout().buttons.is_empty() {
             return;
         }
@@ -801,7 +801,7 @@ impl Painter {
             Vec::new(),
         );
         let ctx = self.ctx.clone();
-        let out = ctx.run(raw, |ctx| draw(ctx, ppp, c));
+        let out = ctx.run(raw, |ctx| draw(ctx, ppp, c, dim));
         crate::settings::paint(
             gpu,
             &self.ctx,
@@ -815,7 +815,7 @@ impl Painter {
 
 /// The shapes, in egui points (px / `ppp`).
 #[cfg(target_os = "android")]
-fn draw(ctx: &egui::Context, ppp: f32, c: &Controls) {
+fn draw(ctx: &egui::Context, ppp: f32, c: &Controls, dim: bool) {
     use egui::{Color32, Pos2, Shape, Stroke};
     let painter = ctx.layer_painter(egui::LayerId::background());
     let pt = |(x, y): (f32, f32)| Pos2::new(x / ppp, y / ppp);
@@ -825,7 +825,13 @@ fn draw(ctx: &egui::Context, ppp: f32, c: &Controls) {
     let fg = rgba(255, 255, 255, 0.8);
     let editing = c.editing();
     // Edit mode: the paused frame dimmed, controls more opaque.
-    let base_a = if editing { 0.6 } else { OPACITY };
+    let base_a = if editing {
+        0.6
+    } else if dim {
+        0.15
+    } else {
+        OPACITY
+    };
     if editing {
         let (w, h) = c.layout().size;
         painter.rect_filled(
@@ -841,7 +847,8 @@ fn draw(ctx: &egui::Context, ppp: f32, c: &Controls) {
             fg,
         );
     }
-    let menu_only = c.menu_only();
+    // The HUD edit mode shows every control (where they sit in play).
+    let menu_only = c.menu_only() && !dim;
     // Stick: base ring + knob.
     let (base, knob) = c.stick();
     let sr = c.layout().stick_radius / ppp;
@@ -1000,6 +1007,8 @@ mod tests {
             let (sx, sy) = l.stick_rest;
             assert!(sx - l.stick_radius >= 0.0 && sy + l.stick_radius <= h);
             assert!(sx + l.stick_radius < l.stick_zone_right);
+            // Z is a right-cluster button (photo while steering).
+            assert!(center(&l, Control::Z).0 > w / 2.0);
         }
     }
 

@@ -146,6 +146,9 @@ enum Row {
     TouchLayout,
     /// Main (Android only): on-screen buttons shown / only the menu button.
     TouchHidden,
+    /// Main: drag the flight-HUD elements and the performance overlay
+    /// (`hud_edit.rs`).
+    HudLayout,
 }
 
 /// Which input kind a Bind / Reset row edits.
@@ -440,6 +443,8 @@ pub struct Overlay {
     quit_requested: bool,
     /// "Move touch controls" chosen ([`Overlay::take_touch_edit`]).
     touch_edit_requested: bool,
+    /// "Move HUD" chosen ([`Overlay::take_hud_edit`]).
+    hud_edit_requested: bool,
     /// A confirmed "Restart now" (U16) the window takes with
     /// [`Overlay::take_restart`] after the close-save: spawn + exit there.
     restart_requested: bool,
@@ -560,6 +565,7 @@ impl Overlay {
             quit_armed: None,
             quit_requested: false,
             touch_edit_requested: false,
+            hud_edit_requested: false,
             restart_requested: false,
             restart_error: None,
             monitor_hz: None,
@@ -782,6 +788,12 @@ impl Overlay {
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub fn take_touch_edit(&mut self) -> bool {
         std::mem::take(&mut self.touch_edit_requested)
+    }
+
+    /// "Move HUD" was chosen: taken by the window once the overlay closed
+    /// (it enters the HUD edit mode; the game stays paused).
+    pub fn take_hud_edit(&mut self) -> bool {
+        std::mem::take(&mut self.hud_edit_requested)
     }
 
     /// A confirmed "Restart now" (U16): taken by the window like
@@ -1309,6 +1321,13 @@ impl Overlay {
                     rows.insert(2, Row::TouchLayout);
                     rows.insert(3, Row::TouchHidden);
                 }
+                // Move HUD: after the touch rows (Android), else after
+                // Controls.
+                let at = rows
+                    .iter()
+                    .position(|r| *r == Row::SplitScreen)
+                    .unwrap_or(2);
+                rows.insert(at, Row::HudLayout);
                 rows
             }
             Page::Graphics => {
@@ -1431,6 +1450,7 @@ impl Overlay {
                     };
                     self.text_row(ui, at(Row::TouchHidden), shown);
                 }
+                self.text_row(ui, at(Row::HudLayout), "Move HUD");
                 self.text_row(ui, at(Row::SplitScreen), "Split-screen \u{203a}");
                 self.text_row(ui, at(Row::Graphics), "Display & graphics \u{203a}");
                 self.text_row(ui, at(Row::PerfPage), "Performance overlay \u{203a}");
@@ -1919,7 +1939,15 @@ impl Overlay {
             Opt::PerfGraph => ("Frame-time graph", on_off(self.perf.graph), ""),
             Opt::PerfCpu => ("CPU core load", on_off(self.perf.cpu), ""),
             Opt::PerfGpu => ("GPU load", on_off(self.perf.gpu), ""),
-            Opt::PerfCorner => ("Position", self.perf.corner.label().into(), ""),
+            Opt::PerfCorner => (
+                "Position",
+                if self.perf.pos.is_some() {
+                    "Moved (Move HUD)".into()
+                } else {
+                    self.perf.corner.label().into()
+                },
+                "",
+            ),
             Opt::PauseBackground => (
                 "Pause when in the background",
                 if self.pause_background { "On" } else { "Off" }.into(),
@@ -2096,6 +2124,11 @@ impl Overlay {
             // (`take_touch_edit`); the game stays paused.
             Row::TouchLayout => {
                 self.touch_edit_requested = true;
+                self.show = false;
+            }
+            // Same for the HUD edit mode (`take_hud_edit`).
+            Row::HudLayout => {
+                self.hud_edit_requested = true;
                 self.show = false;
             }
             Row::TouchHidden => {
@@ -2307,6 +2340,9 @@ impl Overlay {
                 Opt::PerfGraph => self.perf.graph = !self.perf.graph,
                 Opt::PerfCpu => self.perf.cpu = !self.perf.cpu,
                 Opt::PerfGpu => self.perf.gpu = !self.perf.gpu,
+                // A moved card snaps back to a corner (the one it was
+                // anchored to first, then stepping on).
+                Opt::PerfCorner if self.perf.pos.is_some() => self.perf.pos = None,
                 Opt::PerfCorner => self.perf.corner = self.perf.corner.step(d),
                 Opt::PauseBackground => self.pause_background = !self.pause_background,
                 // Set by an env var, or no controller input at all: the row
@@ -2337,6 +2373,7 @@ impl Overlay {
             | Row::OpenSaveFolder
             | Row::TouchLayout
             | Row::TouchHidden
+            | Row::HudLayout
             | Row::OpenPacksFolder
             | Row::RestartNow => {}
             // Neither do Resume / the page-open rows / Reset to defaults.
@@ -3020,7 +3057,10 @@ fn help(row: Row) -> &'static str {
                 "An estimate of how busy your graphics card is. At 100% the graphics card \
                  is the limit."
             }
-            Opt::PerfCorner => "Which corner of the screen the overlay sits in.",
+            Opt::PerfCorner => {
+                "Which corner of the screen the overlay sits in. To put it anywhere, drag it \
+                 in Move HUD on the main page."
+            }
             Opt::PauseBackground => {
                 "Pauses the game when you switch to another window or your last controller \
                  disconnects."
@@ -3070,6 +3110,10 @@ fn help(row: Row) -> &'static str {
         }
         Row::RestartNow => "Saves your changes and starts Birdman64 again so they take effect.",
         Row::TouchLayout => "Drag the on-screen buttons and stick to where your thumbs want them.",
+        Row::HudLayout => {
+            "Drag the speed, timer, radar and other flight gauges (and the performance \
+             overlay) to new spots. Open it during a flight."
+        }
         Row::TouchHidden => {
             "Playing with a controller? Hide the on-screen buttons. The menu button always \
              stays."
@@ -3742,21 +3786,28 @@ mod tests {
     #[test]
     fn rows_pages_and_controls_row() {
         let mut o = Overlay::new();
-        // Main: Resume, the three sub-pages, Volume, the background-pause
-        // row, Open save folder, Quit (U2, U3, U15, U26).
+        // Main: Resume, Controls, Move HUD, the other sub-pages, Volume,
+        // the background-pause row, Open save folder, Quit (U2, U3, U15,
+        // U26).
         let rows = o.rows();
-        assert_eq!(rows.len(), 9);
+        assert_eq!(rows.len(), 10);
         assert_eq!(rows[0], Row::Resume);
         assert_eq!(rows[1], Row::Controls);
-        assert_eq!(rows[2], Row::SplitScreen);
-        assert_eq!(rows[3], Row::Graphics);
-        assert_eq!(rows[4], Row::PerfPage);
-        assert_eq!(rows[5], Row::Opt(Opt::Volume));
-        assert_eq!(rows[6], Row::Opt(Opt::PauseBackground));
-        assert_eq!(rows[7], Row::OpenSaveFolder);
-        assert_eq!(rows[8], Row::Quit);
+        assert_eq!(rows[2], Row::HudLayout);
+        assert_eq!(rows[3], Row::SplitScreen);
+        assert_eq!(rows[4], Row::Graphics);
+        assert_eq!(rows[5], Row::PerfPage);
+        assert_eq!(rows[6], Row::Opt(Opt::Volume));
+        assert_eq!(rows[7], Row::Opt(Opt::PauseBackground));
+        assert_eq!(rows[8], Row::OpenSaveFolder);
+        assert_eq!(rows[9], Row::Quit);
+        // Move HUD closes the overlay into the edit mode (once).
+        o.sel = 2;
+        o.confirm();
+        assert!(o.take_hud_edit() && !o.take_hud_edit());
+        o.show = true;
         // The performance overlay page: the counter, the opt-in extras, Back.
-        o.sel = 4;
+        o.sel = 5;
         o.confirm();
         assert_eq!(o.page, Page::Perf);
         let rows = o.rows();
@@ -3770,7 +3821,7 @@ mod tests {
         // ten graphics options, the texture-pack rows (pack + folder), the two
         // OLED care rows, Reset to defaults, and Back (no restart-pending
         // change yet, so no banner row, U16).
-        o.sel = 3;
+        o.sel = 4;
         o.confirm();
         assert_eq!(o.page, Page::Graphics);
         let rows = o.rows();
@@ -3828,7 +3879,7 @@ mod tests {
         // Confirm on Split-screen opens its own page: on/off, player 2's
         // controller with "Assign player 2" directly under it, the layout,
         // the two rules, and Back.
-        o.sel = 2;
+        o.sel = 3;
         o.confirm();
         assert_eq!(o.page, Page::Split);
         assert_eq!(

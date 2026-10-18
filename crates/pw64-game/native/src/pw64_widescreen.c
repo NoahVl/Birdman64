@@ -260,6 +260,36 @@ void pw64_hud_tag(int on) {
 }
 
 /*
+ * Movable HUD elements (renderer.md "Movable HUD"). hud.c.patch calls
+ * pw64_hud_element(id) where each gauge starts; the renderer moves the
+ * following flight-HUD draws by the player's offset for that element.
+ * Text is queued, so font.c.patch stores the element per message like the
+ * anchors and re-emits it (pw64_hud_emit_element) when drawing. Not gated
+ * on any setting: offsets are live in the renderer, which ignores the tag
+ * while they are zero.
+ */
+
+/* Must match pw64-gfx `interp::HUD_ELEM_TAG` ("PWE" + element id). */
+#define PW64_HUD_ELEM_TAG 0x50574500u
+
+/* Element for the following draws and text printed now (0 = none). */
+int pw64_hud_elem = 0;
+
+void pw64_hud_emit_element(int id) {
+    gGfxDisplayListHead->words.w0 = (u32)G_NOOP << 24;
+    gGfxDisplayListHead->words.w1 = PW64_HUD_ELEM_TAG | (u32)(id & 0xFF);
+    gGfxDisplayListHead++;
+}
+
+void pw64_hud_element(int id) {
+    if (id == pw64_hud_elem) {
+        return;
+    }
+    pw64_hud_elem = id;
+    pw64_hud_emit_element(id);
+}
+
+/*
  * Split-screen HUD (splitscreen.md "HUD per view"). Each player's HUD is
  * drawn in their channel's callback, still for the full 320x240 screen;
  * hudMainRender brackets it with this tag carrying the view (the current

@@ -42,6 +42,7 @@
                  hudDrawBirdman(&sHudState);
              }
 +            pw64_hud_set_anchor('C'); // PW64: centred messages (widescreen)
++            pw64_hud_element(PW64_HUD_MESSAGES); // PW64: movable HUD
              hudDrawLowFuel(&sHudState);
              hudDrawStartText(&sHudState);
 +            pw64_hud_finished(); // PW64 split-screen
@@ -53,6 +54,7 @@
          sHudState.unk14 += D_8034F854;
          uvFontGenDlist();
 +        pw64_hud_set_anchor('C'); // PW64: end of the anchored HUD
++        pw64_hud_element(0);      // PW64: end of the movable HUD elements
 +        pw64_hud_split_tag(0);    // PW64 split-screen: end of the view's HUD
 +        pw64_hud_tag(0);          // PW64: end of the flight-HUD bracket
          uvGfxMtxViewPop();
@@ -63,6 +65,7 @@
  
      if (arg0->speed == 0.0f) {
 +        pw64_hud_set_anchor2('L', 'B'); // PW64: power gauge + shots (widescreen)
++        pw64_hud_element(PW64_HUD_CB_POWER);
          uvGfxStatePush();
          uvGfxSetFlags(GFX_STATE_XLU);
          uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER);
@@ -71,6 +74,7 @@
              uvGfxStatePop();
          }
 +        pw64_hud_set_anchor2('C', 'B'); // PW64: heading bar
++        pw64_hud_element(PW64_HUD_CB_HEADING);
          uvGfxStatePush();
          uvGfxSetFlags(GFX_STATE_XLU);
          uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER);
@@ -79,6 +83,7 @@
          uvVtxEndPoly();
          uvGfxStatePop();
 +        pw64_hud_set_anchor2('R', 'B'); // PW64: elevation gauge
++        pw64_hud_element(PW64_HUD_CB_ELEVATION);
          uvGfxStatePush();
          uvGfxSetFlags(GFX_STATE_XLU);
          uvGfxClearFlags(GFX_STATE_AA | GFX_STATE_ZBUFFER);
@@ -87,6 +92,7 @@
  
  void hudDrawCamera(HUDState* hud) {
 +    pw64_hud_set_anchor('C'); // PW64: stays centred (widescreen)
++    pw64_hud_element(0);      // PW64: reticle + shutter stay put
      s32 x;
  
      if (hud->cameraState & HUD_CAM_RENDER_RETICLE) {
@@ -130,6 +136,7 @@
  
  void hudDrawThrottle(s32 x, s32 y, f32 power) {
 +    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
++    pw64_hud_element(PW64_HUD_THROTTLE); // PW64: movable HUD
      Mtx4F rot;
      UNUSED s16* fakePtr;
      s16 y1;
@@ -138,6 +145,7 @@
  
  void hudDrawRadar(s32 x, s32 y, f32 xOff, f32 yOff, f32 heading, f32 pitch, HUDRadar* radar) {
 +    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
++    pw64_hud_element(PW64_HUD_RADAR); // PW64: movable HUD
      Mtx4F sp108;
      Mtx4F spC8;
      f32 temp_fa0;
@@ -171,6 +179,7 @@
  
  void hudDemoController(void) {
 +    pw64_hud_set_anchor2('L', 'B'); // PW64: widescreen HUD edge anchor
++    pw64_hud_element(0);            // PW64: demo controller stays put
      s32 screenX;
      s32 screenY;
      f32 stickX;
@@ -179,6 +188,7 @@
  
  void hudDrawSpeed(s32 x, s32 y, s32 speed, s32 highlightLowSpeed) {
 +    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
++    pw64_hud_element(PW64_HUD_SPEED); // PW64: movable HUD
      char str[12];
      s32 numX;
  
@@ -187,6 +197,7 @@
  
  void hudDrawFuel(s32 x, s32 y, f32 fuel) {
 +    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
++    pw64_hud_element(PW64_HUD_FUEL); // PW64: movable HUD
      s16 curX1;
      s16 curX2;
      s16 curY1;
@@ -195,6 +206,7 @@
  
  void hudDrawAltimeter(s32 x, s32 y, s32 altitude) {
 +    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
++    pw64_hud_element(PW64_HUD_ALTIMETER); // PW64: movable HUD
      s32 pad32;
      s16 sp72;
      s16 pad16;
@@ -203,6 +215,7 @@
  
  void hudSeaLevel(s32 x, s32 y, s32 alt) {
 +    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
++    pw64_hud_element(PW64_HUD_SEA_LEVEL); // PW64: movable HUD
      char str[12];
  
      y += 8;
@@ -211,6 +224,7 @@
  
  void hudDrawTimer(s32 x, s32 y, f32 timeSecF) {
 +    pw64_hud_anchor_xy(x, y); // PW64: widescreen HUD edge anchor
++    pw64_hud_element(PW64_HUD_TIMER); // PW64: movable HUD
      static s32 D_8034F938 = 0;
      s32 timeMs;
      s32 timeSec;
@@ -229,6 +243,7 @@
  
  void hudDrawAimReticle(s32 x, s32 y, s32 flag) {
 +    pw64_hud_set_anchor('C'); // PW64: stays centred (widescreen)
++    pw64_hud_element(0);      // PW64: the reticle stays put
      s16 centerX;
      s16 centerY;
  
@@ -237,6 +252,7 @@
  
  void hudDrawPhotoCount(void) {
 +    pw64_hud_set_anchor2('C', 'B'); // PW64: stays centred (widescreen)
++    pw64_hud_element(PW64_HUD_PHOTOS); // PW64: movable HUD
      char str[12];
      (void)snapGetPhotoCount();
      uvFontSet(8);

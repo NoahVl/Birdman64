@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Move the HUD: pause menu "Move HUD" lets you drag the flight gauges (speed,
+  timer, radar, altimeter, fuel, photo count, messages, cannonball gauges) and
+  the performance overlay anywhere on screen, by touch or mouse. Reset puts
+  everything back; your layout is saved.
+
+### Changed
+
+- Android: the touch Z button (take a photo) now sits on the right, next to
+  the C buttons, so you can steer while taking pictures.
+
 ### Fixed
 
 - Android: picking the ROM from some storage apps could close the app

@@ -16,6 +16,7 @@ use crate::frame::{
     Anchor, DrawCall, DrawUniforms, Frame, N64_HEIGHT, N64_WIDTH, PipelineKey, ShaderKey,
     ShaderMode, VAnchor, Vertex, Wide,
 };
+use crate::hud::{HUD_ELEMS, HudBounds, HudOffsets};
 use crate::rdp::FinalBlend;
 use crate::shader;
 use crate::texture::{SamplerKey, TileBinding, Wrap};
@@ -46,6 +47,11 @@ pub struct RenderOptions {
     /// OLED care: the flight HUD (`DrawCall::hud`) drifts and dims. The
     /// default (brightness 1, no drift) is output-bit-identical.
     pub oled: Oled,
+    /// Movable HUD: per element id (`DrawCall::elem`), the offset in N64
+    /// px its hud `Wide::Fixed` draws move by (whole target px, clamped to
+    /// the output area; split-screen HUDs ignore it). All zero (the
+    /// default) is output-bit-identical. See [`crate::hud`].
+    pub hud_offsets: HudOffsets,
 }
 
 /// OLED care options (see [`RenderOptions::oled`]).
@@ -103,6 +109,7 @@ impl Default for RenderOptions {
             filter: TexFilter::Bilinear,
             fill_view: false,
             oled: Oled::default(),
+            hud_offsets: [[0.0; 2]; HUD_ELEMS],
         }
     }
 }
@@ -170,6 +177,12 @@ pub struct Renderer {
     ubuf: Option<(wgpu::Buffer, u64, wgpu::BindGroup)>,
     /// Persistent N64 framebuffer targets (`fb.rs`).
     fbs: fb::FbStore,
+    /// Movable HUD element bounds of the last drawn frame (target px, no
+    /// offset; `crate::hud`).
+    hud_bounds: HudBounds,
+    /// Per texture key: the opaque texels' UV rect (`None` = fully
+    /// transparent), for tight HUD element bounds (`opaque_part`).
+    opaque: HashMap<u64, Option<[f32; 4]>>,
 }
 
 /// Gives fully transparent texels the color of their opaque neighbours, so
@@ -362,6 +375,8 @@ impl Renderer {
             vbuf: None,
             ubuf: None,
             fbs: fb::FbStore::default(),
+            hud_bounds: [None; HUD_ELEMS],
+            opaque: HashMap::new(),
         }
     }
 
@@ -739,6 +754,186 @@ impl Renderer {
             && Self::spans_y(self.options.fill_view, [d.scissor[1], d.scissor[3]])
     }
 
+    /// Movable HUD (`crate::hud`): records each element's bounds in
+    /// `frame` (target px of `size`, drawn without its offset: hud
+    /// `Wide::Fixed` draws outside split-screen, vertices clipped to their
+    /// scissor) into `hud_bounds`, and returns the offsets to draw with:
+    /// `options.hud_offsets` clamped to the output area. All zero when no
+    /// offset is set (the default draws exactly as before).
+    fn hud_layout(&mut self, frame: &Frame, size: (u32, u32)) -> HudOffsets {
+        let mut bounds: HudBounds = [None; HUD_ELEMS];
+        let (tw, th) = (size.0 as f32, size.1 as f32);
+        let drift = self.options.oled.drift;
+        for d in &frame.draws {
+            if d.elem == 0
+                || (d.elem as usize) >= HUD_ELEMS
+                || !d.hud
+                || d.wide != Wide::Fixed
+                || d.split.is_some()
+                || d.vertex_count == 0
+            {
+                continue;
+            }
+            let (s, [l, t, w, h]) = Self::placement(
+                self.options.widescreen,
+                self.options.fill_view,
+                d,
+                size,
+                drift,
+            );
+            let first = d.first_vertex as usize;
+            let Some(verts) = frame.vertices.get(first..first + d.vertex_count as usize) else {
+                continue;
+            };
+            // Untextured shade-alpha-0 quads (the gauges' invisible
+            // spacers) don't count.
+            if d.pipeline.shader.mode == ShaderMode::Normal
+                && d.textures[0].is_none()
+                && verts.iter().all(|v| v.color[3] == 0.0)
+            {
+                continue;
+            }
+            let px = |v: &crate::frame::Vertex| {
+                (
+                    ((v.pos[0] / v.pos[3]) * s[0] + s[1] + 1.0) * 0.5 * tw,
+                    (1.0 - ((v.pos[1] / v.pos[3]) * s[2] + s[3])) * 0.5 * th,
+                )
+            };
+            // 2D rects (texrects merged into one draw) one by one: 6
+            // vertices each.
+            let pieces = if !d.is_3d && verts.len().is_multiple_of(6) {
+                verts.chunks(6).collect::<Vec<_>>()
+            } else {
+                vec![verts]
+            };
+            let mut r = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for piece in pieces {
+                let mut p = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+                for v in piece.iter().filter(|v| v.pos[3] > 0.0) {
+                    let (x, y) = px(v);
+                    p = [p[0].min(x), p[1].min(y), p[2].max(x), p[3].max(y)];
+                }
+                // A sprite rect: only its texture's opaque part (the
+                // altimeter's gauge sprite is transparent down to the
+                // screen edge).
+                if let Some(o) = self.opaque_part(frame, d, piece, &px) {
+                    p = [
+                        p[0].max(o[0]),
+                        p[1].max(o[1]),
+                        p[2].min(o[2]),
+                        p[3].min(o[3]),
+                    ];
+                }
+                if p[2] > p[0] && p[3] > p[1] {
+                    r = crate::hud::union(Some(r).filter(|r| r[2] > r[0]), p);
+                }
+            }
+            let (l, t) = (l as f32, t as f32);
+            let r = [
+                r[0].max(l),
+                r[1].max(t),
+                r[2].min(l + w as f32),
+                r[3].min(t + h as f32),
+            ];
+            if r[2] > r[0] && r[3] > r[1] {
+                let e = d.elem as usize;
+                bounds[e] = Some(crate::hud::union(bounds[e], r));
+            }
+        }
+        self.hud_bounds = bounds;
+        let mut moves = [[0.0; 2]; HUD_ELEMS];
+        if self.options.hud_offsets.iter().all(|o| *o == [0.0; 2]) {
+            return moves;
+        }
+        let aspect = Self::aspect(self.options.widescreen, size);
+        let ([ox, oy, ow, oh], _) = Self::region(size, aspect);
+        let area = [ox, oy, ox + ow, oy + oh];
+        let k = oh / N64_HEIGHT;
+        for (e, m) in moves.iter_mut().enumerate().skip(1) {
+            let off = self.options.hud_offsets[e];
+            if let (true, Some(b)) = (off != [0.0; 2], bounds[e]) {
+                *m = crate::hud::clamp_offset(b, off, k, area);
+            }
+        }
+        moves
+    }
+
+    /// `hud_layout` helper: for a 2D textured rect whose UVs stay inside
+    /// its texture, the target px rect of the texture's opaque texels
+    /// (`[x0, y0, x1, y1]`; inverted = fully transparent). `None`: no
+    /// trimming (3D, untextured, wrapping UVs).
+    fn opaque_part(
+        &mut self,
+        frame: &Frame,
+        d: &DrawCall,
+        verts: &[Vertex],
+        px: &dyn Fn(&Vertex) -> (f32, f32),
+    ) -> Option<[f32; 4]> {
+        let b = d.textures[0].as_ref().filter(|_| !d.is_3d)?;
+        let (t, sz) = (d.uniforms.tile0, d.uniforms.size0);
+        let uv = |v: &Vertex| {
+            [
+                (v.st[0] * t[0] - t[2]) * sz[0],
+                (v.st[1] * t[1] - t[3]) * sz[1],
+            ]
+        };
+        if verts
+            .iter()
+            .any(|v| uv(v).iter().any(|c| !(-0.01..=1.01).contains(c)))
+        {
+            return None;
+        }
+        let img = frame.textures.get(&b.key)?;
+        let o = *self.opaque.entry(b.key).or_insert_with(|| {
+            let (w, h) = (img.width as usize, img.height as usize);
+            let mut r = [usize::MAX, usize::MAX, 0, 0];
+            for y in 0..h {
+                for x in 0..w {
+                    if img.rgba.get((y * w + x) * 4 + 3).is_some_and(|&a| a > 0) {
+                        r = [r[0].min(x), r[1].min(y), r[2].max(x + 1), r[3].max(y + 1)];
+                    }
+                }
+            }
+            (r[0] != usize::MAX).then(|| {
+                [
+                    r[0] as f32 / w as f32,
+                    r[1] as f32 / h as f32,
+                    r[2] as f32 / w as f32,
+                    r[3] as f32 / h as f32,
+                ]
+            })
+        });
+        let Some(o) = o else {
+            return Some([f32::MAX, f32::MAX, f32::MIN, f32::MIN]);
+        };
+        // Screen position as an affine function of u (and of v) along the
+        // rect: from the vertices with the smallest and largest coordinate.
+        let axis = |c: usize, lo: f32, hi: f32| -> Option<[f32; 2]> {
+            let key = |v: &&Vertex| uv(v)[c];
+            let a = verts.iter().min_by(|x, y| key(x).total_cmp(&key(y)))?;
+            let z = verts.iter().max_by(|x, y| key(x).total_cmp(&key(y)))?;
+            let (ua, uz) = (uv(a)[c], uv(z)[c]);
+            if uz - ua < 1e-6 {
+                return None;
+            }
+            let pick = |v: &Vertex| if c == 0 { px(v).0 } else { px(v).1 };
+            let (pa, pz) = (pick(a), pick(z));
+            let at = |u: f32| pa + (u - ua) * (pz - pa) / (uz - ua);
+            let (p0, p1) = (at(lo), at(hi));
+            Some([p0.min(p1), p0.max(p1)])
+        };
+        let x = axis(0, o[0], o[2]).unwrap_or([f32::MIN, f32::MAX]);
+        let y = axis(1, o[1], o[3]).unwrap_or([f32::MIN, f32::MAX]);
+        Some([x[0], y[0], x[1], y[1]])
+    }
+
+    /// Movable HUD element bounds of the last drawn frame (target px of
+    /// that draw, without offsets; `None` = not drawn). Framebuffer
+    /// targets keep their own: [`Renderer::fb_hud_bounds`].
+    pub fn hud_bounds(&self) -> &HudBounds {
+        &self.hud_bounds
+    }
+
     /// Screen transform + target scissor for one draw. `hud_shift` is the
     /// OLED drift in N64 px, applied (rounded to whole target px) to hud
     /// `Wide::Fixed` draws only.
@@ -1034,13 +1229,21 @@ impl Renderer {
         let mut ubytes = vec![0u8; frame.draws.len().max(1) * UNIFORM_STRIDE as usize];
         let mut scissors = Vec::with_capacity(frame.draws.len());
         let n64 = self.options.filter == TexFilter::N64;
+        let moves = self.hud_layout(frame, size);
         for (i, d) in frame.draws.iter().enumerate() {
+            let drift = self.options.oled.drift;
+            // Movable HUD: the element's (clamped) offset on top of the
+            // OLED drift. Split-screen HUDs keep their own layout.
+            let shift = match moves.get(d.elem as usize) {
+                Some(m) if d.elem != 0 && d.split.is_none() => [drift[0] + m[0], drift[1] + m[1]],
+                _ => drift,
+            };
             let (screen, sc) = Self::placement(
                 self.options.widescreen,
                 self.options.fill_view,
                 d,
                 size,
-                self.options.oled.drift,
+                shift,
             );
             let mut u = d.uniforms;
             u.screen = screen;
@@ -1603,6 +1806,7 @@ mod tests {
             stretch_y: [0.0; 2],
             hud: false,
             split: None,
+            elem: 0,
         };
         Frame {
             vertices: verts(0.0, 320.0),
@@ -1867,6 +2071,53 @@ mod tests {
             place(&draw(false, Wide::Stretch([0.0, 320.0]))).1,
             "stretched fills never shift"
         );
+    }
+
+    /// Movable HUD: element bounds come from the tagged draws (vertices
+    /// clipped to the scissor, no offset); an offset moves that element's
+    /// draws (transform + scissor), clamped to the output area; untagged
+    /// or zero-offset draws stay put; split-screen draws ignore offsets.
+    #[test]
+    fn hud_offsets_move_and_clamp() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipped");
+            return;
+        };
+        let mut r = Renderer::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            RenderOptions {
+                msaa: 1,
+                ..Default::default()
+            },
+        );
+        let mut f = red_green_frame();
+        f.draws[1].hud = true;
+        f.draws[1].elem = 3; // green: scissor x 160..320
+        let (w, h) = (64u32, 48u32);
+        assert_eq!(r.hud_layout(&f, (w, h)), [[0.0; 2]; HUD_ELEMS]);
+        assert_eq!(r.hud_bounds()[3], Some([32.0, 0.0, 64.0, 48.0]));
+        assert!(r.hud_bounds()[1].is_none());
+        r.options.hud_offsets[3] = [-40.0, 10.0];
+        // Full height: y can't move; x: 40 N64 px left fits.
+        assert_eq!(r.hud_layout(&f, (w, h))[3], [-40.0, 0.0]);
+        let img = r.render_to_rgba(&f, (w, h));
+        let px = |img: &[u8], x: u32| {
+            let o = ((24 * w + x) * 4) as usize;
+            [img[o], img[o + 1], img[o + 2]]
+        };
+        // 40 N64 px = 8 target px: green now starts at x 24.
+        assert_eq!(px(&img, 23), [255, 0, 0]);
+        assert_eq!(px(&img, 25), [0, 255, 0]);
+        // Right is the screen edge: clamped to no move.
+        r.options.hud_offsets[3] = [200.0, 0.0];
+        assert_eq!(r.hud_layout(&f, (w, h))[3], [0.0, 0.0]);
+        // Split-screen HUD draws: no bounds, no move.
+        f.draws[1].split = Some([10.0, 8.0, 310.0, 115.0]);
+        r.options.hud_offsets[3] = [-40.0, 0.0];
+        assert_eq!(r.hud_layout(&f, (w, h))[3], [0.0, 0.0]);
+        assert!(r.hud_bounds()[3].is_none());
     }
 
     /// Split-screen HUD: the subscreen layout frame is scaled uniformly by

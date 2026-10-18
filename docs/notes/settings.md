@@ -589,4 +589,13 @@ Code: `crates/birdman64/src/settings.rs` (overlay + nav + config write), hooks i
 
 - `perf.rs`: `Hud` (egui card over the frame, like toasts; zero work while all options are off), `Stats` (frame-interval ring, fps over 0.5 s, 1% low = fps at the 99th-percentile frame time of the last 300 frames; a >0.5 s gap resets, so pauses aren't "slow frames").
 - Options: `[graphics] show_fps` (counter) + `[perf]` frametime/graph/lows/cpu/gpu/corner; Settings > Performance overlay page, all live via `perf::set_cfg` in `apply_live`, saved as one `SavedSettings::perf`.
+- Free position: `Cfg::pos` = card top-left as window fractions (`[perf] pos`, egui `fixed_pos` + `constrain`), set by dragging the card in "Move HUD"; wins over `corner`. The Position row shows "Moved (Move HUD)"; stepping it first clears `pos` (back to the corner). `Hud::rect()` = last drawn card rect (px) for the edit mode's hit test.
+
+## Move HUD (`hud_edit.rs`, renderer.md "Movable HUD")
+
+- Main row "Move HUD" (all platforms, after Controls / the touch rows) closes the overlay into the edit mode like "Move touch controls": `take_hud_edit`, `o.close()` without unpausing, `set_game_blocked(true)`.
+- `hud_edit::Editor` (pure): targets = element rects (`Geometry::base` from `fb_hud_bounds`, fb px → window px via `output_rect`/`fb_size`) + the perf card; perf card wins the hit test, else the smallest rect (10 dp slack). Drag is start-relative (no stored excess), clamped like the renderer, never newly under Reset / Done (top centre). Touch fingers or the left mouse button (id 0).
+- A move sets `dirty` → the window copies offsets into `Gpu::hud_offsets` / renderer options and `fb_redraw`s the shown fb before presenting. Done / Esc / settings trigger / Back / background → `end_hud_edit`: `config::save_hud` (`[hud]` moved elements only, 0.1 px; `[perf] pos`), back to the pause menu.
+- Android: touch controls drawn at 0.15 alpha (all of them) while editing (`Painter::render(.., dim)`).
+- Window shot check: `PW64_START=a:hg:1 PW64_SETTINGS_SHOT=400 PW64_SETTINGS_KEYS=ArrowDown,ArrowDown,Enter` captures the edit mode (`tmp/win_settings.png`).
 - CPU = the busiest thread (sampled on a helper thread: a Toolhelp snapshot lists every thread on the system)'s CPU time (Toolhelp + `GetThreadTimes` / `/proc/self/task/*/stat`) over wall time, % of ONE core: a whole-process figure divided by logical cores reads ~1% on many-core PCs. GPU is an estimate: a helper thread polls (non-blocking) for the queue-done callback after each frame (`poll(Wait)` holds wgpu locks that submit/present need, serialising CPU and GPU; a callback with no one polling fires ~1 frame late); with V-Sync on it can include swapchain wait; busy ms × fps; includes work queued ahead of it.

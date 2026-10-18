@@ -12,6 +12,7 @@
 pub mod capture;
 pub mod combiner;
 pub mod frame;
+pub mod hud;
 pub mod interp;
 pub mod matrix;
 pub mod memory;
