@@ -4,7 +4,9 @@
 # icons resized with sips from assets/icon/birdman64-source.png — the source
 # the Android launcher icons come from). No Xcode project.
 #
-# Needs: `rustup target add aarch64-apple-ios [-sim]` (macOS only).
+# Needs macOS with Xcode (the iOS SDK) and rustup; the decomp submodule, the
+# Rust target and zig are fetched on first use. No Mac: the "Build iOS app"
+# workflow (.github/workflows/ios-ipa.yml) runs this in your own fork.
 #
 # Usage: packaging/ios/build-ipa.sh [--sim] [--debug]
 #
@@ -36,6 +38,14 @@ done
 TARGET=aarch64-apple-ios
 OUT=target/ios/device
 [ -n "$SIM" ] && TARGET=aarch64-apple-ios-sim OUT=target/ios/sim
+
+# First-time setup, so a fresh clone builds with this one command: the decomp
+# sources (submodule), the Rust target and zig (compiles the game C).
+[ -f decomp/Makefile ] || git submodule update --init decomp
+rustup target add "$TARGET"
+if [ -z "${PW64_ZIG:-}" ] && [ ! -x tools/zig/zig ]; then
+    cargo run -q -p pw64-cbuild --example get_zig --features fetch
+fi
 
 cargo build -p birdman64 --bin birdman64 --target "$TARGET" \
     ${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}

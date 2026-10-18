@@ -88,6 +88,19 @@ builds come from the project's CI and are installed with your own Apple ID
 Birdman64. Touch controls and paired controllers work. How to get and install
 one: [the iOS testing guide](https://github.com/NoahVl/Birdman64/pull/14).
 
+Build the iPhone app yourself (free, about 15 minutes):
+
+- **No Mac:** sign in to GitHub and **Fork** this repository. In your fork,
+  open **Actions** (click "I understand my workflows, go ahead and enable
+  them" the first time), pick **Build iOS app** and click **Run workflow**.
+  When the run is green, download **Birdman64-ios** under its Artifacts and
+  unzip it once: that's `Birdman64.ipa`.
+- **Mac with Xcode:** clone this repository and run
+  `packaging/ios/build-ipa.sh`; the IPA lands in `target/ios/Birdman64.ipa`.
+
+Then install `Birdman64.ipa` with iLoader and your Apple ID (steps in the
+guide above).
+
 **macOS:** no download yet.
 
 ## Quick start
