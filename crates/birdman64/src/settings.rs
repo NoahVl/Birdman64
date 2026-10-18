@@ -149,6 +149,21 @@ enum Row {
     /// Main: drag the flight-HUD elements and the performance overlay
     /// (`hud_edit.rs`).
     HudLayout,
+    /// Main: raise every test in both save files to gold, which opens every
+    /// class, bonus game and Birdman (`unlock.rs`). Two confirms like Quit,
+    /// then a restart (Android: close and reopen, like an import).
+    UnlockAll,
+    /// Main, under Unlock everything, only while `pw64.eep.before-unlock`
+    /// exists: copy that (first) backup back over the save, then reload it
+    /// like Unlock everything.
+    RestoreUnlock,
+    /// Main: copy the save out to a file the player picks.
+    ExportSave,
+    /// Main: replace the save with a picked file, then restart.
+    ImportSave,
+    /// Main (Android only, after an import): close the app so the next
+    /// start loads the imported save.
+    CloseApp,
 }
 
 /// Which input kind a Bind / Reset row edits.
@@ -170,6 +185,71 @@ enum Page {
     Split,
     /// The performance overlay (`perf.rs`): what it shows and where.
     Perf,
+}
+
+impl Page {
+    /// Index into the per-page panel-height cache (`Overlay::page_body`).
+    fn index(self) -> usize {
+        match self {
+            Page::Main => 0,
+            Page::Graphics => 1,
+            Page::Controls => 2,
+            Page::Split => 3,
+            Page::Perf => 4,
+        }
+    }
+}
+
+/// How many pages (`Page::index` is the slot).
+const N_PAGES: usize = 5;
+
+/// The conditions a panel height was measured at: the safe egui screen
+/// (points) and the zoom. A change of either re-measures (text wraps and
+/// the drawing's height cap follow the screen, heights follow the zoom).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PanelKey {
+    screen: egui::Vec2,
+    zoom: f32,
+}
+
+/// The least height the Controls binding list gets under the controller
+/// drawing (about two rows; the rest scrolls). Rows are finger-sized on
+/// Android.
+const MIN_LIST_H: f32 = if cfg!(target_os = "android") {
+    100.0
+} else {
+    64.0
+};
+/// The smallest body the panel takes (a measurement can come back tiny on a
+/// degenerate first frame; the cap governs on really small screens).
+const MIN_BODY: f32 = 120.0;
+/// Panel chrome (title bar + frame margins) in points, estimated until the
+/// first pass measures it (outer height minus body height).
+const CHROME_EST: f32 = 64.0;
+/// The body height the panel starts with (the old one-size height) until
+/// the current page's content is measured.
+const BODY_DEFAULT: f32 = 430.0;
+
+/// The display-cutout safe insets in surface px (Android reads them in
+/// `android.rs`; the other platforms have none).
+#[cfg(target_os = "android")]
+fn safe_insets_px() -> [f32; 4] {
+    crate::android::cutout_insets()
+}
+
+/// The display-cutout safe insets in surface px (desktop: none).
+#[cfg(not(target_os = "android"))]
+fn safe_insets_px() -> [f32; 4] {
+    [0.0; 4]
+}
+
+/// The area the panel fits in: `full` (egui points) shrunk by the cutout
+/// insets (`[left, top, right, bottom]` surface px, `ppp` px per point)
+/// symmetrically — each axis loses its larger inset on both sides, so the
+/// centre stays the screen's centre.
+fn safe_screen(full: egui::Rect, insets_px: [f32; 4], ppp: f32) -> egui::Rect {
+    let [l, t, r, b] = insets_px.map(|v| v / ppp.max(f32::EPSILON));
+    full.shrink2(egui::vec2(l.max(r), t.max(b)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +338,41 @@ const REVERT: Duration = Duration::from_secs(10);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the Quit row stays armed ("Press again to quit", U3).
 const QUIT_ARM: Duration = Duration::from_secs(3);
+/// How long the Unlock everything row stays armed: long enough to read the
+/// warning under it.
+const UNLOCK_ARM: Duration = Duration::from_secs(15);
+/// The backup of the save an unlock replaces (`<eep>` + this, then `-2`, …).
+const UNLOCK_BACKUP: &str = ".before-unlock";
+/// The backup of the save a restore replaces (same numbering).
+const RESTORE_BACKUP: &str = ".before-restore";
+/// What follows a save change, in the warnings below ([`reload_command`]).
+#[cfg(not(target_os = "android"))]
+macro_rules! then_reload {
+    () => {
+        "Birdman64 then restarts."
+    };
+}
+#[cfg(target_os = "android")]
+macro_rules! then_reload {
+    () => {
+        "Then close Birdman64 and open it again."
+    };
+}
+/// The armed restore row's warning.
+const RESTORE_WARNING: &str = concat!(
+    "This puts back your save from before you first used Unlock everything. Anything you \
+     played since then is lost. ",
+    then_reload!(),
+    " Your current save is kept as pw64.eep.before-restore in the save folder."
+);
+/// The armed Unlock everything row's warning (the confirm dialog).
+const UNLOCK_WARNING: &str = concat!(
+    "This gives a gold medal on every test in both save files and unlocks every class, the \
+     bonus games and Birdman. ",
+    then_reload!(),
+    " It can't be undone by playing: your current save is kept as pw64.eep.before-unlock in \
+     the save folder, and \"Restore save from before unlock\" here puts it back."
+);
 /// How long the Assign-player-2 row confirms a just-applied assignment
 /// ("Player 2 now uses: …") before naming the current controller again.
 const P2_ASSIGN_CONFIRM: Duration = Duration::from_secs(4);
@@ -441,6 +556,15 @@ pub struct Overlay {
     /// [`Overlay::take_quit`] after the close-save.
     quit_armed: Option<Instant>,
     quit_requested: bool,
+    /// Unlock everything row: armed like Quit (the warning shows), and the
+    /// last attempt's outcome when it didn't restart (shown under the row).
+    unlock_armed: Option<Instant>,
+    unlock_status: Option<String>,
+    /// The restore row: same arm + status, and whether the unlock backup
+    /// exists (checked at open, so `rows()` touches no files).
+    restore_armed: Option<Instant>,
+    restore_status: Option<String>,
+    restore_available: bool,
     /// "Move touch controls" chosen ([`Overlay::take_touch_edit`]).
     touch_edit_requested: bool,
     /// "Move HUD" chosen ([`Overlay::take_hud_edit`]).
@@ -451,6 +575,13 @@ pub struct Overlay {
     /// Why the last "Restart now" failed to spawn (shown under the restart
     /// banner, U16); cleared with the banner itself.
     restart_error: Option<String>,
+    /// The last save export / import result for the Main page's status line
+    /// (text, is an error).
+    transfer_status: Option<(String, bool)>,
+    /// The save on disk was replaced (import, Unlock everything, restore)
+    /// and the app can't restart itself (Android): the "Close Birdman64"
+    /// row shows.
+    reopen_pending: bool,
     /// The monitor's refresh rate in whole Hz (the Frame-rate row's
     /// "Match display ({hz} Hz)" value, U5); `None`: unknown.
     monitor_hz: Option<u32>,
@@ -478,6 +609,26 @@ pub struct Overlay {
     /// The Main row that opened the current sub-page (`back()` rests the
     /// selection on it).
     main_row: Row,
+    /// The chosen panel body height (`fixed_size` height) for each page
+    /// (`Page::index`), measured from that page's content and keyed by the
+    /// conditions ([`PanelKey`]) it was measured at: the panel changes size
+    /// between pages but never within one (row changes, banners and capture
+    /// prompts scroll instead). `None`: not measured yet.
+    page_body: [Option<(f32, PanelKey)>; N_PAGES],
+    /// The body height in use right now: set from `page_body` on page entry
+    /// (`apply_page_body`), otherwise while a page is shown only when its
+    /// measurement first arrives (unmeasured page: the first open of each
+    /// page and after a resize).
+    body_h: f32,
+    /// Measured panel chrome (title bar + frame margins) in points: the
+    /// outer height minus the body height of the last drawn panel. Caps the
+    /// body (the total stays inside the screen); estimated before the first
+    /// pass ([`CHROME_EST`]).
+    chrome: f32,
+    /// The display-cutout safe insets in surface px (`safe_insets_px`): the
+    /// panel is sized to stay off the cutout (`safe_screen`); the egui
+    /// screen rect, backdrop and pointer coordinates stay surface-wide.
+    insets_px: [f32; 4],
     /// True while pad/keyboard navigation just moved the selection: the
     /// ScrollArea scrolls the selected row back into view (U1). Hover/click
     /// don't move the view (the pointer is already there).
@@ -564,10 +715,17 @@ impl Overlay {
             fb: (960, 720),
             quit_armed: None,
             quit_requested: false,
+            unlock_armed: None,
+            unlock_status: None,
+            restore_armed: None,
+            restore_status: None,
+            restore_available: false,
             touch_edit_requested: false,
             hud_edit_requested: false,
             restart_requested: false,
             restart_error: None,
+            transfer_status: None,
+            reopen_pending: false,
             monitor_hz: None,
             capture: None,
             p2_capture: None,
@@ -578,6 +736,10 @@ impl Overlay {
             sel: 0,
             page: Page::Main,
             main_row: Row::Resume,
+            page_body: [None; N_PAGES],
+            body_h: BODY_DEFAULT,
+            chrome: CHROME_EST,
+            insets_px: [0.0; 4],
             follow_sel: false,
             prev_pad: input::Pad::default(),
             held_dir: None,
@@ -592,6 +754,8 @@ impl Overlay {
         self.show = true;
         self.sel = 0;
         self.page = Page::Main;
+        // The panel keeps each page's measured size across opens.
+        self.apply_page_body();
         self.events.clear();
         self.capture = None;
         self.capture_error = None;
@@ -600,6 +764,9 @@ impl Overlay {
         self.revert = None;
         self.pending_revert = None;
         self.restart_error = None;
+        self.unlock_armed = None;
+        self.restore_armed = None;
+        self.restore_available = pw64_platform::headless::eep_backup_path(UNLOCK_BACKUP).is_file();
         self.stage_restart_rows();
         // Frame rate and V-Sync are live: stage from the running values.
         (self.fps, self.fps_sel) = fps_choices(gpu.fps);
@@ -803,12 +970,205 @@ impl Overlay {
         std::mem::take(&mut self.restart_requested)
     }
 
+    /// Takes a finished save export / import (`save_transfer`): the Main
+    /// page's status line says what happened. An import restarts the game
+    /// (desktop) or asks to close the app (Android) to load the new save.
+    fn poll_transfer(&mut self) {
+        use crate::save_transfer::Outcome;
+        let Some(outcome) = crate::save_transfer::poll() else {
+            return;
+        };
+        self.transfer_status = match outcome {
+            Outcome::Cancelled => None,
+            Outcome::Exported => Some(("Save exported.".to_string(), false)),
+            Outcome::Failed(e) => Some((e, true)),
+            Outcome::Imported => match self.reload_saved(reload_command()) {
+                Reload::Restarting => None,
+                Reload::Reopen => Some((format!("Save imported. {REOPEN}"), false)),
+                // A failed restart keeps the overlay: say what to do.
+                Reload::Failed(e) => Some((
+                    format!("Save imported. {e} Close Birdman64 and open it again."),
+                    true,
+                )),
+            },
+        };
+    }
+
+    /// Loads a save just replaced on disk (import, Unlock everything,
+    /// restore; the game's writes are already frozen): restart with `cmd`
+    /// (U16), or, with `None` (Android, which can't relaunch itself), show
+    /// the "Close Birdman64" row and leave the player to reopen the app.
+    fn reload_saved(&mut self, cmd: Option<std::io::Result<std::process::Command>>) -> Reload {
+        let Some(cmd) = cmd else {
+            self.reopen_pending = true;
+            return Reload::Reopen;
+        };
+        self.restart_with(cmd);
+        if self.restart_requested {
+            return Reload::Restarting;
+        }
+        Reload::Failed(self.restart_error.take().unwrap_or_default())
+    }
+
     /// Disarms the Quit row once its 3 s window has passed (U3). Called
     /// each overlay frame; a later confirm then arms it again instead of
     /// quitting.
     fn quit_check(&mut self) {
         if self.quit_armed.is_some_and(|t| t.elapsed() >= QUIT_ARM) {
             self.quit_armed = None;
+        }
+        if self.unlock_armed.is_some_and(|t| t.elapsed() >= UNLOCK_ARM) {
+            self.unlock_armed = None;
+        }
+        if self
+            .restore_armed
+            .is_some_and(|t| t.elapsed() >= UNLOCK_ARM)
+        {
+            self.restore_armed = None;
+        }
+    }
+
+    /// The restore row's second confirm: the first unlock backup back over
+    /// the save (the current one backed up as `.before-restore`), then the
+    /// restart. The unlock backup itself stays.
+    fn restore_now(&mut self) {
+        self.restore_with(
+            || {
+                use pw64_platform::headless as h;
+                let backup = h::eep_read_backup(&h::eep_backup_path(UNLOCK_BACKUP))?;
+                h::eep_edit_and_freeze(
+                    |image| {
+                        image.copy_from_slice(&backup);
+                        true
+                    },
+                    RESTORE_BACKUP,
+                )
+            },
+            reload_command(),
+        );
+    }
+
+    /// `restore_now`'s body with the edit and the restart command injected
+    /// (tests); outcomes as in [`Overlay::unlock_with`].
+    fn restore_with(
+        &mut self,
+        apply: impl FnOnce() -> Result<pw64_platform::headless::EepEdit, String>,
+        cmd: Option<std::io::Result<std::process::Command>>,
+    ) {
+        use pw64_platform::headless::EepEdit;
+        self.restore_armed = None;
+        self.restore_status = Some(match apply() {
+            Err(e) => {
+                eprintln!("[unlock] restore: {e}");
+                format!("Couldn't restore: {e}. Your save wasn't changed.")
+            }
+            Ok(EepEdit::Unchanged) => "Your save already is the one from before the unlock.".into(),
+            Ok(EepEdit::Written { backup }) => {
+                eprintln!(
+                    "[unlock] save restored; previous save kept as {}",
+                    backup.display()
+                );
+                match self.reload_saved(cmd) {
+                    Reload::Restarting => return,
+                    Reload::Reopen => format!("Restored. {REOPEN}"),
+                    Reload::Failed(e) => format!(
+                        "Restored, but {}. Quit and start Birdman64 again: until then your \
+                         progress isn't saved.",
+                        lower_first(&e)
+                    ),
+                }
+            }
+        });
+    }
+
+    /// The Unlock everything row's second confirm: edit the save, then
+    /// restart so the game loads it.
+    fn unlock_now(&mut self) {
+        self.unlock_with(
+            || {
+                let mut results = None;
+                let edit = pw64_platform::headless::eep_edit_and_freeze(
+                    |image| {
+                        let r = crate::unlock::unlock_image(image);
+                        let changed = r.contains(&crate::unlock::FileResult::Unlocked);
+                        results = Some(r);
+                        changed
+                    },
+                    UNLOCK_BACKUP,
+                );
+                edit.map(|e| {
+                    (
+                        e,
+                        results.unwrap_or([crate::unlock::FileResult::AlreadyUnlocked; 2]),
+                    )
+                })
+            },
+            reload_command(),
+        );
+    }
+
+    /// `unlock_now`'s body with the save edit and the restart command
+    /// injected (tests). The save is edited first (backup + atomic write;
+    /// further game writes are kept off the disk), then the U16 restart
+    /// runs. Every way out that doesn't restart leaves a status line.
+    fn unlock_with(
+        &mut self,
+        apply: impl FnOnce() -> Result<
+            (
+                pw64_platform::headless::EepEdit,
+                [crate::unlock::FileResult; crate::unlock::FILES],
+            ),
+            String,
+        >,
+        cmd: Option<std::io::Result<std::process::Command>>,
+    ) {
+        use crate::unlock::FileResult;
+        use pw64_platform::headless::EepEdit;
+        self.unlock_armed = None;
+        let (edit, files) = match apply() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[unlock] {e}");
+                self.unlock_status =
+                    Some(format!("Couldn't unlock: {e}. Your save wasn't changed."));
+                return;
+            }
+        };
+        let refused: Vec<String> = files
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| matches!(r, FileResult::Refused(_)))
+            .map(|(i, _)| format!("file {}", i + 1))
+            .collect();
+        match edit {
+            EepEdit::Unchanged if refused.is_empty() => {
+                self.unlock_status = Some("Everything is already unlocked.".into());
+            }
+            EepEdit::Unchanged => {
+                self.unlock_status = Some(format!(
+                    "Couldn't unlock: the save ({}) isn't one this game can read, so it was left \
+                     as it is.",
+                    refused.join(", ")
+                ));
+            }
+            EepEdit::Written { backup } => {
+                eprintln!(
+                    "[unlock] save unlocked; previous save kept as {}",
+                    backup.display()
+                );
+                // Unlocked, but if the restart fails this copy keeps running
+                // with the old saves in memory (and no longer writes them):
+                // say so plainly.
+                self.unlock_status = match self.reload_saved(cmd) {
+                    Reload::Restarting => None,
+                    Reload::Reopen => Some(format!("Unlocked. {REOPEN}")),
+                    Reload::Failed(e) => Some(format!(
+                        "Unlocked, but {}. Quit and start Birdman64 again: until then your \
+                         progress isn't saved.",
+                        lower_first(&e)
+                    )),
+                };
+            }
         }
     }
 
@@ -1082,10 +1442,21 @@ impl Overlay {
         }
     }
 
-    /// Cursor position from the window, physical px.
+    /// Cursor position from the window, physical px (surface coordinates,
+    /// like the egui screen rect: no cutout shift).
     pub fn pointer_moved(&mut self, x: f32, y: f32) {
         let pos = egui::pos2(x / self.ppp, y / self.ppp);
         self.events.push(egui::Event::PointerMoved(pos));
+    }
+
+    /// A finger lifted (Android touch end): egui forgets the pointer, so the
+    /// next touch-down starts with a zero pointer delta. Without it the jump
+    /// from the last finger position to the new one lands in the ScrollArea's
+    /// first drag frame (drag-only sense: dragged on press) and throws the
+    /// list back towards the top.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn pointer_gone(&mut self) {
+        self.events.push(egui::Event::PointerGone);
     }
 
     /// Primary mouse button at physical px `(x, y)`.
@@ -1104,6 +1475,7 @@ impl Overlay {
     pub fn render(&mut self, gpu: &mut Gpu, view: &wgpu::TextureView) -> bool {
         self.poll_capture();
         self.poll_p2_capture();
+        self.poll_transfer();
         self.quit_check();
         self.pad_nav();
         self.running_mode = gpu.display_mode;
@@ -1129,6 +1501,10 @@ impl Overlay {
             self.started.elapsed().as_secs_f64(),
             std::mem::take(&mut self.events),
         );
+        // The display cutout (Android): `build_ui` keeps the panel out of
+        // it. The egui screen rect stays the whole surface (backdrop and
+        // pointer coordinates are surface-wide).
+        self.insets_px = safe_insets_px();
         let ctx = self.ctx.clone();
         let out = ctx.run(raw, |ctx| self.build_ui(ctx));
         // S8b: the keep-resolution deadline is checked each overlay frame
@@ -1217,12 +1593,17 @@ impl Overlay {
     /// Builds the panel (inside the egui pass): a centered, fixed-width
     /// window over a dimmed backdrop (U1).
     fn build_ui(&mut self, ctx: &egui::Context) {
-        let screen = ctx.content_rect();
+        let full = ctx.content_rect();
+        // The backdrop dims the whole surface, cutout strip included.
         ctx.layer_painter(egui::LayerId::background()).rect_filled(
-            screen,
+            full,
             0.0,
             egui::Color32::from_black_alpha(140),
         );
+        // The panel is sized to the cutout-safe area but stays centred on
+        // the screen: the larger inset of each axis comes off both sides
+        // (an inset only on the left would otherwise push it right).
+        let screen = safe_screen(full, self.insets_px, self.ppp);
         let title = match self.page {
             Page::Main => "Paused",
             Page::Controls => "Controls",
@@ -1234,67 +1615,117 @@ impl Overlay {
         // scrolls on the left and the controller drawing sits fixed on the
         // right, vertically centred. Narrower windows stack them: the
         // drawing fixed above the scrolling list.
-        let wide = self.page == Page::Controls && screen.width() >= 1000.0;
+        // Android (landscape phones) uses the side-by-side layout from a
+        // lower width: stacked, the drawing left the list a sliver of the
+        // short screen. A narrow column scales the drawing, not the list.
+        let wide_min = if cfg!(target_os = "android") {
+            640.0
+        } else {
+            1000.0
+        };
+        let wide = self.page == Page::Controls && screen.width() >= wide_min;
         let width = if wide {
             880.0_f32.min(screen.width() * 0.85)
         } else {
             460.0
         };
+        // One panel width for every page; never wider than the screen
+        // (phones).
+        let width = width.min(screen.width() - 32.0);
+        // U11: the panel is sized per page from that page's content and
+        // keeps its size while the page is shown (`body_h`, set on page
+        // entry or when a page's first measurement arrives — never by a row
+        // change: lists scroll instead). The cap keeps the whole panel
+        // (body + `chrome`) at 80% of the (safe) screen height.
+        let cap = (0.8 * screen.height() - self.chrome).max(MIN_BODY);
+        let body = self.body_h.min(cap);
+        if cfg!(target_os = "android") {
+            // Finger-sized rows with a gap between them, and a wider scroll
+            // bar to grab. Rows only react to taps; a drag scrolls the list.
+            ctx.style_mut(|s| {
+                s.spacing.interact_size.y = 44.0;
+                s.spacing.item_spacing.y = 6.0;
+                s.spacing.scroll.bar_width = 10.0;
+                s.spacing.scroll.floating = false;
+            });
+        }
         let mut open = self.show;
-        egui::Window::new(egui::RichText::new(title).size(18.0))
+        let shown = egui::Window::new(egui::RichText::new(title).size(18.0))
             .open(&mut open)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
             .resizable(false)
-            .default_width(width)
-            .min_width(width)
+            .fixed_size([width, body])
             .show(ctx, |ui| {
-                if self.page != Page::Controls {
-                    egui::ScrollArea::vertical()
-                        .max_height(0.8 * screen.height())
+                let body_h = ui.max_rect().height();
+                // What the page's content asks the body to be (the
+                // `fixed_size` height at which it fits without scrolling).
+                let content_h = if self.page != Page::Controls {
+                    let out = egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
                         .show(ui, |ui| self.ui_rows(ui));
+                    out.content_size.y
                 } else if wide {
-                    self.controls_wide(ui, 0.8 * screen.height());
+                    self.controls_wide(ui, body_h)
                 } else {
-                    // The drawing never scrolls (U10): fixed above the list.
-                    crate::pad_art::draw(ui, self.selected_slot().as_deref());
+                    // The drawing never scrolls (U10): fixed above the list,
+                    // shrunk so the list keeps `MIN_LIST_H` (the rest of it
+                    // scrolls).
+                    let draw_h = ui.available_height() - MIN_LIST_H - 4.0;
+                    let drawn = crate::pad_art::draw(ui, self.selected_slot().as_deref(), draw_h);
                     ui.add_space(4.0);
-                    egui::ScrollArea::vertical()
-                        .max_height(0.8 * screen.height())
+                    let out = egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
                         .show(ui, |ui| self.ui_rows(ui));
-                }
+                    drawn + 4.0 + out.content_size.y
+                };
+                (body_h, content_h)
             });
+        if let Some(r) = shown
+            && let Some((body_h, content_h)) = r.inner
+        {
+            // The measured chrome (title bar + frame margins) improves the
+            // cap on the next frames (the estimate covers the first one).
+            self.chrome = (r.response.rect.height() - body_h).max(0.0);
+            self.record_body(content_h, screen.size(), cap);
+        }
         self.show &= open;
     }
 
     /// The wide Controls page (U9): the binding list (with its help line and
     /// footer) scrolls in a left column; the controller drawing sits fixed in
     /// the right one, vertically centred, so its highlight tracks the
-    /// selection while the list scrolls.
-    fn controls_wide(&mut self, ui: &mut egui::Ui, max_h: f32) {
+    /// selection while the list scrolls. Returns the height the page's
+    /// content asks for (the taller column).
+    fn controls_wide(&mut self, ui: &mut egui::Ui, max_h: f32) -> f32 {
         const LIST_W: f32 = 440.0;
         // Main axis left-to-right, children centred vertically (the drawing
         // column: the list sizes itself).
+        // A narrow panel (phones) keeps room for the drawing: it scales to
+        // what is left.
+        let list_w = LIST_W.min((ui.available_width() - 8.0) * 0.62);
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             // The list column: its own region with a vertical layout (the
             // left-to-right one must not leak into the rows).
-            ui.allocate_ui_with_layout(
-                egui::vec2(LIST_W, max_h),
+            let list = ui.allocate_ui_with_layout(
+                egui::vec2(list_w, max_h),
                 egui::Layout::top_down_justified(egui::Align::Min),
                 |ui| {
                     egui::ScrollArea::vertical()
                         .max_height(max_h)
                         .id_salt("pw64 controls wide")
-                        .show(ui, |ui| self.ui_rows(ui));
+                        .show(ui, |ui| self.ui_rows(ui))
                 },
             );
             ui.add_space(8.0);
             // The drawing, centred in what is left (`draw` clamps its own
-            // width to MAX_W).
-            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                crate::pad_art::draw(ui, self.selected_slot().as_deref());
+            // width to MAX_W and its height to the body).
+            let drawn = ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                crate::pad_art::draw(ui, self.selected_slot().as_deref(), max_h)
             });
-        });
+            list.inner.content_size.y.max(drawn.inner)
+        })
+        .inner
     }
 
     /// Every selectable row of the current page, in navigation order
@@ -1312,14 +1743,26 @@ impl Overlay {
                     Row::Opt(Opt::Volume),
                     // U26: pause when the window goes to the background.
                     Row::Opt(Opt::PauseBackground),
+                    Row::UnlockAll,
+                    Row::RestoreUnlock,
                     Row::OpenSaveFolder,
+                    Row::ExportSave,
+                    Row::ImportSave,
                     Row::Quit,
                 ];
+                if !self.restore_available {
+                    rows.retain(|&r| r != Row::RestoreUnlock);
+                }
                 // Android: the touch controls' edit mode and the "only
-                // menu" switch, under Controls.
+                // menu" switch, under Controls. Its save folder is private
+                // (no file manager reaches it): export / import replace it.
                 if cfg!(target_os = "android") {
                     rows.insert(2, Row::TouchLayout);
                     rows.insert(3, Row::TouchHidden);
+                    rows.retain(|r| *r != Row::OpenSaveFolder);
+                    if self.reopen_pending {
+                        rows.insert(rows.len() - 1, Row::CloseApp);
+                    }
                 }
                 // Move HUD: after the touch rows (Android), else after
                 // Controls.
@@ -1418,6 +1861,7 @@ impl Overlay {
         self.page = page;
         self.sel = 0;
         self.follow_sel = true;
+        self.apply_page_body();
     }
 
     /// B / Escape / the Back row on a sub-page: back to Main, with the
@@ -1431,6 +1875,39 @@ impl Overlay {
                 .position(|r| *r == self.main_row)
                 .unwrap_or(0);
             self.follow_sel = true;
+            self.apply_page_body();
+        }
+    }
+
+    /// Applies the current page's measured body height (`page_body`): the
+    /// panel takes that size for as long as the page is shown. Pages that
+    /// have not been measured yet keep the previous size for one frame
+    /// (`record_body` fills the cache from that frame's pass — the fade-in
+    /// covers the first one).
+    fn apply_page_body(&mut self) {
+        if let Some((h, _)) = self.page_body[self.page.index()] {
+            self.body_h = h;
+        }
+    }
+
+    /// Records the page's measured content height as its body height (the
+    /// content fits without scrolling), clamped to `cap` (the safe screen).
+    /// Applied right away only while the page has no measurement for the
+    /// current conditions ([`PanelKey`]) — the first frame of each page and
+    /// after a resize/zoom change; a valid measurement never resizes the
+    /// panel mid-visit (row changes, banners and capture prompts scroll
+    /// instead).
+    fn record_body(&mut self, content_h: f32, screen: egui::Vec2, cap: f32) {
+        let key = PanelKey {
+            screen,
+            zoom: self.ctx.zoom_factor(),
+        };
+        let slot = &mut self.page_body[self.page.index()];
+        let stale = slot.as_ref().is_none_or(|(_, k)| *k != key);
+        let wanted = content_h.max(MIN_BODY).min(cap);
+        *slot = Some((wanted, key));
+        if stale {
+            self.body_h = wanted;
         }
     }
 
@@ -1456,7 +1933,37 @@ impl Overlay {
                 self.text_row(ui, at(Row::PerfPage), "Performance overlay \u{203a}");
                 self.opt_row(ui, at(Row::Opt(Opt::Volume)), Opt::Volume);
                 self.opt_row(ui, at(Row::Opt(Opt::PauseBackground)), Opt::PauseBackground);
-                self.text_row(ui, at(Row::OpenSaveFolder), "Open save folder");
+                if rows.contains(&Row::UnlockAll) {
+                    self.unlock_row(ui, at(Row::UnlockAll));
+                }
+                if rows.contains(&Row::RestoreUnlock) {
+                    self.restore_row(ui, at(Row::RestoreUnlock));
+                }
+                if rows.contains(&Row::OpenSaveFolder) {
+                    self.text_row(ui, at(Row::OpenSaveFolder), "Open save folder");
+                }
+                let busy = crate::save_transfer::busy();
+                self.text_row(
+                    ui,
+                    at(Row::ExportSave),
+                    if busy {
+                        "Export save\u{2026} (waiting)"
+                    } else {
+                        "Export save\u{2026}"
+                    },
+                );
+                self.text_row(ui, at(Row::ImportSave), "Import save\u{2026}");
+                if rows.contains(&Row::CloseApp) {
+                    self.text_row(ui, at(Row::CloseApp), "Close Birdman64");
+                }
+                if let Some((text, is_error)) = &self.transfer_status {
+                    let color = if *is_error {
+                        egui::Color32::LIGHT_RED
+                    } else {
+                        egui::Color32::LIGHT_GREEN
+                    };
+                    ui.colored_label(color, text);
+                }
                 // Quit (U3): armed, the row turns into a red second chance.
                 let quit_text = if self.quit_armed.is_some() {
                     egui::RichText::new("Press again to quit")
@@ -1733,6 +2240,61 @@ impl Overlay {
             "Assign player 2\u{2026} ({})",
             self.p2_choices[self.p2_sel].label
         )
+    }
+
+    /// The restore row: like [`Overlay::unlock_row`] (greyed, armed with
+    /// its warning, status line).
+    fn restore_row(&mut self, ui: &mut egui::Ui, i: usize) {
+        if pw64_platform::headless::eep_read_failed() {
+            self.disabled_row(
+                ui,
+                i,
+                "Restore save from before unlock (save file couldn't be read)",
+            );
+            return;
+        }
+        if self.restore_armed.is_some() {
+            self.selectable(
+                ui,
+                i,
+                egui::RichText::new("Press again to restore the old save")
+                    .size(16.0)
+                    .color(egui::Color32::LIGHT_RED)
+                    .into(),
+            );
+            ui.colored_label(egui::Color32::YELLOW, RESTORE_WARNING);
+        } else {
+            self.text_row(ui, i, "Restore save from before unlock");
+        }
+        if let Some(s) = &self.restore_status {
+            ui.colored_label(egui::Color32::YELLOW, s);
+        }
+    }
+
+    /// The Unlock everything row: greyed while the save couldn't be read;
+    /// armed (first confirm), it turns red with the warning under it; the
+    /// last attempt's outcome sits under it when it didn't restart.
+    fn unlock_row(&mut self, ui: &mut egui::Ui, i: usize) {
+        if pw64_platform::headless::eep_read_failed() {
+            self.disabled_row(ui, i, "Unlock everything (save file couldn't be read)");
+            return;
+        }
+        if self.unlock_armed.is_some() {
+            self.selectable(
+                ui,
+                i,
+                egui::RichText::new("Press again to unlock everything")
+                    .size(16.0)
+                    .color(egui::Color32::LIGHT_RED)
+                    .into(),
+            );
+            ui.colored_label(egui::Color32::YELLOW, UNLOCK_WARNING);
+        } else {
+            self.text_row(ui, i, "Unlock everything");
+        }
+        if let Some(s) = &self.unlock_status {
+            ui.colored_label(egui::Color32::YELLOW, s);
+        }
     }
 
     /// A plain selectable row (Resume / the sub-page rows / Back): same look
@@ -2089,8 +2651,10 @@ impl Overlay {
     fn move_sel(&mut self, d: i32) {
         let n = self.rows().len() as i32;
         self.sel = (self.sel as i32 + d).rem_euclid(n) as usize;
-        // Any navigation disarms the Quit row (U3).
+        // Any navigation disarms the Quit row (U3) and Unlock everything.
         self.quit_armed = None;
+        self.unlock_armed = None;
+        self.restore_armed = None;
         self.follow_sel = true;
     }
 
@@ -2112,6 +2676,12 @@ impl Overlay {
         // Confirming anything but Quit disarms the Quit row (U3).
         if rows[self.sel] != Row::Quit {
             self.quit_armed = None;
+        }
+        if rows[self.sel] != Row::UnlockAll {
+            self.unlock_armed = None;
+        }
+        if rows[self.sel] != Row::RestoreUnlock {
+            self.restore_armed = None;
         }
         match rows[self.sel] {
             Row::Opt(o) => match o {
@@ -2144,6 +2714,16 @@ impl Overlay {
             Row::PerfPage => self.enter_page(Page::Perf, Row::PerfPage),
             // U15: the save/data folder in the OS file manager.
             Row::OpenSaveFolder => crate::paths::open_in_file_manager(crate::paths::data_dir()),
+            Row::ExportSave | Row::ImportSave => {
+                let kind = if rows[self.sel] == Row::ExportSave {
+                    crate::save_transfer::Kind::Export
+                } else {
+                    crate::save_transfer::Kind::Import
+                };
+                self.transfer_status = None;
+                crate::save_transfer::start(kind);
+            }
+            Row::CloseApp => std::process::exit(0),
             // The texture packs folder: created when missing (the Texture
             // pack row's choices come from it), then opened like above.
             Row::OpenPacksFolder => {
@@ -2163,6 +2743,28 @@ impl Overlay {
                     self.show = false;
                 } else {
                     self.quit_armed = Some(Instant::now());
+                }
+            }
+            // Unlock everything: the first confirm arms it (the warning
+            // shows), the second one inside the window unlocks + restarts.
+            // Inert while the save couldn't be read (the row is greyed).
+            Row::UnlockAll if pw64_platform::headless::eep_read_failed() => {}
+            Row::UnlockAll => {
+                if self.unlock_armed.is_some_and(|t| t.elapsed() < UNLOCK_ARM) {
+                    self.unlock_now();
+                } else {
+                    self.unlock_status = None;
+                    self.unlock_armed = Some(Instant::now());
+                }
+            }
+            // Restore: the same two-confirm pattern.
+            Row::RestoreUnlock if pw64_platform::headless::eep_read_failed() => {}
+            Row::RestoreUnlock => {
+                if self.restore_armed.is_some_and(|t| t.elapsed() < UNLOCK_ARM) {
+                    self.restore_now();
+                } else {
+                    self.restore_status = None;
+                    self.restore_armed = Some(Instant::now());
                 }
             }
             // Reset to defaults: stage the built-in defaults and apply the
@@ -2374,7 +2976,12 @@ impl Overlay {
             | Row::TouchLayout
             | Row::TouchHidden
             | Row::HudLayout
+            | Row::ExportSave
+            | Row::ImportSave
+            | Row::CloseApp
             | Row::OpenPacksFolder
+            | Row::UnlockAll
+            | Row::RestoreUnlock
             | Row::RestartNow => {}
             // Neither do Resume / the page-open rows / Reset to defaults.
             Row::Resume | Row::Graphics | Row::PerfPage | Row::SplitScreen | Row::ResetGraphics => {
@@ -2862,6 +3469,34 @@ fn restart_command() -> std::io::Result<std::process::Command> {
     Ok(cmd)
 }
 
+/// How [`Overlay::reload_saved`] loads a replaced save: the U16 restart, or
+/// `None` on Android (an app can't relaunch itself; the player reopens it).
+fn reload_command() -> Option<std::io::Result<std::process::Command>> {
+    (!cfg!(target_os = "android")).then(restart_command)
+}
+
+/// [`Overlay::reload_saved`]'s outcome.
+#[derive(Debug, PartialEq, Eq)]
+enum Reload {
+    /// The new copy is starting; this one exits.
+    Restarting,
+    /// Android: the player has to close and reopen the app ([`REOPEN`]).
+    Reopen,
+    /// The restart spawn failed: why ("Couldn't restart: …").
+    Failed(String),
+}
+
+/// The status-line ask after a save change on Android.
+const REOPEN: &str = "Close Birdman64 and open it again to use it.";
+
+/// `s` with its first letter in lower case (an error inside a sentence).
+fn lower_first(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_lowercase().chain(c).collect())
+        .unwrap_or_default()
+}
+
 /// Widescreen choices — Off, 16:9, 21:9, plus the running aspect if it is a
 /// custom one — and the index of the running one.
 fn widescreen_choices(running: Option<f32>) -> (Vec<Option<String>>, usize) {
@@ -3104,11 +3739,27 @@ fn help(row: Row) -> &'static str {
             "Your save (pw64.eep), settings and crash reports. Copy pw64.eep to back up \
              your progress."
         }
+        Row::ExportSave => {
+            "Copies your save to a file you choose: a backup, or to carry it to another \
+             device (PC or Android)."
+        }
+        Row::ImportSave => {
+            "Replaces your save with one from a file. Your current save is kept next to it \
+             as pw64.eep.before-import; Birdman64 restarts to load the new one."
+        }
+        Row::CloseApp => "Closes the app. Open it again to play with the new save.",
         Row::OpenPacksFolder => {
             "The folder texture packs live in: one folder per pack. Opened here after \
              dropping one in, pick it on the Texture pack row."
         }
         Row::RestartNow => "Saves your changes and starts Birdman64 again so they take effect.",
+        Row::UnlockAll => {
+            "Cheat: gives a gold medal on every test in both save files, which opens every \
+             class, the bonus games and Birdman. Your scores are only ever raised."
+        }
+        Row::RestoreUnlock => {
+            "Undo Unlock everything: puts back the save you had before you first used it."
+        }
         Row::TouchLayout => "Drag the on-screen buttons and stick to where your thumbs want them.",
         Row::HudLayout => {
             "Drag the speed, timer, radar and other flight gauges (and the performance \
@@ -3783,14 +4434,78 @@ mod tests {
         assert_eq!(ui_zoom(1440, 2.0), 1.0);
     }
 
+    /// U11: the panel's body height follows the page (no empty chin on
+    /// short pages) and never changes while the page is shown — a changed
+    /// measurement (banner, capture prompt) only updates the cache, a page
+    /// entry applies it, and a new screen size re-measures.
+    #[test]
+    fn panel_height_per_page_and_stable() {
+        let mut o = Overlay::new();
+        let screen = egui::vec2(480.0, 720.0);
+        let cap = 0.8 * screen.y - 40.0;
+        // Main measures short: the body is its content, not the old
+        // one-size 430.
+        o.record_body(230.0, screen, cap);
+        assert_eq!(o.body_h, 230.0);
+        // Controls has no measurement yet: the previous size survives until
+        // this frame's pass measures (one frame, under the fade-in).
+        o.enter_page(Page::Controls, Row::Graphics);
+        assert_eq!(o.body_h, 230.0);
+        // Controls measures taller than the cap: clamped to it.
+        o.record_body(2000.0, screen, cap);
+        assert_eq!(o.body_h, cap);
+        // Mid-visit content changes do not resize the panel.
+        o.record_body(1600.0, screen, cap);
+        assert_eq!(o.body_h, cap);
+        o.back();
+        assert_eq!(o.body_h, 230.0, "back to Main: its cached size");
+        // A new screen size re-measures.
+        let screen = egui::vec2(480.0, 400.0);
+        o.record_body(200.0, screen, 0.8 * screen.y - 40.0);
+        assert_eq!(o.body_h, 200.0);
+    }
+
+    /// Pointer events arrive in surface px and map to egui points by `ppp`
+    /// alone: the egui screen rect is the whole surface, so cutout insets
+    /// must not shift them (a shift made the close X untappable).
+    #[test]
+    fn pointer_events_ignore_the_safe_insets() {
+        let mut o = Overlay::new();
+        o.ppp = 2.0;
+        o.insets_px = [140.0, 0.0, 0.0, 0.0];
+        o.pointer_moved(60.0, 100.0);
+        assert_eq!(
+            o.events.pop(),
+            Some(egui::Event::PointerMoved(egui::pos2(30.0, 50.0)))
+        );
+        o.events.clear();
+        o.pointer_button(60.0, 100.0, true);
+        match o.events.pop() {
+            Some(egui::Event::PointerButton { pos, .. }) => assert_eq!(pos, egui::pos2(30.0, 50.0)),
+            e => panic!("not a pointer button: {e:?}"),
+        }
+    }
+
+    /// The panel's area loses each axis's larger inset on both sides: a
+    /// cutout on the left only keeps the panel centred on the screen.
+    #[test]
+    fn safe_screen_is_symmetric() {
+        let full = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 500.0));
+        let s = safe_screen(full, [140.0, 0.0, 0.0, 20.0], 2.0);
+        assert_eq!(s.center(), full.center());
+        assert_eq!(s.width(), 1000.0 - 140.0);
+        assert_eq!(s.height(), 500.0 - 20.0);
+        assert_eq!(safe_screen(full, [0.0; 4], 2.0), full);
+    }
+
     #[test]
     fn rows_pages_and_controls_row() {
         let mut o = Overlay::new();
-        // Main: Resume, Controls, Move HUD, the other sub-pages, Volume,
-        // the background-pause row, Open save folder, Quit (U2, U3, U15,
-        // U26).
+        // Main: Resume, Controls, Move HUD, the three sub-pages, Volume, the
+        // background-pause row, Unlock everything, Open save folder, Export /
+        // Import save, Quit (U2, U3, U15, U26).
         let rows = o.rows();
-        assert_eq!(rows.len(), 10);
+        assert_eq!(rows.len(), 13);
         assert_eq!(rows[0], Row::Resume);
         assert_eq!(rows[1], Row::Controls);
         assert_eq!(rows[2], Row::HudLayout);
@@ -3799,13 +4514,23 @@ mod tests {
         assert_eq!(rows[5], Row::PerfPage);
         assert_eq!(rows[6], Row::Opt(Opt::Volume));
         assert_eq!(rows[7], Row::Opt(Opt::PauseBackground));
-        assert_eq!(rows[8], Row::OpenSaveFolder);
-        assert_eq!(rows[9], Row::Quit);
+        assert_eq!(rows[8], Row::UnlockAll);
+        assert_eq!(rows[9], Row::OpenSaveFolder);
+        assert_eq!(rows[10], Row::ExportSave);
+        assert_eq!(rows[11], Row::ImportSave);
+        assert_eq!(rows[12], Row::Quit);
         // Move HUD closes the overlay into the edit mode (once).
         o.sel = 2;
         o.confirm();
         assert!(o.take_hud_edit() && !o.take_hud_edit());
         o.show = true;
+        // With an unlock backup, the restore row sits under Unlock everything.
+        o.restore_available = true;
+        let rows = o.rows();
+        assert_eq!(rows.len(), 14);
+        assert_eq!(rows[9], Row::RestoreUnlock);
+        assert_eq!(rows[10], Row::OpenSaveFolder);
+        o.restore_available = false;
         // The performance overlay page: the counter, the opt-in extras, Back.
         o.sel = 5;
         o.confirm();
@@ -4373,12 +5098,171 @@ mod tests {
         assert!(!o.show);
     }
 
+    /// Unlock everything: the first confirm only arms it (nothing edited),
+    /// navigation disarms, the second confirm runs the edit; each outcome
+    /// that doesn't restart leaves a status line and keeps the overlay open.
+    #[test]
+    fn unlock_row_arms_then_edits() {
+        use crate::unlock::{FileResult, Refused};
+        use pw64_platform::headless::EepEdit;
+        let _g = DATA_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut o = Overlay::new();
+        o.show = true;
+        let i = o.rows().iter().position(|&r| r == Row::UnlockAll).unwrap();
+        o.sel = i;
+        o.confirm();
+        assert!(o.unlock_armed.is_some());
+        o.move_sel(1);
+        assert!(o.unlock_armed.is_none(), "navigation disarms");
+        // An expired arm doesn't unlock: the next confirm re-arms.
+        o.sel = i;
+        o.unlock_armed = Some(Instant::now() - UNLOCK_ARM);
+        o.quit_check();
+        assert!(o.unlock_armed.is_none());
+        let ok = || Some(Ok(std::process::Command::new("pw64-no-such-exe")));
+        // Already unlocked: no restart, a status line.
+        o.unlock_armed = Some(Instant::now());
+        o.unlock_with(
+            || Ok((EepEdit::Unchanged, [FileResult::AlreadyUnlocked; 2])),
+            ok(),
+        );
+        assert_eq!(
+            o.unlock_status.as_deref(),
+            Some("Everything is already unlocked.")
+        );
+        assert!(o.unlock_armed.is_none() && !o.restart_requested && o.show);
+        // A failed edit: the save wasn't changed.
+        o.unlock_with(|| Err("disk full".into()), ok());
+        assert!(
+            o.unlock_status
+                .as_deref()
+                .unwrap()
+                .contains("wasn't changed")
+        );
+        // Unknown files: left alone, said so.
+        o.unlock_with(
+            || {
+                Ok((
+                    EepEdit::Unchanged,
+                    [
+                        FileResult::Refused(Refused::BadChecksum),
+                        FileResult::AlreadyUnlocked,
+                    ],
+                ))
+            },
+            ok(),
+        );
+        assert!(o.unlock_status.as_deref().unwrap().contains("file 1"));
+        // Written but the restart spawn failed: still open, told to restart.
+        o.snapshot = o.staged_settings();
+        o.unlock_with(
+            || {
+                Ok((
+                    EepEdit::Written {
+                        backup: "x.before-unlock".into(),
+                    },
+                    [FileResult::Unlocked; 2],
+                ))
+            },
+            ok(),
+        );
+        let s = o.unlock_status.clone().unwrap();
+        assert!(s.starts_with("Unlocked, but couldn't restart"), "{s}");
+        assert!(!o.restart_requested && o.show);
+        assert!(o.restart_error.is_none(), "moved into the unlock status");
+        // Android (no restart command): the reopen ask and the Close row,
+        // as after an import.
+        assert!(!o.reopen_pending);
+        o.unlock_with(
+            || {
+                Ok((
+                    EepEdit::Written {
+                        backup: "x.before-unlock".into(),
+                    },
+                    [FileResult::Unlocked; 2],
+                ))
+            },
+            None,
+        );
+        assert_eq!(
+            o.unlock_status.as_deref(),
+            Some(format!("Unlocked. {REOPEN}").as_str())
+        );
+        assert!(o.reopen_pending && !o.restart_requested && o.show);
+    }
+
+    /// PC builds restart after a save change; Android has no restart command
+    /// (the player reopens the app).
+    #[test]
+    fn reload_command_per_platform() {
+        assert_eq!(reload_command().is_some(), !cfg!(target_os = "android"));
+    }
+
+    /// The restore row: first confirm arms, navigation disarms, and each
+    /// outcome that doesn't restart leaves a status line.
+    #[test]
+    fn restore_row_arms_then_restores() {
+        use pw64_platform::headless::EepEdit;
+        let _g = DATA_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut o = Overlay::new();
+        o.show = true;
+        o.restore_available = true;
+        let i = o
+            .rows()
+            .iter()
+            .position(|&r| r == Row::RestoreUnlock)
+            .unwrap();
+        o.sel = i;
+        o.confirm();
+        assert!(o.restore_armed.is_some() && o.restore_status.is_none());
+        o.move_sel(-1);
+        assert!(o.restore_armed.is_none(), "navigation disarms");
+        let ok = || Some(Ok(std::process::Command::new("pw64-no-such-exe")));
+        o.restore_with(|| Err("the backup is 512 bytes".into()), ok());
+        assert!(
+            o.restore_status
+                .as_deref()
+                .unwrap()
+                .contains("wasn't changed")
+        );
+        o.restore_with(|| Ok(EepEdit::Unchanged), ok());
+        assert!(o.restore_status.as_deref().unwrap().contains("already"));
+        o.snapshot = o.staged_settings();
+        o.restore_with(
+            || {
+                Ok(EepEdit::Written {
+                    backup: "x.before-restore".into(),
+                })
+            },
+            ok(),
+        );
+        let s = o.restore_status.clone().unwrap();
+        assert!(s.starts_with("Restored, but couldn't restart"), "{s}");
+        assert!(!o.restart_requested && o.show);
+        o.restore_with(
+            || {
+                Ok(EepEdit::Written {
+                    backup: "x.before-restore".into(),
+                })
+            },
+            None,
+        );
+        assert_eq!(
+            o.restore_status.as_deref(),
+            Some(format!("Restored. {REOPEN}").as_str())
+        );
+        assert!(
+            o.reopen_pending && o.rows().contains(&Row::CloseApp) == cfg!(target_os = "android")
+        );
+    }
+
     /// Every row of every page has a help line (U5). A restart-only change
     /// is staged so the conditional "Restart now" row (U16) is covered too.
     #[test]
     fn every_row_has_help() {
         let mut o = Overlay::new();
         o.msaa = 4;
+        o.restore_available = true;
         for page in [Page::Main, Page::Graphics, Page::Controls, Page::Split] {
             o.page = page;
             for row in o.rows() {

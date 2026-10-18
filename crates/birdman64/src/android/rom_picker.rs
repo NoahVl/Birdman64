@@ -173,6 +173,17 @@ pub fn install_picked(uri: &str) -> Result<PathBuf, (&'static str, String)> {
     }
 }
 
+/// The bytes of a picked document (the save import), or the error text.
+pub fn read_picked_bytes(uri: &str) -> Result<Vec<u8>, String> {
+    let app = crate::android::app();
+    let ui = app.clone();
+    // SAFETY: the process's JavaVM, valid for its lifetime.
+    let vm = unsafe { jni::JavaVM::from_raw(ui.vm_as_ptr().cast()) };
+    let read: Result<PickedFile, ReadFail> =
+        vm.attach_current_thread(|env| read_document(env, &ui, uri));
+    read.map(|p| p.bytes).map_err(|e| read_fail_message(&e).1)
+}
+
 /// The ROM screen's error box text for a read failure.
 fn read_fail_message(e: &ReadFail) -> (&'static str, String) {
     match e {
