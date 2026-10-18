@@ -11,12 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - "Unlock everything" in the pause menu: gives a gold medal on every test in
   both save files, which opens every class, the bonus games and Birdman
-  (not on Android). Your scores are only ever raised, and your previous save
-  is kept as `pw64.eep.before-unlock` in the save folder. "Restore save from
-  before unlock" in the same menu puts that save back.
+  (on Android it asks you to reopen the app). Your scores are only ever
+  raised, and your previous save is kept as `pw64.eep.before-unlock` in the
+  save folder. "Restore save from before unlock" in the same menu puts that
+  save back.
+- Move your save between PC and Android (or keep a backup): the pause menu has
+  "Export save…" and "Import save…". Importing keeps your old save next to it
+  as `pw64.eep.before-import` and restarts the game (on Android it asks you to
+  reopen the app). On Android, "Open save folder" is replaced by these two.
 
 ### Fixed
 
+- The settings menu keeps its size while you move between rows on a page; it
+  only changes size when you go to another page.
+- Android: the settings lists scroll by dragging with a finger, and a new drag
+  continues from where the list was. The rows are bigger and easier to tap.
+- Android: the Controls page fits the screen, with the controller beside the
+  list, and the close button and dimmed background line up with the screen.
 - Android: picking the ROM from some storage apps could close the app
   instead of falling back to a default file name.
 

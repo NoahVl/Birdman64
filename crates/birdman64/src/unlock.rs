@@ -10,7 +10,8 @@
 //! ones, `taskGetTestCount` tests each), then 0x408 photo-flag bits; byte
 //! 0xFF is the sum of bytes 0..0xFF.
 //!
-//! Existing progress is only ever raised (points = max(old, 100)); photos
+//! Existing progress is only ever raised (points = max(old, 100), except
+//! [`NO_RESULT`], the "never played" value, which also becomes 100); photos
 //! and every other bit stay as they were. A file this code doesn't
 //! recognise is left untouched.
 
@@ -20,6 +21,11 @@ pub const FILE_SIZE: usize = 0x100;
 pub const FILES: usize = 2;
 /// A test's points for a gold medal (also the top score).
 pub const GOLD: u8 = 100;
+/// A test's points before it was ever finished: 0x7F, the all-ones 7-bit
+/// value (the game's RAM init and `invalidPointCount` in code_B2900.c). A
+/// class only counts as cleared when none of its tests holds it, so it must
+/// be raised too, not kept as "above gold".
+pub const NO_RESULT: u8 = 0x7F;
 /// Bit offset of the first points value (`bits = 0x10`).
 const FIRST_BIT: usize = 0x10;
 /// Bits per points value.
@@ -126,7 +132,10 @@ pub fn unlock_file(file: &[u8; FILE_SIZE]) -> Result<Option<[u8; FILE_SIZE]>, Re
     };
     out[0] = b'P';
     out[1] = b'W';
-    let points: Vec<u8> = decode_points(&out).iter().map(|&p| p.max(GOLD)).collect();
+    let points: Vec<u8> = decode_points(&out)
+        .iter()
+        .map(|&p| if p == NO_RESULT { GOLD } else { p.max(GOLD) })
+        .collect();
     encode_points(&mut out, &points);
     out[FILE_SIZE - 1] = checksum(&out);
     Ok((out != *file).then_some(out))
@@ -192,17 +201,19 @@ mod tests {
         let mut points = vec![0u8; points_count()];
         points[0] = 85; // silver
         points[1] = 100; // gold
-        points[2] = 127; // above gold: kept
+        points[2] = NO_RESULT; // never played (locked): gold too
         points[3] = 40; // partial
+        points[4] = 110; // above gold: kept
         let photos = [0, 1, 77, 0x407];
         let f = save(&points, &photos);
         let new = unlock_file(&f).unwrap().unwrap();
         let got = decode_points(&new);
         assert_eq!(got[0], GOLD);
         assert_eq!(got[1], GOLD);
-        assert_eq!(got[2], 127);
+        assert_eq!(got[2], GOLD);
         assert_eq!(got[3], GOLD);
-        assert!(got.iter().all(|&p| p >= GOLD));
+        assert_eq!(got[4], 110);
+        assert!(got.iter().all(|&p| p >= GOLD && p != NO_RESULT));
         // Photo flags (everything after the points) are untouched.
         let photo0 = FIRST_BIT + points_count() * POINT_BITS;
         for b in 0..0x408 {
@@ -214,6 +225,16 @@ mod tests {
         }
         assert_eq!(&new[..2], b"PW");
         assert_eq!(checksum(&new), new[FILE_SIZE - 1]);
+    }
+
+    /// A save in mid-game: most tests never played (`NO_RESULT`, as the
+    /// game writes them). Every one ends up gold, so every class opens.
+    #[test]
+    fn unplayed_tests_become_gold() {
+        let mut points = vec![NO_RESULT; points_count()];
+        points[0] = 90;
+        let new = unlock_file(&save(&points, &[])).unwrap().unwrap();
+        assert!(decode_points(&new).iter().all(|&p| p == GOLD));
     }
 
     #[test]
