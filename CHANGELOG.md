@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Early iOS support (iPhone and iPad): full-screen play with on-screen touch
+  controls or a paired controller, and the ROM and save in the Files app's
+  Birdman64 folder. iOS builds are test builds from the pull request for now,
+  not part of the release downloads. As on Android, a save change asks you to
+  reopen the app.
 - "Unlock everything" in the pause menu: gives a gold medal on every test in
   both save files, which opens every class, the bonus games and Birdman
   (on Android it asks you to reopen the app). Your scores are only ever
