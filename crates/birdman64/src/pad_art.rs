@@ -27,17 +27,26 @@ const MAX_W: f32 = 380.0;
 const CACHE_LEN: usize = 6;
 
 /// Paints the controller into `ui`, scaled to the panel width (at most
-/// `MAX_W`). `highlight` is the selected Bind row's slot name (`"A"`,
-/// `"C_UP"`, `"STICK_LEFT"`, ...): that element gets the accent fill, a
-/// white outline and a glow; a `STICK_*` slot also shows its direction
-/// arrow. Unknown names draw the plain controller.
-pub fn draw(ui: &mut egui::Ui, highlight: Option<&str>) {
+/// `MAX_W`) and never taller than `max_h` (the space above the binding
+/// list): a height cap shrinks the width to keep the aspect. `highlight`
+/// is the selected Bind row's slot name (`"A"`, `"C_UP"`, `"STICK_LEFT"`,
+/// ...): that element gets the accent fill, a white outline and a glow; a
+/// `STICK_*` slot also shows its direction arrow. Unknown names draw the
+/// plain controller. Returns the height of the box it laid out.
+pub fn draw(ui: &mut egui::Ui, highlight: Option<&str>, max_h: f32) -> f32 {
     let w = ui.available_width().clamp(1.0, MAX_W);
     // The box keeps the SVG's aspect whichever art is shown, so the page
-    // layout doesn't depend on whether a ROM is loaded.
-    let (rect, _) = ui.allocate_exact_size(vec2(w, w * VIEW_H / VIEW_W), Sense::hover());
+    // layout doesn't depend on whether a ROM is loaded. A height cap (the
+    // panel has a list under the drawing) shrinks the box.
+    let h = (w * VIEW_H / VIEW_W).min(max_h.max(1.0));
+    let w = h * VIEW_W / VIEW_H;
+    // The row takes the full available width and the box sits centred in
+    // it (a height-capped box is narrower than the panel; a left-aligned
+    // layout would otherwise leave it at the left edge).
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width().max(w), h), Sense::hover());
+    let rect = egui::Rect::from_center_size(row.center(), vec2(w, h));
     if !ui.is_rect_visible(rect) {
-        return;
+        return h;
     }
     let rom = crate::pad_sprites::get().is_some();
     // The ROM art is near-square: fit it (centred) in the box.
@@ -64,6 +73,7 @@ pub fn draw(ui: &mut egui::Ui, highlight: Option<&str>) {
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         ui.painter().image(tex.id(), rect, uv, Color32::WHITE);
     }
+    h
 }
 
 /// Every Bind slot name both art sources highlight.
@@ -247,13 +257,14 @@ pub(crate) mod tests {
         assert_ne!(px(&up, 110, 72), px(&base, 110, 72), "STICK_UP arrow");
     }
 
-    /// `draw` lays out at the panel width and paints one image (no window).
+    /// `draw` lays out at the panel width and paints one image (no window);
+    /// a height cap shrinks the box but keeps the 440:360 aspect.
     #[test]
     fn draw_paints_an_image() {
         for highlight in [None, Some("z"), Some("STICK_UP"), Some("bogus")] {
             let ctx = egui::Context::default();
             let out = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| draw(ui, highlight));
+                egui::CentralPanel::default().show(ctx, |ui| draw(ui, highlight, f32::INFINITY));
             });
             let meshes = out
                 .shapes
@@ -262,6 +273,21 @@ pub(crate) mod tests {
                 .count();
             assert_eq!(meshes, 1, "highlight {highlight:?}");
         }
+    }
+
+    /// The height cap: the drawing is never taller than it (the width-driven
+    /// height otherwise, from the clamped `MAX_W` panel width).
+    #[test]
+    fn draw_respects_the_height_cap() {
+        let ctx = egui::Context::default();
+        let _out = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let wide = draw(ui, None, f32::INFINITY);
+                assert_eq!(wide, MAX_W * VIEW_H / VIEW_W, "width-driven height");
+                let capped = draw(ui, None, 100.0);
+                assert_eq!(capped, 100.0, "height cap");
+            });
+        });
     }
 
     /// Preview PNGs for eyeballing the art: `PW64_PAD_ART_PREVIEW=1 cargo

@@ -169,6 +169,71 @@ enum Page {
     Perf,
 }
 
+impl Page {
+    /// Index into the per-page panel-height cache (`Overlay::page_body`).
+    fn index(self) -> usize {
+        match self {
+            Page::Main => 0,
+            Page::Graphics => 1,
+            Page::Controls => 2,
+            Page::Split => 3,
+            Page::Perf => 4,
+        }
+    }
+}
+
+/// How many pages (`Page::index` is the slot).
+const N_PAGES: usize = 5;
+
+/// The conditions a panel height was measured at: the safe egui screen
+/// (points) and the zoom. A change of either re-measures (text wraps and
+/// the drawing's height cap follow the screen, heights follow the zoom).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PanelKey {
+    screen: egui::Vec2,
+    zoom: f32,
+}
+
+/// The least height the Controls binding list gets under the controller
+/// drawing (about two rows; the rest scrolls). Rows are finger-sized on
+/// Android.
+const MIN_LIST_H: f32 = if cfg!(target_os = "android") {
+    100.0
+} else {
+    64.0
+};
+/// The smallest body the panel takes (a measurement can come back tiny on a
+/// degenerate first frame; the cap governs on really small screens).
+const MIN_BODY: f32 = 120.0;
+/// Panel chrome (title bar + frame margins) in points, estimated until the
+/// first pass measures it (outer height minus body height).
+const CHROME_EST: f32 = 64.0;
+/// The body height the panel starts with (the old one-size height) until
+/// the current page's content is measured.
+const BODY_DEFAULT: f32 = 430.0;
+
+/// The display-cutout safe insets in surface px (Android reads them in
+/// `android.rs`; the other platforms have none).
+#[cfg(target_os = "android")]
+fn safe_insets_px() -> [f32; 4] {
+    crate::android::cutout_insets()
+}
+
+/// The display-cutout safe insets in surface px (desktop: none).
+#[cfg(not(target_os = "android"))]
+fn safe_insets_px() -> [f32; 4] {
+    [0.0; 4]
+}
+
+/// The area the panel fits in: `full` (egui points) shrunk by the cutout
+/// insets (`[left, top, right, bottom]` surface px, `ppp` px per point)
+/// symmetrically — each axis loses its larger inset on both sides, so the
+/// centre stays the screen's centre.
+fn safe_screen(full: egui::Rect, insets_px: [f32; 4], ppp: f32) -> egui::Rect {
+    let [l, t, r, b] = insets_px.map(|v| v / ppp.max(f32::EPSILON));
+    full.shrink2(egui::vec2(l.max(r), t.max(b)))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Opt {
     /// Performance overlay page: frame time, graph, 1% lows, CPU, GPU, corner
@@ -473,6 +538,26 @@ pub struct Overlay {
     /// The Main row that opened the current sub-page (`back()` rests the
     /// selection on it).
     main_row: Row,
+    /// The chosen panel body height (`fixed_size` height) for each page
+    /// (`Page::index`), measured from that page's content and keyed by the
+    /// conditions ([`PanelKey`]) it was measured at: the panel changes size
+    /// between pages but never within one (row changes, banners and capture
+    /// prompts scroll instead). `None`: not measured yet.
+    page_body: [Option<(f32, PanelKey)>; N_PAGES],
+    /// The body height in use right now: set from `page_body` on page entry
+    /// (`apply_page_body`), otherwise while a page is shown only when its
+    /// measurement first arrives (unmeasured page: the first open of each
+    /// page and after a resize).
+    body_h: f32,
+    /// Measured panel chrome (title bar + frame margins) in points: the
+    /// outer height minus the body height of the last drawn panel. Caps the
+    /// body (the total stays inside the screen); estimated before the first
+    /// pass ([`CHROME_EST`]).
+    chrome: f32,
+    /// The display-cutout safe insets in surface px (`safe_insets_px`): the
+    /// panel is sized to stay off the cutout (`safe_screen`); the egui
+    /// screen rect, backdrop and pointer coordinates stay surface-wide.
+    insets_px: [f32; 4],
     /// True while pad/keyboard navigation just moved the selection: the
     /// ScrollArea scrolls the selected row back into view (U1). Hover/click
     /// don't move the view (the pointer is already there).
@@ -572,6 +657,10 @@ impl Overlay {
             sel: 0,
             page: Page::Main,
             main_row: Row::Resume,
+            page_body: [None; N_PAGES],
+            body_h: BODY_DEFAULT,
+            chrome: CHROME_EST,
+            insets_px: [0.0; 4],
             follow_sel: false,
             prev_pad: input::Pad::default(),
             held_dir: None,
@@ -586,6 +675,8 @@ impl Overlay {
         self.show = true;
         self.sel = 0;
         self.page = Page::Main;
+        // The panel keeps each page's measured size across opens.
+        self.apply_page_body();
         self.events.clear();
         self.capture = None;
         self.capture_error = None;
@@ -1070,10 +1161,21 @@ impl Overlay {
         }
     }
 
-    /// Cursor position from the window, physical px.
+    /// Cursor position from the window, physical px (surface coordinates,
+    /// like the egui screen rect: no cutout shift).
     pub fn pointer_moved(&mut self, x: f32, y: f32) {
         let pos = egui::pos2(x / self.ppp, y / self.ppp);
         self.events.push(egui::Event::PointerMoved(pos));
+    }
+
+    /// A finger lifted (Android touch end): egui forgets the pointer, so the
+    /// next touch-down starts with a zero pointer delta. Without it the jump
+    /// from the last finger position to the new one lands in the ScrollArea's
+    /// first drag frame (drag-only sense: dragged on press) and throws the
+    /// list back towards the top.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn pointer_gone(&mut self) {
+        self.events.push(egui::Event::PointerGone);
     }
 
     /// Primary mouse button at physical px `(x, y)`.
@@ -1117,6 +1219,10 @@ impl Overlay {
             self.started.elapsed().as_secs_f64(),
             std::mem::take(&mut self.events),
         );
+        // The display cutout (Android): `build_ui` keeps the panel out of
+        // it. The egui screen rect stays the whole surface (backdrop and
+        // pointer coordinates are surface-wide).
+        self.insets_px = safe_insets_px();
         let ctx = self.ctx.clone();
         let out = ctx.run(raw, |ctx| self.build_ui(ctx));
         // S8b: the keep-resolution deadline is checked each overlay frame
@@ -1205,12 +1311,17 @@ impl Overlay {
     /// Builds the panel (inside the egui pass): a centered, fixed-width
     /// window over a dimmed backdrop (U1).
     fn build_ui(&mut self, ctx: &egui::Context) {
-        let screen = ctx.content_rect();
+        let full = ctx.content_rect();
+        // The backdrop dims the whole surface, cutout strip included.
         ctx.layer_painter(egui::LayerId::background()).rect_filled(
-            screen,
+            full,
             0.0,
             egui::Color32::from_black_alpha(140),
         );
+        // The panel is sized to the cutout-safe area but stays centred on
+        // the screen: the larger inset of each axis comes off both sides
+        // (an inset only on the left would otherwise push it right).
+        let screen = safe_screen(full, self.insets_px, self.ppp);
         let title = match self.page {
             Page::Main => "Paused",
             Page::Controls => "Controls",
@@ -1222,19 +1333,30 @@ impl Overlay {
         // scrolls on the left and the controller drawing sits fixed on the
         // right, vertically centred. Narrower windows stack them: the
         // drawing fixed above the scrolling list.
-        let wide = self.page == Page::Controls && screen.width() >= 1000.0;
+        // Android (landscape phones) uses the side-by-side layout from a
+        // lower width: stacked, the drawing left the list a sliver of the
+        // short screen. A narrow column scales the drawing, not the list.
+        let wide_min = if cfg!(target_os = "android") {
+            640.0
+        } else {
+            1000.0
+        };
+        let wide = self.page == Page::Controls && screen.width() >= wide_min;
         let width = if wide {
             880.0_f32.min(screen.width() * 0.85)
         } else {
             460.0
         };
-        // One fixed panel size for every page: sizing it to the content made
-        // the window jump around on each page change and row change. The
-        // lists scroll inside it. Never wider than the screen (phones).
+        // One panel width for every page; never wider than the screen
+        // (phones).
         let width = width.min(screen.width() - 32.0);
-        // Tall enough for the longest page's list without a big empty tail
-        // on the short ones; on small screens it is 80% of the height.
-        let height = (0.8 * screen.height()).min(430.0);
+        // U11: the panel is sized per page from that page's content and
+        // keeps its size while the page is shown (`body_h`, set on page
+        // entry or when a page's first measurement arrives — never by a row
+        // change: lists scroll instead). The cap keeps the whole panel
+        // (body + `chrome`) at 80% of the (safe) screen height.
+        let cap = (0.8 * screen.height() - self.chrome).max(MIN_BODY);
+        let body = self.body_h.min(cap);
         if cfg!(target_os = "android") {
             // Finger-sized rows with a gap between them, and a wider scroll
             // bar to grab. Rows only react to taps; a drag scrolls the list.
@@ -1246,59 +1368,82 @@ impl Overlay {
             });
         }
         let mut open = self.show;
-        egui::Window::new(egui::RichText::new(title).size(18.0))
+        let shown = egui::Window::new(egui::RichText::new(title).size(18.0))
             .open(&mut open)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
             .resizable(false)
-            .fixed_size([width, height])
+            .fixed_size([width, body])
             .show(ctx, |ui| {
-                if self.page != Page::Controls {
-                    egui::ScrollArea::vertical()
+                let body_h = ui.max_rect().height();
+                // What the page's content asks the body to be (the
+                // `fixed_size` height at which it fits without scrolling).
+                let content_h = if self.page != Page::Controls {
+                    let out = egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| self.ui_rows(ui));
+                    out.content_size.y
                 } else if wide {
-                    self.controls_wide(ui, ui.available_height());
+                    self.controls_wide(ui, body_h)
                 } else {
-                    // The drawing never scrolls (U10): fixed above the list.
-                    crate::pad_art::draw(ui, self.selected_slot().as_deref());
+                    // The drawing never scrolls (U10): fixed above the list,
+                    // shrunk so the list keeps `MIN_LIST_H` (the rest of it
+                    // scrolls).
+                    let draw_h = ui.available_height() - MIN_LIST_H - 4.0;
+                    let drawn = crate::pad_art::draw(ui, self.selected_slot().as_deref(), draw_h);
                     ui.add_space(4.0);
-                    egui::ScrollArea::vertical()
+                    let out = egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| self.ui_rows(ui));
-                }
+                    drawn + 4.0 + out.content_size.y
+                };
+                (body_h, content_h)
             });
+        if let Some(r) = shown
+            && let Some((body_h, content_h)) = r.inner
+        {
+            // The measured chrome (title bar + frame margins) improves the
+            // cap on the next frames (the estimate covers the first one).
+            self.chrome = (r.response.rect.height() - body_h).max(0.0);
+            self.record_body(content_h, screen.size(), cap);
+        }
         self.show &= open;
     }
 
     /// The wide Controls page (U9): the binding list (with its help line and
     /// footer) scrolls in a left column; the controller drawing sits fixed in
     /// the right one, vertically centred, so its highlight tracks the
-    /// selection while the list scrolls.
-    fn controls_wide(&mut self, ui: &mut egui::Ui, max_h: f32) {
+    /// selection while the list scrolls. Returns the height the page's
+    /// content asks for (the taller column).
+    fn controls_wide(&mut self, ui: &mut egui::Ui, max_h: f32) -> f32 {
         const LIST_W: f32 = 440.0;
         // Main axis left-to-right, children centred vertically (the drawing
         // column: the list sizes itself).
+        // A narrow panel (phones) keeps room for the drawing: it scales to
+        // what is left.
+        let list_w = LIST_W.min((ui.available_width() - 8.0) * 0.62);
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             // The list column: its own region with a vertical layout (the
             // left-to-right one must not leak into the rows).
-            ui.allocate_ui_with_layout(
-                egui::vec2(LIST_W, max_h),
+            let list = ui.allocate_ui_with_layout(
+                egui::vec2(list_w, max_h),
                 egui::Layout::top_down_justified(egui::Align::Min),
                 |ui| {
                     egui::ScrollArea::vertical()
                         .max_height(max_h)
                         .id_salt("pw64 controls wide")
-                        .show(ui, |ui| self.ui_rows(ui));
+                        .show(ui, |ui| self.ui_rows(ui))
                 },
             );
             ui.add_space(8.0);
             // The drawing, centred in what is left (`draw` clamps its own
-            // width to MAX_W).
-            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                crate::pad_art::draw(ui, self.selected_slot().as_deref());
+            // width to MAX_W and its height to the body).
+            let drawn = ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                crate::pad_art::draw(ui, self.selected_slot().as_deref(), max_h)
             });
-        });
+            list.inner.content_size.y.max(drawn.inner)
+        })
+        .inner
     }
 
     /// Every selectable row of the current page, in navigation order
@@ -1415,6 +1560,7 @@ impl Overlay {
         self.page = page;
         self.sel = 0;
         self.follow_sel = true;
+        self.apply_page_body();
     }
 
     /// B / Escape / the Back row on a sub-page: back to Main, with the
@@ -1428,6 +1574,39 @@ impl Overlay {
                 .position(|r| *r == self.main_row)
                 .unwrap_or(0);
             self.follow_sel = true;
+            self.apply_page_body();
+        }
+    }
+
+    /// Applies the current page's measured body height (`page_body`): the
+    /// panel takes that size for as long as the page is shown. Pages that
+    /// have not been measured yet keep the previous size for one frame
+    /// (`record_body` fills the cache from that frame's pass — the fade-in
+    /// covers the first one).
+    fn apply_page_body(&mut self) {
+        if let Some((h, _)) = self.page_body[self.page.index()] {
+            self.body_h = h;
+        }
+    }
+
+    /// Records the page's measured content height as its body height (the
+    /// content fits without scrolling), clamped to `cap` (the safe screen).
+    /// Applied right away only while the page has no measurement for the
+    /// current conditions ([`PanelKey`]) — the first frame of each page and
+    /// after a resize/zoom change; a valid measurement never resizes the
+    /// panel mid-visit (row changes, banners and capture prompts scroll
+    /// instead).
+    fn record_body(&mut self, content_h: f32, screen: egui::Vec2, cap: f32) {
+        let key = PanelKey {
+            screen,
+            zoom: self.ctx.zoom_factor(),
+        };
+        let slot = &mut self.page_body[self.page.index()];
+        let stale = slot.as_ref().is_none_or(|(_, k)| *k != key);
+        let wanted = content_h.max(MIN_BODY).min(cap);
+        *slot = Some((wanted, key));
+        if stale {
+            self.body_h = wanted;
         }
     }
 
@@ -3753,6 +3932,70 @@ mod tests {
         // HiDPI: the zoom works in egui points, the native scale is
         // separate (Windows at 200 %: 1440 px is only 720 points).
         assert_eq!(ui_zoom(1440, 2.0), 1.0);
+    }
+
+    /// U11: the panel's body height follows the page (no empty chin on
+    /// short pages) and never changes while the page is shown — a changed
+    /// measurement (banner, capture prompt) only updates the cache, a page
+    /// entry applies it, and a new screen size re-measures.
+    #[test]
+    fn panel_height_per_page_and_stable() {
+        let mut o = Overlay::new();
+        let screen = egui::vec2(480.0, 720.0);
+        let cap = 0.8 * screen.y - 40.0;
+        // Main measures short: the body is its content, not the old
+        // one-size 430.
+        o.record_body(230.0, screen, cap);
+        assert_eq!(o.body_h, 230.0);
+        // Controls has no measurement yet: the previous size survives until
+        // this frame's pass measures (one frame, under the fade-in).
+        o.enter_page(Page::Controls, Row::Graphics);
+        assert_eq!(o.body_h, 230.0);
+        // Controls measures taller than the cap: clamped to it.
+        o.record_body(2000.0, screen, cap);
+        assert_eq!(o.body_h, cap);
+        // Mid-visit content changes do not resize the panel.
+        o.record_body(1600.0, screen, cap);
+        assert_eq!(o.body_h, cap);
+        o.back();
+        assert_eq!(o.body_h, 230.0, "back to Main: its cached size");
+        // A new screen size re-measures.
+        let screen = egui::vec2(480.0, 400.0);
+        o.record_body(200.0, screen, 0.8 * screen.y - 40.0);
+        assert_eq!(o.body_h, 200.0);
+    }
+
+    /// Pointer events arrive in surface px and map to egui points by `ppp`
+    /// alone: the egui screen rect is the whole surface, so cutout insets
+    /// must not shift them (a shift made the close X untappable).
+    #[test]
+    fn pointer_events_ignore_the_safe_insets() {
+        let mut o = Overlay::new();
+        o.ppp = 2.0;
+        o.insets_px = [140.0, 0.0, 0.0, 0.0];
+        o.pointer_moved(60.0, 100.0);
+        assert_eq!(
+            o.events.pop(),
+            Some(egui::Event::PointerMoved(egui::pos2(30.0, 50.0)))
+        );
+        o.events.clear();
+        o.pointer_button(60.0, 100.0, true);
+        match o.events.pop() {
+            Some(egui::Event::PointerButton { pos, .. }) => assert_eq!(pos, egui::pos2(30.0, 50.0)),
+            e => panic!("not a pointer button: {e:?}"),
+        }
+    }
+
+    /// The panel's area loses each axis's larger inset on both sides: a
+    /// cutout on the left only keeps the panel centred on the screen.
+    #[test]
+    fn safe_screen_is_symmetric() {
+        let full = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 500.0));
+        let s = safe_screen(full, [140.0, 0.0, 0.0, 20.0], 2.0);
+        assert_eq!(s.center(), full.center());
+        assert_eq!(s.width(), 1000.0 - 140.0);
+        assert_eq!(s.height(), 500.0 - 20.0);
+        assert_eq!(safe_screen(full, [0.0; 4], 2.0), full);
     }
 
     #[test]

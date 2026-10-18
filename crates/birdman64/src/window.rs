@@ -1995,6 +1995,12 @@ impl ApplicationHandler<UserEvent> for App {
                 if let (true, Some(o)) = (settings::is_open(), &mut self.overlay) {
                     o.pointer_moved(x, y);
                     o.pointer_button(x, y, pressed);
+                    if !pressed {
+                        // No hover after a lift: the next touch-down must
+                        // not carry the jump from here (a drag would scroll
+                        // by it).
+                        o.pointer_gone();
+                    }
                     self.request_overlay_redraw();
                 }
             }

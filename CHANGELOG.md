@@ -9,10 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- The settings menu keeps one fixed size on every page instead of resizing
-  as you move between pages and rows.
-- Android: the settings lists scroll by dragging with a finger, and the rows
-  are bigger and easier to tap.
+- The settings menu keeps its size while you move between rows on a page; it
+  only changes size when you go to another page.
+- Android: the settings lists scroll by dragging with a finger, and a new drag
+  continues from where the list was. The rows are bigger and easier to tap.
+- Android: the Controls page fits the screen, with the controller beside the
+  list, and the close button and dimmed background line up with the screen.
 - Android: picking the ROM from some storage apps could close the app
   instead of falling back to a default file name.
 
