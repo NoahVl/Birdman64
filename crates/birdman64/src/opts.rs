@@ -313,6 +313,15 @@ pub fn texture_pack_env() -> bool {
     std::env::var_os("PW64_TEX_PACKS").is_some_and(|d| !d.is_empty())
 }
 
+/// Movable HUD offsets (N64 px per element id): `PW64_HUD_OFFSETS`
+/// (`name=dx,dy;...`, dev override) or `[hud]` ("Move HUD" saves it).
+pub fn hud_offsets() -> pw64_gfx::hud::HudOffsets {
+    match std::env::var("PW64_HUD_OFFSETS") {
+        Ok(s) if !s.trim().is_empty() => crate::hud_edit::parse_env(&s),
+        _ => crate::hud_edit::offsets_from(&crate::config::get().hud),
+    }
+}
+
 /// OLED care (O3). `PW64_OLED=<0|1>` or `[oled] drift`: the HUD drifts
 /// (spreads burn-in). The env var presets the quick care mode: drift on
 /// and the brightness at most 0.8 unless the config dimmed further.

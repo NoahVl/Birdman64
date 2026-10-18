@@ -24,6 +24,7 @@ mod config;
 #[cfg(feature = "first-run")]
 mod firstrun;
 mod hle;
+mod hud_edit;
 mod input;
 mod opts;
 mod packs;
@@ -49,10 +50,12 @@ compile_error!(
 );
 mod rom_screen;
 mod rom_setup;
+mod save_transfer;
 mod settings;
 mod sys;
 mod toast;
 mod touch;
+pub mod unlock;
 mod window;
 
 use pw64_platform::{headless, os};

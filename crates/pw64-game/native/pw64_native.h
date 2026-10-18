@@ -116,6 +116,25 @@ void pw64_hud_anchor_xy(int x, int y);
  * hud.c.patch brackets the HUD branch of hudMainRender with it; the
  * renderer only uses the tag when OLED care is on. */
 void pw64_hud_tag(int on);
+/* Movable HUD elements ("PWE", same file, pw64-gfx interp::HUD_ELEM_TAG):
+ * the element of the following draws / text printed now (0 = none; ids
+ * must match the names in birdman64 hud_edit.rs). Text keeps the element
+ * of its print (font.c.patch). */
+#define PW64_HUD_SPEED 1
+#define PW64_HUD_TIMER 2
+#define PW64_HUD_THROTTLE 3
+#define PW64_HUD_FUEL 4
+#define PW64_HUD_ALTIMETER 5
+#define PW64_HUD_RADAR 6
+#define PW64_HUD_SEA_LEVEL 7
+#define PW64_HUD_PHOTOS 8
+#define PW64_HUD_MESSAGES 9
+#define PW64_HUD_CB_POWER 10
+#define PW64_HUD_CB_HEADING 11
+#define PW64_HUD_CB_ELEVATION 12
+extern int pw64_hud_elem;
+void pw64_hud_element(int id);
+void pw64_hud_emit_element(int id);
 /* Split-screen HUD view ("PWS", same file, pw64-gfx interp::SPLIT_TAG):
  * hudMainRender brackets the HUD with the current player's view. */
 void pw64_hud_split_tag(int on);

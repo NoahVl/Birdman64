@@ -13,8 +13,10 @@
  STATIC_DATA Gfx sFontDList[FONT_DL_COUNT * 2];
  STATIC_DATA FontMessage sFontMessages[FONT_MSG_COUNT];
 +// PW64: widescreen HUD anchor per message (pw64_widescreen.c), both
-+// anchors packed as u16 (horizontal | vertical << 8).
-+static u16 sPw64MsgAnchor[FONT_MSG_COUNT];
++// anchors and the movable HUD element packed as u32 (horizontal |
++// vertical << 8 | element << 16).
++static u32 sPw64MsgAnchor[FONT_MSG_COUNT];
++#define PW64_MSG_TAGS() ((u32)pw64_hud_anchor | ((u32)pw64_hud_vanchor << 8) | ((u32)pw64_hud_elem << 16))
  
  STATIC_DATA Sprite sFontSprite = {
      0,                     // x
@@ -53,7 +55,7 @@
  
          if (str16[i16] == 0xFD) {
              sFontMessages[sFontMsgCount].str16[i] = -1;
-+            sPw64MsgAnchor[sFontMsgCount] = pw64_hud_anchor | (pw64_hud_vanchor << 8);
++            sPw64MsgAnchor[sFontMsgCount] = PW64_MSG_TAGS();
              sFontMsgCount++;
              sFontMessages[sFontMsgCount].r = sFontColorR;
              sFontMessages[sFontMsgCount].g = sFontColorG;
@@ -61,7 +63,7 @@
          sFontMessages[sFontMsgCount].str16[i] = -1;
      }
  
-+    sPw64MsgAnchor[sFontMsgCount] = pw64_hud_anchor | (pw64_hud_vanchor << 8);
++    sPw64MsgAnchor[sFontMsgCount] = PW64_MSG_TAGS();
      sFontMsgCount++;
      if (sp24 != 0) {
          ret = -1;
@@ -69,7 +71,7 @@
  
      sFontMessages[sFontMsgCount].str16[strLen] = -1;
      sFontMessages[sFontMsgCount].font = gGfxUnkPtrs->fonts[sFontCurId];
-+    sPw64MsgAnchor[sFontMsgCount] = pw64_hud_anchor | (pw64_hud_vanchor << 8);
++    sPw64MsgAnchor[sFontMsgCount] = PW64_MSG_TAGS();
      sFontMsgCount++;
  }
  
@@ -78,16 +80,24 @@
  
      for (i = 0; i < sFontMsgCount; i++) {
 +        // PW64: each message keeps the widescreen HUD anchors of its print.
-+        if (i == 0 || sPw64MsgAnchor[i] != sPw64MsgAnchor[i - 1]) {
++        if (i == 0 || (sPw64MsgAnchor[i] & 0xFFFF) != (sPw64MsgAnchor[i - 1] & 0xFFFF)) {
 +            pw64_hud_emit_anchor(sPw64MsgAnchor[i] & 0xFF);
-+            pw64_hud_emit_vanchor(sPw64MsgAnchor[i] >> 8);
++            pw64_hud_emit_vanchor((sPw64MsgAnchor[i] >> 8) & 0xFF);
++        }
++        // PW64: and its movable HUD element (only on a change: outside the
++        // flight HUD everything is element 0 and nothing is emitted).
++        if ((s32)(sPw64MsgAnchor[i] >> 16) != (i == 0 ? pw64_hud_elem : (s32)(sPw64MsgAnchor[i - 1] >> 16))) {
++            pw64_hud_emit_element(sPw64MsgAnchor[i] >> 16);
 +        }
          uvFontMsgGenDlist(&sFontMessages[i]);
      }
-+    if (sPw64MsgAnchor[sFontMsgCount - 1] !=
-+        (u16)(pw64_hud_anchor | (pw64_hud_vanchor << 8))) {
++    if ((sPw64MsgAnchor[sFontMsgCount - 1] & 0xFFFF) !=
++        (u32)(pw64_hud_anchor | (pw64_hud_vanchor << 8))) {
 +        pw64_hud_emit_anchor(pw64_hud_anchor);
 +        pw64_hud_emit_vanchor(pw64_hud_vanchor);
++    }
++    if ((s32)(sPw64MsgAnchor[sFontMsgCount - 1] >> 16) != pw64_hud_elem) {
++        pw64_hud_emit_element(pw64_hud_elem);
 +    }
      spFinish(&gGfxDisplayListHead);
      gGfxDisplayListHead--;

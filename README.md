@@ -171,6 +171,9 @@ button printed B is the N64 A):
 - Gamepads (including Switch 2 controllers over Bluetooth, experimental)
 - An in-game settings screen (F10, Esc or pad Select) that rebinds every
   key and button and saves to `pw64.toml`
+- An "Unlock everything" cheat on the settings screen: gold medals on every
+  test, every class, the bonus games and Birdman (your save is backed up first
+  and can be restored from the same screen)
 - One-time setup that builds the game from your own ROM: nothing but our own
   code ships in the download
 
@@ -267,6 +270,13 @@ The save itself, `pw64.eep`, is a raw N64 EEPROM image: no header and no byte
 swapping (unlike `.v64` ROM files). It is written as 2048 bytes. The game's
 two save files sit at offsets 0x000 and 0x100 inside it (Birdman64 emulates a
 4 Kbit EEPROM, so the first 512 bytes are the part the game uses).
+
+**Moving a save between devices (PC ↔ Android):** open the pause menu and pick
+"Export save…" on the device that has the save, save the file somewhere you can
+reach from the other device (cloud drive, USB cable, messaging app to yourself),
+then pick "Import save…" there and choose it. The game restarts with the new
+save; the one it replaced is kept as `pw64.eep.before-import`. The file is the
+same `pw64.eep` on every platform.
 
 **Using an emulator save:** quit Birdman64 and back up your `pw64.eep` first,
 then copy the emulator's save file over it. A Project64, mupen64plus or

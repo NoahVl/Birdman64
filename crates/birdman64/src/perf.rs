@@ -108,6 +108,11 @@ pub struct Cfg {
     pub cpu: bool,
     pub gpu: bool,
     pub corner: Corner,
+    /// Free position from the "Move HUD" edit mode: the card's top-left
+    /// as fractions of the window (`[perf] pos`). Wins over `corner`;
+    /// picking a corner in the settings clears it. The card is kept on
+    /// screen whatever its size.
+    pub pos: Option<(f32, f32)>,
 }
 
 impl Cfg {
@@ -333,6 +338,9 @@ pub struct Hud {
     /// use; capacity 1, so a slow GPU just skips samples).
     gpu_tx: Option<std::sync::mpsc::SyncSender<Instant>>,
     gpu_smooth: Option<f32>,
+    /// Where the card was drawn last (physical px `[x0, y0, x1, y1]`;
+    /// `None` = not drawn): the "Move HUD" edit mode drags it.
+    rect: Option<[f32; 4]>,
 }
 
 impl Default for Hud {
@@ -356,7 +364,13 @@ impl Hud {
             gpu_us: Arc::new(AtomicU32::new(0)),
             gpu_tx: None,
             gpu_smooth: None,
+            rect: None,
         }
+    }
+
+    /// The card's last drawn rect (physical px), if it is on.
+    pub fn rect(&self) -> Option<[f32; 4]> {
+        self.rect
     }
 
     /// Game frames drained since the last present.
@@ -463,6 +477,7 @@ impl Hud {
         if !c.any() {
             self.cpu_on.store(false, Ordering::Relaxed);
             self.was_on = false;
+            self.rect = None;
             return;
         }
         // Switched on again: no stale numbers from the last time.
@@ -496,7 +511,12 @@ impl Hud {
             Vec::new(),
         );
         let ctx = self.ctx.clone();
-        let out = ctx.run(raw, |ctx| self.ui(ctx, c));
+        let mut rect = None;
+        let out = ctx.run(raw, |ctx| rect = Some(self.ui(ctx, c)));
+        self.rect = rect.map(|r| {
+            let k = ctx.pixels_per_point();
+            [r.min.x * k, r.min.y * k, r.max.x * k, r.max.y * k]
+        });
         settings::paint(
             gpu,
             &self.ctx,
@@ -507,7 +527,8 @@ impl Hud {
         );
     }
 
-    fn ui(&self, ctx: &egui::Context, c: Cfg) {
+    /// Builds the card; returns its rect (egui points).
+    fn ui(&self, ctx: &egui::Context, c: Cfg) -> egui::Rect {
         let st = &self.stats;
         let med = st.median_ms().unwrap_or(16.7);
         let fg = egui::Color32::from_rgb(240, 243, 250);
@@ -519,69 +540,78 @@ impl Hud {
             Corner::BottomLeft => egui::vec2(8.0, -8.0),
             Corner::BottomRight => egui::vec2(-8.0, -8.0),
         };
-        egui::Area::new(egui::Id::new("pw64 perf"))
-            .anchor(c.corner.anchor(), off)
-            .interactable(false)
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(bg)
-                    .corner_radius(5)
-                    .inner_margin(egui::Margin::symmetric(8, 6))
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                        // Every row is as wide as the graph: label left,
-                        // value right, so the numbers line up.
-                        if c.fps {
-                            let v = format!("{:.0}", st.fps);
-                            stat_row(ui, "FPS", &v, 17.0, fg, dim);
+        let area = egui::Area::new(egui::Id::new("pw64 perf")).interactable(false);
+        let area = match c.pos {
+            // Moved by the player: a free spot, kept on screen.
+            Some((fx, fy)) => {
+                let screen = ctx.content_rect();
+                area.fixed_pos(screen.min + egui::vec2(fx * screen.width(), fy * screen.height()))
+                    .constrain(true)
+            }
+            None => area.anchor(c.corner.anchor(), off),
+        };
+        area.show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(bg)
+                .corner_radius(5)
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    // Every row is as wide as the graph: label left,
+                    // value right, so the numbers line up.
+                    if c.fps {
+                        let v = format!("{:.0}", st.fps);
+                        stat_row(ui, "FPS", &v, 17.0, fg, dim);
+                    }
+                    if c.frametime
+                        && let Some(ms) = st.latest_ms()
+                    {
+                        stat_row(ui, "Frame", &format!("{ms:.1} ms"), 12.0, fg, dim);
+                    }
+                    if c.lows {
+                        let v = st
+                            .low_1pct_fps()
+                            .map_or("--".to_string(), |f| format!("{f:.0}"));
+                        stat_row(ui, "1% low", &v, 12.0, fg, dim);
+                    }
+                    if c.graph {
+                        graph(ui, st, med);
+                        // Only while the history holds skips: keeps the card
+                        // quiet when everything is smooth.
+                        if st.skipped() > 0 {
+                            let v = st.skipped().to_string();
+                            stat_row(
+                                ui,
+                                "Skipped",
+                                &v,
+                                12.0,
+                                egui::Color32::from_rgb(235, 90, 80),
+                                dim,
+                            );
                         }
-                        if c.frametime
-                            && let Some(ms) = st.latest_ms()
-                        {
-                            stat_row(ui, "Frame", &format!("{ms:.1} ms"), 12.0, fg, dim);
-                        }
-                        if c.lows {
-                            let v = st
-                                .low_1pct_fps()
-                                .map_or("--".to_string(), |f| format!("{f:.0}"));
-                            stat_row(ui, "1% low", &v, 12.0, fg, dim);
-                        }
-                        if c.graph {
-                            graph(ui, st, med);
-                            // Only while the history holds skips: keeps the card
-                            // quiet when everything is smooth.
-                            if st.skipped() > 0 {
-                                let v = st.skipped().to_string();
-                                stat_row(
-                                    ui,
-                                    "Skipped",
-                                    &v,
-                                    12.0,
-                                    egui::Color32::from_rgb(235, 90, 80),
-                                    dim,
-                                );
+                    }
+                    if c.cpu {
+                        let v = match self.cpu.load(Ordering::Relaxed) {
+                            u32::MAX => "--".to_string(),
+                            t => format!("{:.0}%", t as f32 / 10.0),
+                        };
+                        stat_row(ui, "CPU core", &v, 12.0, fg, dim);
+                    }
+                    if c.gpu {
+                        let v = match (self.gpu_smooth, st.fps > 0.0) {
+                            // Busy time over the frame interval.
+                            (Some(ms), true) => {
+                                format!("{:.0}%", (ms * st.fps / 10.0).clamp(0.0, 100.0))
                             }
-                        }
-                        if c.cpu {
-                            let v = match self.cpu.load(Ordering::Relaxed) {
-                                u32::MAX => "--".to_string(),
-                                t => format!("{:.0}%", t as f32 / 10.0),
-                            };
-                            stat_row(ui, "CPU core", &v, 12.0, fg, dim);
-                        }
-                        if c.gpu {
-                            let v = match (self.gpu_smooth, st.fps > 0.0) {
-                                // Busy time over the frame interval.
-                                (Some(ms), true) => {
-                                    format!("{:.0}%", (ms * st.fps / 10.0).clamp(0.0, 100.0))
-                                }
-                                _ => "--".to_string(),
-                            };
-                            stat_row(ui, "GPU", &v, 12.0, fg, dim);
-                        }
-                    });
-            });
+                            _ => "--".to_string(),
+                        };
+                        stat_row(ui, "GPU", &v, 12.0, fg, dim);
+                    }
+                });
+        })
+        .response
+        .rect
     }
 }
 

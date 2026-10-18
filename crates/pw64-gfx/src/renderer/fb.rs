@@ -31,6 +31,7 @@
 
 use super::Renderer;
 use crate::frame::Frame;
+use crate::hud::{HUD_ELEMS, HudBounds};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -56,6 +57,13 @@ struct Target {
     /// them. `fb_copy` carries the flag; an empty task keeps it, a
     /// non-empty one without such a draw clears it.
     filled: bool,
+    /// The last non-empty task drawn here ([`Renderer::fb_apply`] only):
+    /// [`Renderer::fb_redraw`] draws it again (the movable-HUD edit mode
+    /// shows the paused frame with new offsets).
+    last: Option<Arc<Frame>>,
+    /// Movable HUD element bounds of the last non-empty task (target px,
+    /// no offsets; `crate::hud`).
+    hud: HudBounds,
 }
 
 /// The framebuffer targets of one [`Renderer`].
@@ -79,15 +87,31 @@ impl Renderer {
         if self.fbs.size == size {
             return;
         }
-        self.fbs.size = size;
+        let old_size = std::mem::replace(&mut self.fbs.size, size);
         let old = std::mem::take(&mut self.fbs.targets);
+        // HUD bounds follow the picture's scale.
+        let (kx, ky) = (
+            size.0 as f32 / old_size.0.max(1) as f32,
+            size.1 as f32 / old_size.1.max(1) as f32,
+        );
         for (fb, t) in old {
             // The picture survives the resample, so its classification
             // does too.
             let filled = t.filled;
             let new = self.new_fb_target(size);
             self.blit_into(&t.view, &new.view, wgpu::FilterMode::Linear, None);
-            self.fbs.targets.insert(fb, Target { filled, ..new });
+            let hud = t
+                .hud
+                .map(|b| b.map(|[x0, y0, x1, y1]| [x0 * kx, y0 * ky, x1 * kx, y1 * ky]));
+            self.fbs.targets.insert(
+                fb,
+                Target {
+                    filled,
+                    last: t.last,
+                    hud,
+                    ..new
+                },
+            );
         }
     }
 
@@ -115,7 +139,12 @@ impl Renderer {
     /// Applies one [`FbOp`].
     pub fn fb_apply(&mut self, op: &FbOp) {
         match op {
-            FbOp::Draw { fb, frame } => self.fb_draw(*fb, frame),
+            FbOp::Draw { fb, frame } => {
+                self.fb_draw(*fb, frame);
+                if !frame.draws.is_empty() {
+                    self.fbs.targets.get_mut(fb).unwrap().last = Some(frame.clone());
+                }
+            }
             FbOp::Copy { dst, src } => self.fb_copy(*dst, *src),
             FbOp::Pixels { fb, frame } => self.fb_overlay(*fb, frame),
         }
@@ -175,8 +204,29 @@ impl Renderer {
             let size = self.fbs.size;
             let filled = frame.draws.iter().any(|d| self.extend_y(d, size));
             self.draw_frame(frame, &view, size, true);
-            self.fbs.targets.get_mut(&fb).unwrap().filled = filled;
+            let t = self.fbs.targets.get_mut(&fb).unwrap();
+            t.filled = filled;
+            t.hud = self.hud_bounds;
         }
+    }
+
+    /// Draws `fb`'s last task ([`FbOp::Draw`] via [`Self::fb_apply`]) again
+    /// over its target with the current options: the movable-HUD edit mode
+    /// moves elements on the paused frame. Exact when that task repaints
+    /// the whole picture before its HUD (flight: the world view and the
+    /// border bars do), which is where the HUD is. False: nothing to draw.
+    pub fn fb_redraw(&mut self, fb: u32) -> bool {
+        let Some(frame) = self.fbs.targets.get(&fb).and_then(|t| t.last.clone()) else {
+            return false;
+        };
+        self.fb_draw(fb, &frame);
+        true
+    }
+
+    /// Movable HUD element bounds of `fb`'s last non-empty task (target px
+    /// of [`Self::fb_size`], drawn without offsets; `crate::hud`).
+    pub fn fb_hud_bounds(&self, fb: u32) -> Option<&HudBounds> {
+        self.fbs.targets.get(&fb).map(|t| &t.hud)
     }
 
     /// CPU pixel writes into `fb` (snow.c's `snowDraw` on the finished
@@ -216,9 +266,13 @@ impl Renderer {
         if dst == src {
             return;
         }
-        let filled = self.fbs.targets.get(&src).is_some_and(|t| t.filled);
+        let (filled, last, hud) = match self.fbs.targets.get(&src) {
+            Some(t) => (t.filled, t.last.clone(), t.hud),
+            None => (false, None, [None; HUD_ELEMS]),
+        };
         self.fb_target(dst);
-        self.fbs.targets.get_mut(&dst).unwrap().filled = filled;
+        let t = self.fbs.targets.get_mut(&dst).unwrap();
+        (t.filled, t.last, t.hud) = (filled, last, hud);
         let size = self.fbs.size;
         let mut enc = self.device.create_command_encoder(&Default::default());
         match self.fbs.targets.get(&src) {
@@ -366,6 +420,8 @@ impl Renderer {
             tex,
             view,
             filled: false,
+            last: None,
+            hud: [None; HUD_ELEMS],
         }
     }
 
@@ -804,6 +860,50 @@ mod tests {
         assert_eq!(px(&img, w, 2, 36), BLUE, "margin kept");
         assert_eq!(px(&img, w, 125, 36), BLUE, "margin kept");
         assert_eq!(px(&img, w, 64, 36), GREEN, "overlay drawn");
+    }
+
+    /// Movable HUD edit mode: `fb_redraw` draws the last `fb_apply` task
+    /// again with the current offsets; the bounds are kept per target,
+    /// follow a resample and copy with the pixels.
+    #[test]
+    fn redraw_applies_new_hud_offsets() {
+        let Some(mut r) = renderer(1, Widescreen::Off) else {
+            eprintln!("no GPU adapter; skipped");
+            return;
+        };
+        let (w, h) = (64, 48);
+        r.set_fb_size((w, h));
+        assert!(!r.fb_redraw(1), "nothing drawn yet");
+        let mut f = red_green_frame();
+        f.draws[1].hud = true;
+        f.draws[1].elem = 2;
+        r.fb_apply(&FbOp::Draw {
+            fb: 1,
+            frame: Arc::new(f),
+        });
+        assert_eq!(px(&r.fb_read_rgba(1).unwrap(), w, 30, 24), RED);
+        assert_eq!(
+            r.fb_hud_bounds(1).unwrap()[2],
+            Some([32.0, 0.0, 64.0, 48.0])
+        );
+        r.options.hud_offsets[2] = [-20.0, 0.0]; // 4 target px
+        assert!(r.fb_redraw(1));
+        let img = r.fb_read_rgba(1).unwrap();
+        assert_eq!(px(&img, w, 27, 24), RED);
+        assert_eq!(px(&img, w, 29, 24), GREEN);
+        assert_eq!(
+            r.fb_hud_bounds(1).unwrap()[2],
+            Some([32.0, 0.0, 64.0, 48.0]),
+            "bounds are without offsets"
+        );
+        r.fb_apply(&FbOp::Copy { dst: 3, src: 1 });
+        assert_eq!(r.fb_hud_bounds(3), r.fb_hud_bounds(1));
+        r.set_fb_size((128, 96));
+        assert_eq!(
+            r.fb_hud_bounds(1).unwrap()[2],
+            Some([64.0, 0.0, 128.0, 96.0])
+        );
+        assert!(r.fb_redraw(3));
     }
 
     /// Present letterboxes the target into the window; resizing the
