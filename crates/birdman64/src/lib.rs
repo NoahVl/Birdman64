@@ -229,7 +229,8 @@ pub(crate) fn start(first: Option<&std::ffi::OsStr>, rom_arg: Option<std::path::
     // Android and iOS: gilrs has no backend on Android and btleplug's needs
     // JNI setup there (and would touch CoreBluetooth without a usage string
     // on iOS), so neither starts; pads arrive as window key events
-    // (input/android_pad.rs) until the native pad backends land.
+    // (input/mobile_pad.rs, iOS also via GameController) until the native
+    // pad backends land.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if std::env::var_os("PW64_NO_INPUT").is_none() {
         input::spawn();

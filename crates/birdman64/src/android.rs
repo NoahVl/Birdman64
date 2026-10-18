@@ -10,7 +10,7 @@
 //!
 //! Everything after the paths runs the desktop code unchanged
 //! (`crate::start` → `window::run`); the window's `resumed`/`suspended`
-//! handle the Android lifecycle, `input/android_pad.rs` the pads.
+//! handle the Android lifecycle, `input/mobile_pad.rs` the pads.
 
 pub(crate) mod rom_picker;
 

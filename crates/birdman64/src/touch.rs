@@ -654,17 +654,17 @@ impl Controls {
         self.drag.map(|(_, g, _)| g)
     }
 
-    /// Android only in the window (`window.rs` calls it from the pad-key
-    /// path: a physical pad hides the controls); unit tests exercise it
-    /// everywhere.
-    #[cfg(any(target_os = "android", test))]
+    /// Mobile only in the window (`window.rs` calls it from the pad-key
+    /// path on Android, the GameController poll on iOS: a physical pad
+    /// hides the controls); unit tests exercise it everywhere.
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
     pub fn visible(&self) -> bool {
         self.visible
     }
 
     /// A physical pad was used: hide and release everything. The next
     /// touch shows the controls again.
-    #[cfg(any(target_os = "android", test))]
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
     pub fn hide(&mut self) {
         self.visible = false;
         self.fingers.clear();

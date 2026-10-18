@@ -1397,6 +1397,14 @@ impl App {
         }
         // Touch controls (Android/iOS): after the shot readback (they are
         // not part of the picture), hidden under the overlay.
+        // iOS: poll the GameController pads first (once per frame, main
+        // thread): a new pad press hides the touch controls, as an
+        // Android pad key does.
+        #[cfg(target_os = "ios")]
+        if input::ios_gc_poll() && self.touch.visible() && !self.touch.editing() {
+            self.touch.hide();
+            input::set_touch(crate::touch::TouchPad::IDLE);
+        }
         #[cfg(any(target_os = "android", target_os = "ios"))]
         if !settings::is_open() {
             // A relayout mid-touch drops the fingers: republish, or what

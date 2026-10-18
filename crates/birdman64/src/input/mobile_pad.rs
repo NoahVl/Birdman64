@@ -1,13 +1,16 @@
-//! Android pads → N64 controller slots. gilrs has no Android backend, so the
-//! window feeds pad key events here: winit reports gamepad keys as
-//! `PhysicalKey::Unidentified(NativeKeyCode::Android(keycode))` and the
-//! d-pad as the arrow keys. Each Android keycode becomes the gilrs
-//! [`Button`] at the same position, so the `[input.gamepad]` bindings, pad
-//! capture, the settings trigger and the overlay navigation behave as for
-//! desktop pads. The state lands in the same `gamepads` list the gilrs
-//! thread fills (one entry, id [`PAD_ID`]). The on-screen touch controls'
-//! state lives in [`super::touch_pad`] (shared with iOS); this module reads
-//! it on every republish, so keys, axes and touch land in one publish.
+//! Mobile pads → N64 controller slots. gilrs has no Android or iOS
+//! backend, so a platform module feeds the pad state here: on Android the
+//! window reports pad keys as `PhysicalKey::Unidentified(NativeKeyCode::
+//! Android(keycode))` and the d-pad as the arrow keys ([`android_key`]);
+//! on iOS the GameController poller (`ios_gc.rs`) pushes a full pad state
+//! through [`set_pad`] every frame. Each Android keycode / GC button
+//! becomes the gilrs [`Button`] at the same position, so the
+//! `[input.gamepad]` bindings, pad capture, the settings trigger and the
+//! overlay navigation behave as for desktop pads. The state lands in the
+//! same `gamepads` list the gilrs thread fills on desktop (one entry, id
+//! [`PAD_ID`]). The on-screen touch controls' state lives in
+//! [`super::touch_pad`] (shared with iOS); this module reads it on every
+//! republish, so keys, axes and touch land in one publish.
 //!
 //! TODO(android): analog sticks and triggers. winit 0.30 turns joystick
 //! MotionEvents into `Touch` events (X/Y only, no source), so the axes
@@ -18,24 +21,36 @@
 //! JNI): every pad merges into one "Android gamepad" entry today.
 
 use super::{
-    CAPTURED_BUTTON, CONT_A, CONT_B, CONT_DOWN, CONT_LEFT, CONT_RIGHT, CONT_START, CONT_UP,
-    FOCUSED, PAD_CAPTURE, Pad, SOURCES, TRIGGER_THRESHOLD, c_stick_buttons, digital_stick,
-    gamepad_bindings, hat_buttons, publish, slot_bits_pad, stick_to_n64,
+    CONT_A, CONT_B, CONT_DOWN, CONT_LEFT, CONT_RIGHT, CONT_START, CONT_UP, FOCUSED, Pad, SOURCES,
+    TRIGGER_THRESHOLD, c_stick_buttons, digital_stick, gamepad_bindings, hat_buttons, publish,
+    slot_bits_pad, stick_to_n64,
 };
+// Pad capture (settings rebinding): Android key events, iOS `set_pad`.
+use super::{CAPTURED_BUTTON, PAD_CAPTURE};
 use crate::touch::TouchPad;
 use gilrs::Button;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
+// Android key events only: winit's Android keycode repr.
+#[cfg(target_os = "android")]
 use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
 
-/// The `gamepads` entry id: no gilrs ids exist on Android to collide with.
+/// The `gamepads` entry id: no gilrs ids exist on mobile to collide with.
 const PAD_ID: usize = 0;
+/// The published pad name until [`set_pad`] stores a device's own name:
+/// every Android pad merges into one entry today; on iOS the touch
+/// controls are the pad until a GameController is seen.
+#[cfg(target_os = "android")]
 const PAD_NAME: &str = "Android gamepad";
+#[cfg(target_os = "ios")]
+const PAD_NAME: &str = "Touch controls";
 
 /// Android `KeyEvent` keycodes (android/keycodes.h).
+#[cfg(target_os = "android")]
 const KEYCODE_BACK: u32 = 4;
 
 /// What the window should do with a key event.
+#[cfg(target_os = "android")]
 pub enum AndroidKey {
     /// A pad key: consumed here.
     Pad,
@@ -67,6 +82,9 @@ struct State {
     /// Some axis event arrived: the d-pad stops doubling as the stick.
     axes_seen: bool,
     settings_down: bool,
+    /// The pad name a platform module stored ([`set_pad`]); empty falls
+    /// back to [`PAD_NAME`].
+    name: String,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
@@ -83,10 +101,12 @@ static STATE: Mutex<State> = Mutex::new(State {
     },
     axes_seen: false,
     settings_down: false,
+    name: String::new(),
 });
 
 /// Android gamepad keycode → the gilrs button at the same position
 /// (BUTTON_A is the bottom face button = `South`). Pure.
+#[cfg(target_os = "android")]
 pub fn button_for_keycode(code: u32) -> Option<Button> {
     Some(match code {
         19 => Button::DPadUp,
@@ -115,6 +135,7 @@ pub fn button_for_keycode(code: u32) -> Option<Button> {
 /// The window's key event → pad state. The arrow keys count as the d-pad
 /// (that is how winit reports a pad's d-pad; a Bluetooth keyboard's arrows
 /// then steer too, as on desktop).
+#[cfg(target_os = "android")]
 pub fn android_key(key: PhysicalKey, pressed: bool, repeat: bool) -> AndroidKey {
     let button = match key {
         PhysicalKey::Unidentified(NativeKeyCode::Android(KEYCODE_BACK)) => {
@@ -179,6 +200,32 @@ pub fn set_axes(axes: Axes) {
     st.axes = axes;
     st.axes_seen = true;
     republish_state(&mut st, crate::settings::pad_button());
+}
+
+/// The iOS GameController poller's hook (`ios_gc::poll`, called every
+/// frame): replaces the whole pad state — buttons, axes and the device
+/// name for the settings screen. Axes always arrive here, so the d-pad
+/// never doubles as the stick. No Android caller yet (keys only).
+#[allow(dead_code)]
+pub fn set_pad(held: &[Button], axes: Axes, name: &str) {
+    let settings_btn = crate::settings::pad_button();
+    let mut st = STATE.lock().unwrap();
+    // Pad capture (settings screen rebinding), as in `android_key`: the
+    // first newly pressed button is stored for the overlay (the game is
+    // paused under it, so the press also reaching the pad is harmless).
+    if PAD_CAPTURE.load(Ordering::Relaxed)
+        && let Some(&b) = held
+            .iter()
+            .find(|&&b| !st.held.contains(&b) && b != Button::Mode && b != settings_btn)
+    {
+        *CAPTURED_BUTTON.lock().unwrap() = Some(b);
+        PAD_CAPTURE.store(false, Ordering::Relaxed);
+    }
+    st.held = held.to_vec();
+    st.axes = axes;
+    st.axes_seen = true;
+    st.name = name.to_string();
+    republish_state(&mut st, settings_btn);
 }
 
 /// One pad's N64 state from the resolved gamepad bindings (the gilrs
@@ -273,8 +320,13 @@ fn republish_state(st: &mut State, settings_btn: Button) {
     let touch = super::touch_pad::touch();
     let pad = game_pad(&st.held, &st.axes, st.axes_seen, &touch);
     let nav = nav_pad(&st.held, &st.axes);
+    let name = if st.name.is_empty() {
+        PAD_NAME
+    } else {
+        &st.name
+    };
     let mut s = SOURCES.lock().unwrap();
-    s.gamepads = vec![(PAD_ID, PAD_NAME.to_string(), pad)];
+    s.gamepads = vec![(PAD_ID, name.to_string(), pad)];
     s.nav = nav;
     publish(&mut s);
 }

@@ -69,6 +69,18 @@ btleplug = "0.11"
 futures = "0.3"
 # iOS app storage (crates/birdman64/src/paths.rs): the Documents folder.
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSPathUtilities"] }
+# GameController pads on iOS (src/input/ios_gc.rs): the extended-gamepad
+# profile read per frame; its button/axis element classes come along.
+objc2-game-controller = { version = "0.3", features = [
+    "GCController",
+    "GCExtendedGamepad",
+    "GCPhysicalInputProfile",
+    "GCControllerElement",
+    "GCControllerButtonInput",
+    "GCControllerAxisInput",
+    "GCControllerDirectionPad",
+    "GCDevice",
+] }
 # GATT characteristic UUIDs (btleplug doesn't re-export its uuid).
 uuid = "1"
 cc = "1.2"

@@ -64,6 +64,8 @@ rfd.workspace = true
 # the data dir, the ROM scan root and what the Files app shows the player.
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2-foundation.workspace = true
+# GameController pads (src/input/ios_gc.rs).
+objc2-game-controller.workspace = true
 
 # Android (src/android.rs): winit's NativeActivity backend (android-activity,
 # re-exported as `winit::platform::android::activity`); libc (cfg(unix)
