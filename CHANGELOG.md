@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- iOS: the project no longer provides ready-made test builds. Build the app
+  yourself in a private copy of the repository (free, no Mac needed) or on a
+  Mac; the README's iPhone section has the steps.
+
 ## [1.5.0] - 2026-10-18
 
 ### Added

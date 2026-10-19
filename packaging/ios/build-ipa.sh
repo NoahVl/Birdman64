@@ -6,7 +6,7 @@
 #
 # Needs macOS with Xcode (the iOS SDK) and rustup; the decomp submodule, the
 # Rust target and zig are fetched on first use. No Mac: the "Build iOS app"
-# workflow (.github/workflows/ios-ipa.yml) runs this in your own fork.
+# workflow (.github/workflows/ios-ipa.yml) runs this in your own private copy.
 #
 # Usage: packaging/ios/build-ipa.sh [--sim] [--debug]
 #

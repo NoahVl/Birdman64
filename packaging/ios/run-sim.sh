@@ -12,7 +12,8 @@
 #
 # Click with the mouse = touch. The app's log lands in the app container's
 # Documents/birdman64.log (printed below; birdman64-previous.log holds the
-# previous run). Debugging the CI smoke run instead: artifacts ios-sim*.
+# previous run). Debugging the CI smoke run instead: artifact ios-sim
+# (screenshot + log).
 set -euo pipefail
 [ "$(uname -s)" = Darwin ] || { echo "error: this script needs macOS (xcrun/simctl)" >&2; exit 1; }
 cd "$(dirname "$0")/../.."
