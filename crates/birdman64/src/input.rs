@@ -38,7 +38,9 @@ use winit::keyboard::KeyCode;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod mobile_pad;
 #[cfg(target_os = "android")]
-pub use mobile_pad::{AndroidKey, android_key};
+pub use mobile_pad::{AndroidKey, android_axis, android_key};
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+mod pad_axes;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 mod touch_pad;
 #[cfg(any(target_os = "android", target_os = "ios"))]

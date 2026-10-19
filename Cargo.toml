@@ -102,3 +102,9 @@ embed-resource = "3"
 lto = "thin"
 codegen-units = 1
 debug = "limited"
+
+# winit 0.30.13 + one Android commit: gamepad sticks, analog triggers and the
+# hat arrive as `WindowEvent::AxisMotion` instead of being turned into touches
+# (docs/notes/android.md "Pad axes"). Other platforms are unchanged.
+[patch.crates-io]
+winit = { git = "https://github.com/NoahVl/winit", rev = "50e3008b5e0de009ec23b7be733fc3b4bcaf58cb" }

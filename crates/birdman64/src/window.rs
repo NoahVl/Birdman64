@@ -2101,6 +2101,22 @@ impl ApplicationHandler<UserEvent> for App {
             // Android/iOS: in the game, touches drive the on-screen
             // controls (touch.rs; multi-touch by finger id). On the ROM
             // screen and the settings overlay a tap acts like a mouse click.
+            // Android: a pad's sticks, analog triggers and hat (one event per
+            // axis; the patched winit reports joystick MotionEvents this way).
+            #[cfg(target_os = "android")]
+            WindowEvent::AxisMotion { axis, value, .. } => {
+                if self.rom_screen.is_none()
+                    && input::android_axis(axis, value as f32)
+                    && self.touch.visible()
+                    && !self.touch.editing()
+                {
+                    self.touch.hide();
+                    input::set_touch(crate::touch::TouchPad::IDLE);
+                }
+                if settings::is_open() {
+                    self.request_overlay_redraw();
+                }
+            }
             #[cfg(any(target_os = "android", target_os = "ios"))]
             WindowEvent::Touch(t) => {
                 use winit::event::TouchPhase;

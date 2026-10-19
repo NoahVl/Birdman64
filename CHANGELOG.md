@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Android: the analog sticks, analog triggers and hat-style d-pads of
+  controllers now work, including the built-in controls of Android handhelds
+  (Retroid Pocket, AYN and similar). Before, only the buttons were read, so
+  you couldn't steer, and Z (on LT by default) never fired. The triggers and
+  d-pad can also be picked when rebinding.
+
 ## [1.5.0] - 2026-10-18
 
 ### Added

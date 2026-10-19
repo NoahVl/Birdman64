@@ -63,9 +63,15 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
   static block (NativeActivity's own dlopen isn't registered with the JVM —
   without it the callback throws UnsatisfiedLinkError). javac + d8 in
   build-apk.sh; manifest `hasCode` true.
-- **Gaps:** winit 0.30 turns joystick MotionEvents into `Touch` (X/Y only), so there
-  is no stick or trigger path yet (hook: `android_pad::set_axes`; the d-pad steers
-  meanwhile). Also missing: dialogs (rfd boxes are log-only), pad names, a "pad
+- **Pad axes:** stock winit 0.30 turns joystick MotionEvents into `Touch` (X/Y only).
+  Our winit fork (`[patch.crates-io]`, one commit on v0.30.13) sends a joystick-class
+  MotionEvent as one `WindowEvent::AxisMotion` per axis (id = `AMOTION_EVENT_AXIS_*`)
+  → `mobile_pad::android_axis` → `pad_axes::RawAxes`: right stick Z/RZ, triggers
+  max(LTRIGGER, BRAKE) / max(RTRIGGER, GAS), hat = d-pad; trigger/hat presses count as
+  LT2/RT2/DPad for pad capture. Device-tested with a virtual uhid pad (`hid` tool):
+  stick and hat move menus, touch controls hide. The first press sent < ~2 s after the
+  uhid device registers is lost.
+- **Gaps:** dialogs (rfd boxes are log-only), pad names, a "pad
   connected" signal (needs `InputManager` via JNI).
 - **Crash handler:** the `.so` range (`dl_iterate_phdr`, not signal-safe) is
   computed in `install`; the handler only reads the cache (Release/Acquire flag).
