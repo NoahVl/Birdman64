@@ -60,7 +60,7 @@ pub enum AndroidKey {
 
 pub use super::pad_axes::Axes;
 #[cfg(target_os = "android")]
-use super::pad_axes::{RawAxes, axis_buttons};
+use super::pad_axes::{RawAxes, axis_buttons, axis_name};
 
 struct State {
     held: Vec<Button>,
@@ -123,11 +123,63 @@ pub fn button_for_keycode(code: u32) -> Option<Button> {
     })
 }
 
+/// The names of the devices Android reports as game controllers, as the UI
+/// thread last read them (`android::window_mode`, about once a second).
+#[cfg(target_os = "android")]
+static ANDROID_PADS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// The last controller (or other key) input that reached the app, for the
+/// Controls page's test line: tells a player (and a bug report) whether
+/// presses arrive at all and as what.
+#[cfg(target_os = "android")]
+static LAST_INPUT: Mutex<String> = Mutex::new(String::new());
+
+/// Stores Android's game controller list (logged when it changes).
+#[cfg(target_os = "android")]
+pub fn set_android_pads(names: Vec<String>) {
+    let mut pads = ANDROID_PADS.lock().unwrap();
+    if *pads != names {
+        eprintln!("[input] game controllers: {names:?}");
+        *pads = names;
+    }
+}
+
+/// The game controllers Android reports (names).
+#[cfg(target_os = "android")]
+pub fn android_pads() -> Vec<String> {
+    ANDROID_PADS.lock().unwrap().clone()
+}
+
+/// The last input [`LAST_INPUT`] describes ("" = none yet).
+#[cfg(target_os = "android")]
+pub fn last_pad_input() -> String {
+    LAST_INPUT.lock().unwrap().clone()
+}
+
+#[cfg(target_os = "android")]
+fn note_input(what: String) {
+    eprintln!("[input] {what}");
+    *LAST_INPUT.lock().unwrap() = what;
+}
+
 /// The window's key event → pad state. The arrow keys count as the d-pad
 /// (that is how winit reports a pad's d-pad; a Bluetooth keyboard's arrows
 /// then steer too, as on desktop).
 #[cfg(target_os = "android")]
 pub fn android_key(key: PhysicalKey, pressed: bool, repeat: bool) -> AndroidKey {
+    if pressed && !repeat {
+        let code = match key {
+            PhysicalKey::Unidentified(NativeKeyCode::Android(c)) => format!("key code {c}"),
+            other => format!("{other:?}"),
+        };
+        let what = match key {
+            PhysicalKey::Unidentified(NativeKeyCode::Android(KEYCODE_BACK)) => "Back".into(),
+            PhysicalKey::Unidentified(NativeKeyCode::Android(c)) => {
+                button_for_keycode(c).map_or("not a controller button".into(), |b| format!("{b:?}"))
+            }
+            _ => "keyboard key".into(),
+        };
+        note_input(format!("{what} ({code})"));
+    }
     let button = match key {
         PhysicalKey::Unidentified(NativeKeyCode::Android(KEYCODE_BACK)) => {
             return if pressed && !repeat {
@@ -192,6 +244,9 @@ pub fn release_all() {
 /// touch controls, as a pad key does. Resting stick noise doesn't count.
 #[cfg(target_os = "android")]
 pub fn android_axis(axis: u32, value: f32) -> bool {
+    if value.abs() > 0.5 {
+        note_input(format!("axis {} {value:+.2}", axis_name(axis)));
+    }
     let settings_btn = crate::settings::pad_button();
     let mut st = STATE.lock().unwrap();
     st.raw.set(axis, value);

@@ -1823,8 +1823,11 @@ impl Overlay {
                 );
                 rows.push(Row::Reset(Kind::Gamepad));
                 // Switch 2 pads over Bluetooth (experimental), under the
-                // controller section.
-                rows.push(Row::Opt(Opt::Ble));
+                // controller section. Not on Android: the scanner never
+                // starts there.
+                if !cfg!(target_os = "android") {
+                    rows.push(Row::Opt(Opt::Ble));
+                }
                 rows.push(Row::Back);
                 rows
             }
@@ -2065,8 +2068,30 @@ impl Overlay {
                 self.text_row(ui, kb.len(), "Reset keyboard to defaults");
                 ui.add_space(4.0);
                 ui.strong("Controller");
+                // Android: no gilrs pad list. The controllers Android
+                // reports, and the last input that reached the app (a
+                // press test: does a handheld's pad arrive at all?).
+                #[cfg(target_os = "android")]
+                {
+                    let pads = input::android_pads();
+                    if pads.is_empty() {
+                        ui.weak(egui::RichText::new("No controller found.").size(14.0));
+                    } else {
+                        ui.label(format!("{} connected", pads.join(", ")));
+                    }
+                    let last = input::last_pad_input();
+                    ui.weak(
+                        egui::RichText::new(if last.is_empty() {
+                            "Press a controller button to test it.".to_string()
+                        } else {
+                            format!("Last input: {last}")
+                        })
+                        .size(14.0),
+                    );
+                }
                 // U9 status line: which pad the button names below come
                 // from.
+                #[cfg(not(target_os = "android"))]
                 match input::active_pad() {
                     Some(pad) => {
                         ui.label(format!("{} connected", pad.name));
@@ -2104,10 +2129,13 @@ impl Overlay {
                 );
                 self.text_row(ui, kb.len() + 1 + gp.len(), "Reset gamepad to defaults");
                 ui.add_space(4.0);
-                self.opt_row(ui, at(Row::Opt(Opt::Ble)), Opt::Ble);
-                // What BLE is doing right now (redrawn every overlay frame).
-                for line in ble_status_lines(crate::ble::locked_by(), &crate::ble::status()) {
-                    ui.weak(egui::RichText::new(line).size(14.0));
+                // Not on Android: the BLE scanner never starts there.
+                if !cfg!(target_os = "android") {
+                    self.opt_row(ui, at(Row::Opt(Opt::Ble)), Opt::Ble);
+                    // What BLE is doing right now (redrawn every overlay frame).
+                    for line in ble_status_lines(crate::ble::locked_by(), &crate::ble::status()) {
+                        ui.weak(egui::RichText::new(line).size(14.0));
+                    }
                 }
                 ui.add_space(4.0);
                 self.text_row(ui, at(Row::Back), "\u{2039} Back");

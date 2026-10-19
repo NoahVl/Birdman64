@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (Retroid Pocket, AYN and similar). Before, only the buttons were read, so
   you couldn't steer, and Z (on LT by default) never fired. The triggers and
   d-pad can also be picked when rebinding.
+- Android: Settings › Controls no longer says "No controller connected" while
+  a controller works. It now names the controllers your phone or handheld
+  reports and shows the last button you pressed, so you can test your
+  controller there. The Switch 2 Bluetooth option is hidden on Android, where
+  it never worked.
 
 ## [1.5.0] - 2026-10-18
 

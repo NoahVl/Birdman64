@@ -33,6 +33,27 @@ const AXIS_GAS: u32 = 22;
 const AXIS_BRAKE: u32 = 23;
 const AXIS_COUNT: usize = 24;
 
+/// An Android axis id's name (`AXIS_*` without the prefix), for the
+/// Controls page's last-input line.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn axis_name(axis: u32) -> String {
+    match axis {
+        AXIS_X => "X".into(),
+        AXIS_Y => "Y".into(),
+        AXIS_Z => "Z".into(),
+        12 => "RX".into(),
+        13 => "RY".into(),
+        AXIS_RZ => "RZ".into(),
+        AXIS_HAT_X => "HAT_X".into(),
+        AXIS_HAT_Y => "HAT_Y".into(),
+        AXIS_LTRIGGER => "LTRIGGER".into(),
+        AXIS_RTRIGGER => "RTRIGGER".into(),
+        AXIS_GAS => "GAS".into(),
+        AXIS_BRAKE => "BRAKE".into(),
+        other => other.to_string(),
+    }
+}
+
 /// The latest value of every Android axis a pad reports.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default)]

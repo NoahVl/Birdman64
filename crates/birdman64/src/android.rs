@@ -385,6 +385,9 @@ fn window_mode(env: &mut Env, activity: &JObject, hide_bars: bool) -> jni::error
     if let Err(e) = display_rate(env, activity, sdk, hide_bars) {
         eprintln!("[android] refresh rate: {e}");
     }
+    if let Err(e) = game_controllers(env) {
+        eprintln!("[android] input devices: {e}");
+    }
     if sdk >= 28 {
         let insets = env
             .call_method(
@@ -419,6 +422,73 @@ fn window_mode(env: &mut Env, activity: &JObject, hide_bars: bool) -> jni::error
             }
         }
     }
+    Ok(())
+}
+
+/// The input devices Android reports as game controllers (a gamepad or
+/// joystick source) → `input::set_android_pads`, for the Controls page.
+/// winit has no device list, and the pad name is not in its key events.
+/// Every device (name, sources, vendor:product) is logged when the list
+/// changes, for bug reports from handhelds we can't test on.
+fn game_controllers(env: &mut Env) -> jni::errors::Result<()> {
+    const SOURCE_GAMEPAD: u32 = 0x0000_0401;
+    const SOURCE_JOYSTICK: u32 = 0x0100_0010;
+    static LOGGED: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let ids = env
+        .call_static_method(
+            jni_str!("android/view/InputDevice"),
+            jni_str!("getDeviceIds"),
+            jni_sig!("()[I"),
+            &[],
+        )?
+        .l()?;
+    let ids = env.cast_local::<jni::objects::JIntArray>(ids)?;
+    let mut buf = vec![0; ids.len(env)?];
+    ids.get_region(env, 0, &mut buf)?;
+    let mut all = String::new();
+    let mut pads = Vec::new();
+    for id in buf {
+        let dev = env
+            .call_static_method(
+                jni_str!("android/view/InputDevice"),
+                jni_str!("getDevice"),
+                jni_sig!("(I)Landroid/view/InputDevice;"),
+                &[JValue::Int(id)],
+            )?
+            .l()?;
+        if dev.is_null() {
+            continue;
+        }
+        let int = |env: &mut Env, name| -> jni::errors::Result<u32> {
+            Ok(env.call_method(&dev, name, jni_sig!("()I"), &[])?.i()? as u32)
+        };
+        let sources = int(env, jni_str!("getSources"))?;
+        let vendor = int(env, jni_str!("getVendorId"))?;
+        let product = int(env, jni_str!("getProductId"))?;
+        let name = env
+            .call_method(
+                &dev,
+                jni_str!("getName"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )?
+            .l()?;
+        let name = env
+            .cast_local::<jni::objects::JString>(name)?
+            .try_to_string(env)?;
+        all += &format!("\n  {id}: {name:?} sources={sources:#x} {vendor:04x}:{product:04x}");
+        if sources & SOURCE_GAMEPAD == SOURCE_GAMEPAD
+            || sources & SOURCE_JOYSTICK == SOURCE_JOYSTICK
+        {
+            pads.push(name);
+        }
+    }
+    let mut logged = LOGGED.lock().unwrap();
+    if *logged != all {
+        eprintln!("[android] input devices:{all}");
+        *logged = all;
+    }
+    crate::input::set_android_pads(pads);
     Ok(())
 }
 

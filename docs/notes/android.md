@@ -71,6 +71,12 @@ low 4 GB doesn't matter. The fixed-window modes (`strict`/`alias`) still compile
   LT2/RT2/DPad for pad capture. Device-tested with a virtual uhid pad (`hid` tool):
   stick and hat move menus, touch controls hide. The first press sent < ~2 s after the
   uhid device registers is lost.
+- **Controls page status:** `active_pad` is gilrs-only, so Android showed "No controller
+  connected" with a working pad. `android::game_controllers` (UI-thread pass, ~1 s) lists
+  `InputDevice`s with a GAMEPAD/JOYSTICK source → `mobile_pad::set_android_pads`; logcat
+  `[android] input devices:` logs every device (name, sources, vendor:product) on change and
+  `[input] …` every press / axis past half (`LAST_INPUT`, also shown on the page): ask
+  handheld reporters for that line.
 - **Gaps:** dialogs (rfd boxes are log-only), pad names, a "pad
   connected" signal (needs `InputManager` via JNI).
 - **Crash handler:** the `.so` range (`dl_iterate_phdr`, not signal-safe) is
