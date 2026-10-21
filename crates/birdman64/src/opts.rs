@@ -622,6 +622,24 @@ pub fn usable_present_modes(
     modes
 }
 
+/// The swapchain format: the N64 outputs gamma-space colors, so prefer an
+/// 8-bit non-sRGB format, then any other non-sRGB one the device can use.
+/// Some Linux/Wayland Vulkan drivers list `Rgba16Unorm` first; picking it
+/// without `TEXTURE_FORMAT_16BIT_NORM` panicked in `Texture::create_view`.
+pub fn surface_format(
+    formats: &[wgpu::TextureFormat],
+    features: wgpu::Features,
+) -> wgpu::TextureFormat {
+    use wgpu::TextureFormat as F;
+    let usable = |f: &F| features.contains(f.required_features());
+    [F::Bgra8Unorm, F::Rgba8Unorm]
+        .into_iter()
+        .find(|f| formats.contains(f))
+        .or_else(|| formats.iter().copied().find(|f| !f.is_srgb() && usable(f)))
+        .or_else(|| formats.iter().copied().find(usable))
+        .unwrap_or(formats[0])
+}
+
 /// How the window shows fullscreen (`PW64_DISPLAY_MODE`, the settings
 /// screen's Display mode row). `PartialOrd`/`Ord` give the settings row its
 /// cycle order.
@@ -756,7 +774,7 @@ mod tests {
     use super::{
         Fps, fill_default, monitor_widescreen_default, parse_aspect, parse_filter, parse_fps,
         parse_tex_filter, parse_vsync, parse_widescreen, precedence, present_mode, present_rate,
-        same_present_mode, usable_present_modes,
+        same_present_mode, surface_format, usable_present_modes,
     };
     use pw64_platform::os::vi::PresentRate;
 
@@ -874,6 +892,32 @@ mod tests {
             let modes = usable_present_modes(all_modes.clone(), wl, vendor);
             assert_eq!(present_mode(false, true, false, &modes), Pm::Mailbox);
         }
+    }
+
+    #[test]
+    fn surface_format_skips_16bit_norm() {
+        use wgpu::{Features, TextureFormat as F};
+        let none = Features::empty();
+        // Wayland/Vulkan order seen in a crash report: 16-bit norm first.
+        let wl = [
+            F::Rgba16Unorm,
+            F::Rgb10a2Unorm,
+            F::Bgra8UnormSrgb,
+            F::Bgra8Unorm,
+        ];
+        assert_eq!(surface_format(&wl, none), F::Bgra8Unorm);
+        assert_eq!(
+            surface_format(&[F::Rgba16Unorm, F::Rgb10a2Unorm], none),
+            F::Rgb10a2Unorm
+        );
+        assert_eq!(
+            surface_format(&[F::Rgba16Unorm, F::Bgra8UnormSrgb], none),
+            F::Bgra8UnormSrgb
+        );
+        assert_eq!(
+            surface_format(&[F::Bgra8UnormSrgb, F::Rgba8Unorm], none),
+            F::Rgba8Unorm
+        );
     }
 
     /// `auto` picks X11 only on Wayland + X server + hybrid NVIDIA; the

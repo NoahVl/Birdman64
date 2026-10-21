@@ -959,13 +959,7 @@ impl App {
         };
         caps.present_modes =
             opts::usable_present_modes(caps.present_modes, wayland, adapter.get_info().vendor);
-        // The N64 outputs gamma-space colors: prefer a non-sRGB format.
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+        let format = opts::surface_format(&caps.formats, device.features());
         let size = window.inner_size();
         // COPY_SRC for the `PW64_WIN_SHOT` / `PW64_SETTINGS_SHOT` readback,
         // only if requested and the surface supports it (configure panics

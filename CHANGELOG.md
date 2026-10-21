@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux: the game no longer crashes at startup on some Wayland setups whose
+  graphics driver offers a 16-bit display format first.
+
 ## [1.5.1] - 2026-10-21
 
 ### Changed
