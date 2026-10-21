@@ -1,0 +1,50 @@
+# Build Birdman64 for iPhone / iPad without a Mac: make a PRIVATE copy of
+# this repository (github.com/new/import, paste the repository URL, choose
+# Private; a fork of a public repository can't be made private), open the
+# copy's Actions tab, pick "Build iOS app" and click "Run workflow". About
+# 15 minutes later the run's Artifacts hold Birdman64-ios (an unsigned
+# Birdman64.ipa). Install it with a sideloading tool that signs it with your
+# own Apple ID (iLoader recommended). It runs packaging/ios/build-ipa.sh on a
+# GitHub macOS runner, which uses the account's free Actions minutes.
+#
+# The IPA has the game code compiled from the decomp linked in, so it is
+# built by whoever runs this, for their own use, and never attached to a
+# release. Keep the copy private: artifacts of a public repository can be
+# downloaded by anyone. No ROM is involved: the player puts their own in the
+# Files app.
+name: Build iOS app
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/ios-ipa.yml
+      - packaging/ios/**
+
+jobs:
+  ipa:
+    name: Birdman64.ipa (unsigned)
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # decomp/: the game sources, compiled into the app
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: tools/zig
+          key: zig-0.16.0-tools-${{ runner.os }}
+      - name: build the IPA
+        run: bash packaging/ios/build-ipa.sh
+      # Manual runs only (a private copy's "Run workflow"): pull requests to
+      # the public repository build the IPA as a check but don't publish it.
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: Birdman64-ios
+          retention-days: 30
+          path: target/ios/Birdman64.ipa

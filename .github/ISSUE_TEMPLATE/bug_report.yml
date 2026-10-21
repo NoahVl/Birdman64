@@ -1,0 +1,101 @@
+name: Bug report
+description: Something looks or plays wrong — graphics glitches, audio problems, input oddities, anything else.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Before you start: the app writes a log file on every run —
+        reproduce the bug, then grab the log (details in the "Logs" section below).
+        The log from the run where the bug just happened is the most useful one.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows x64
+        - Linux
+        - Android
+        - iOS
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: How do you run Birdman64?
+      options:
+        - Release zip downloaded from GitHub
+        - Built from source (cargo)
+        - Android APK
+        - iOS IPA
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From the title bar or the release page (e.g. 1.5.0). If built from source, the commit hash.
+      placeholder: 1.5.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected to see instead. For graphics bugs, say roughly where on screen and when.
+      placeholder: Frame flicker on the horizon during the descent, buildings swap between two positions every other frame…
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The closer we can get to reproducing it, the faster it gets fixed.
+      placeholder: |
+        1. Start any flight in Summer Air
+        2. Fly the descent towards the coastline
+        3. Look towards the horizon
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        The data dir holds the last two runs of `birdman64.log` (the previous run is kept as
+        `birdman64-previous.log`). Find it via Settings > Open save folder, or directly:
+        Windows `%APPDATA%\Birdman64` · Linux `~/.local/share/birdman64` · Android/iOS: app documents.
+        Reproduce the bug, quit, then attach BOTH files here. If the log is short, paste it;
+        otherwise attach the file.
+      placeholder: Attach birdman64.log and birdman64-previous.log
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or video
+      description: Very helpful for graphics bugs — a clip of the flicker/glitch beats a description. Avoid uploading ROM files or anything from your rom/ folder.
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings
+      description: Paste the contents of `pw64.toml` from the same data dir (it contains settings only, no personal data). Especially important if you changed graphics settings (MSAA, scale, widescreen) or run with any PW64_* environment variables.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for a similar report
+          required: true
+        - label: I attached the log file(s) from a run where the bug happened

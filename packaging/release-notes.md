@@ -1,46 +1,25 @@
-## What's new in 1.5.0
+## What's new in 1.5.1
 
-A big one: **move the HUD** anywhere on screen, **export and import your save**
-(PC ↔ Android), an **Unlock everything** cheat, a nicer settings menu on phones,
-and early **iOS** support.
-
-### Added
-
-- Early iOS support (iPhone and iPad): full-screen play with on-screen touch
-  controls or a paired controller, and the ROM and save in the Files app's
-  Birdman64 folder. iOS builds are unsigned test builds for now (you sign
-  them yourself when sideloading) and not part of the release downloads. As
-  on Android, a save change asks you to reopen the app.
-- "Unlock everything" in the pause menu: gives a gold medal on every test in
-  both save files, which opens every class, the bonus games and Birdman
-  (on Android it asks you to reopen the app). Your scores are only ever
-  raised, and your previous save is kept as `pw64.eep.before-unlock` in the
-  save folder. "Restore save from before unlock" in the same menu puts that
-  save back.
-- Move your save between PC and Android (or keep a backup): the pause menu has
-  "Export save…" and "Import save…". Importing keeps your old save next to it
-  as `pw64.eep.before-import` and restarts the game (on Android it asks you to
-  reopen the app). On Android, "Open save folder" is replaced by these two.
-- Move the HUD: pause menu "Move HUD" lets you drag the flight gauges (speed,
-  timer, radar, altimeter, fuel, photo count, messages, cannonball gauges) and
-  the performance overlay anywhere on screen, by touch or mouse. Reset puts
-  everything back; your layout is saved.
+Android controller fix: **sticks, analog triggers and d-pads now work**, including
+the built-in controls of handhelds (Retroid Pocket, AYN and similar).
 
 ### Changed
 
-- Android/iOS: the touch Z button (take a photo) now sits on the right, next to
-  the C buttons, so you can steer while taking pictures.
+- iOS: the project no longer provides ready-made test builds. Build the app
+  yourself in a private copy of the repository (free, no Mac needed) or on a
+  Mac; the README's iPhone section has the steps.
 
 ### Fixed
 
-- The settings menu keeps its size while you move between rows on a page; it
-  only changes size when you go to another page.
-- Android: the settings lists scroll by dragging with a finger, and a new drag
-  continues from where the list was. The rows are bigger and easier to tap.
-- Android: the Controls page fits the screen, with the controller beside the
-  list, and the close button and dimmed background line up with the screen.
-- Android: picking the ROM from some storage apps could close the app
-  instead of falling back to a default file name.
+- Android: the analog sticks, analog triggers and hat-style d-pads of
+  controllers now work, including the built-in controls of Android handhelds.
+  Before, only the buttons were read, so you couldn't steer, and Z (on LT by
+  default) never fired. The triggers and d-pad can also be picked when rebinding.
+- Android: Settings › Controls no longer says "No controller connected" while
+  a controller works. It now names the controllers your phone or handheld
+  reports and shows the last button you pressed, so you can test your
+  controller there. The Switch 2 Bluetooth option is hidden on Android, where
+  it never worked.
 
 **Windows:** download `Birdman64-windows-x64.zip`. **Linux:** download the `.AppImage`.
 
@@ -50,11 +29,11 @@ needed once, about 240 MB installed), then tap **Choose a game file** and pick y
 ROM. Prefer copying the file yourself? `Android/data/app.birdman64/files/rom/`
 still works too. Later APKs install over it and keep your saves.
 
-**iPhone / iPad (test builds):** not attached here. Unsigned test builds come
-from the project's CI and are sideloaded with your own Apple ID (with
-[iLoader](https://iloader.app), recommended); see the
-[iOS testing guide](https://github.com/NoahVl/Birdman64/pull/14). Feedback is
-very welcome.
+**iPhone / iPad (test builds):** not attached here and no ready-made
+download: you build the app yourself (free, no Mac needed) and sideload it
+with your own Apple ID (with [iLoader](https://iloader.app), recommended);
+the [iOS testing guide](https://github.com/NoahVl/Birdman64/pull/14) has the
+steps. Feedback is very welcome.
 
 You need your own Pilotwings 64 (US) ROM.
 

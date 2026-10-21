@@ -24,4 +24,6 @@ Status: compiles for `aarch64-apple-ios`; CI `ios` boots a simulator build to th
 - stdout/stderr are `dup2`ed into `<Documents>/birdman64.log` (previous run kept as `birdman64-previous.log`): log and panic output reaches the Files app.
 - `packaging/ios/run-sim.sh` runs the simulator app on the first iPhone sim (build or `--app`),
   copies a ROM into its `rom/` folder and prints where the log is.
-- CI's device IPA has the game C linked in: a dev artifact only, never a release asset.
+- The IPA and simulator app have the game C linked in: never a release asset, and CI doesn't
+  upload them (public-repo artifacts are downloadable by anyone). Only `ios-ipa.yml` uploads,
+  and only on `workflow_dispatch`, meant for a player's own private copy.

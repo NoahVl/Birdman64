@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-21
+
+### Changed
+
+- iOS: the project no longer provides ready-made test builds. Build the app
+  yourself in a private copy of the repository (free, no Mac needed) or on a
+  Mac; the README's iPhone section has the steps.
+
 ### Fixed
 
 - Android: the analog sticks, analog triggers and hat-style d-pads of
@@ -203,7 +211,8 @@ First public release.
   tar.gz, with checksums and build provenance attestations.
 - `--version`, and crash reports written to `crash.log` in the data folder.
 
-[Unreleased]: https://github.com/NoahVl/Birdman64/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/NoahVl/Birdman64/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/NoahVl/Birdman64/compare/v1.5.0...v1.5.1
 [1.4.0]: https://github.com/NoahVl/Birdman64/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/NoahVl/Birdman64/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/NoahVl/Birdman64/compare/v1.1.0...v1.2.0

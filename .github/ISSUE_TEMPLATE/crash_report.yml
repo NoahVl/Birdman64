@@ -1,0 +1,73 @@
+name: Crash report
+description: Birdman64 stopped unexpectedly, froze or failed to start.
+labels: ["crash"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Crashes write `crash.log` into the data dir — that file is the single most useful
+        thing you can attach. Find it via Settings > Open save folder, or directly:
+        Windows `%APPDATA%\Birdman64` · Linux `~/.local/share/birdman64` · Android/iOS: app documents.
+        If the app also shows a "stopped unexpectedly" dialog, it points at the same file.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows x64
+        - Linux
+        - Android
+        - iOS
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What happened?
+      options:
+        - The app closed by itself (crash)
+        - A "stopped unexpectedly" dialog appeared
+        - Froze / had to be killed
+        - Won't start at all
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: 1.5.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: What were you doing when it crashed?
+      placeholder: Loading a ROM, during the first-run build, starting a flight, just opened Settings…
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: crash.log
+      description: |
+        Attach `crash.log` from the data dir. If it won't start at all, also attach
+        `birdman64.log` and `birdman64-previous.log` from the same folder. If the first-run
+        build step fails, the details are in `%LOCALAPPDATA%\Birdman64\cache\build.log`
+        (Windows) or `~/.cache/birdman64/cache/build.log` (Linux) — attach that too.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for a similar report
+          required: true
+        - label: I attached crash.log (and any other logs I could find)

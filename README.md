@@ -82,11 +82,31 @@ once, about 240 MB installed), then tap **Choose a game file** and pick your
 ROM. Touch controls appear on screen; a gamepad works too. A newer APK
 installs over the old one and keeps your saves.
 
-**iPhone / iPad (test builds):** not on the release page yet. Unsigned test
-builds come from the project's CI and are installed with your own Apple ID
-([iLoader](https://iloader.app) recommended); the ROM goes in the Files app under
-Birdman64. Touch controls and paired controllers work. How to get and install
-one: [the iOS testing guide](https://github.com/NoahVl/Birdman64/pull/14).
+**iPhone / iPad (test builds):** not on the release page, and no ready-made
+download: you build the app yourself (free, about 15 minutes, steps below)
+and install it with your own Apple ID ([iLoader](https://iloader.app)
+recommended); the ROM goes in the Files app under Birdman64. Touch controls
+and paired controllers work. Installing and testing:
+[the iOS testing guide](https://github.com/NoahVl/Birdman64/pull/14).
+
+Build the iPhone app yourself:
+
+- **No Mac:** sign in to GitHub and make a **private** copy of this
+  repository: open [github.com/new/import](https://github.com/new/import),
+  paste `https://github.com/NoahVl/Birdman64`, choose **Private** and click
+  **Begin import**. (Please don't use **Fork**: a fork can't be made private,
+  and anyone can download the builds of a public repository. The app
+  contains the compiled game code, so keep it for yourself.) In your copy,
+  open **Actions** (enable workflows if asked), pick **Build iOS app** and
+  click **Run workflow**. When the run is green, download **Birdman64-ios**
+  under its Artifacts and unzip it once: that's `Birdman64.ipa`. Each build
+  uses some of your account's free GitHub Actions minutes (Mac machines count
+  extra). For a newer version, delete the copy and import it again.
+- **Mac with Xcode:** clone this repository and run
+  `packaging/ios/build-ipa.sh`; the IPA lands in `target/ios/Birdman64.ipa`.
+
+Then install `Birdman64.ipa` with iLoader and your Apple ID (steps in the
+guide above).
 
 **macOS:** no download yet.
 

@@ -1,5 +1,6 @@
 # CI: fmt, clippy (-D warnings), tests and the first-run module build
-# (`firstrun` job) on every push/PR.
+# (`firstrun` job) on every PR and push to main; other branches via "Run
+# workflow". (Push on every branch ran each PR push twice: push + PR.)
 #
 # The workspace builds the decomp C via pw64-game's build.rs with the
 # project's one C compiler, zig 0.16.0 (T13, docs/notes/first-run-build.md):
@@ -13,7 +14,9 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -197,10 +200,9 @@ jobs:
 
   # iOS arm64 (macos-14): clippy for the device target, then the ipa builds
   # (device + simulator) and a simulator smoke run: the app must reach the
-  # ROM screen without a ROM and leave a screenshot of it. Device IPA is a
-  # dev build with the game C linked in: a CI artifact only, never a release
-  # asset (unsigned — installing it is out of scope). continue-on-error
-  # while the iOS port is new.
+  # ROM screen without a ROM and leave a screenshot of it. The builds have
+  # the game C linked in, so they are checks only, never uploaded.
+  # continue-on-error while the iOS port is new.
   ios:
     name: iOS arm64 · clippy, ipa, simulator smoke
     runs-on: macos-14
@@ -229,15 +231,9 @@ jobs:
         run: bash packaging/ios/build-ipa.sh
       - name: simulator app
         run: bash packaging/ios/build-ipa.sh --sim
-      - name: zip the simulator app (keeps file permissions)
-        # Dev build with the game C linked in: a CI artifact only, never a
-        # release asset.
-        run: ditto -c -k --keepParent target/ios/sim/Payload/Birdman64.app Birdman64-sim.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ios-sim-app
-          retention-days: 14
-          path: Birdman64-sim.zip
+      # The device IPA and the simulator app have the game C linked in, so
+      # neither is uploaded: a public repository's artifacts are downloadable
+      # by anyone. Players build their own (ios-ipa.yml in a private copy).
       - name: simulator smoke run
         run: |
           set -euo pipefail
@@ -263,11 +259,6 @@ jobs:
           path: |
             ios-sim.png
             ios-sim.log
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ios-dev-ipa
-          retention-days: 7
-          path: target/ios/Birdman64.ipa
 
   # First-run module build (docs/notes/first-run-build.md T12), both release
   # platforms, every push: builds the game module with zig via the
