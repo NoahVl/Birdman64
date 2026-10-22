@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Linux: the game no longer crashes at startup on some Wayland setups whose
   graphics driver offers a 16-bit display format first.
+- iOS: opening the pause menu (the touch menu button or a controller's
+  settings button) no longer crashes the game.
 
 ## [1.5.1] - 2026-10-21
 

@@ -1946,17 +1946,20 @@ impl Overlay {
                 if rows.contains(&Row::OpenSaveFolder) {
                     self.text_row(ui, at(Row::OpenSaveFolder), "Open save folder");
                 }
-                let busy = crate::save_transfer::busy();
-                self.text_row(
-                    ui,
-                    at(Row::ExportSave),
-                    if busy {
-                        "Export save\u{2026} (waiting)"
-                    } else {
-                        "Export save\u{2026}"
-                    },
-                );
-                self.text_row(ui, at(Row::ImportSave), "Import save\u{2026}");
+                // Not on iOS (`rows`): `at` would panic on a missing row.
+                if rows.contains(&Row::ExportSave) {
+                    let busy = crate::save_transfer::busy();
+                    self.text_row(
+                        ui,
+                        at(Row::ExportSave),
+                        if busy {
+                            "Export save\u{2026} (waiting)"
+                        } else {
+                            "Export save\u{2026}"
+                        },
+                    );
+                    self.text_row(ui, at(Row::ImportSave), "Import save\u{2026}");
+                }
                 if rows.contains(&Row::CloseApp) {
                     self.text_row(ui, at(Row::CloseApp), "Close Birdman64");
                 }
