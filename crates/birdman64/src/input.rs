@@ -2014,8 +2014,20 @@ pub fn spawn() {
             // reconnects. The window decides whether to pause, on its own
             // thread (`window::request_pause`).
             let mut pause_at: Option<std::time::Instant> = None;
+            let mut padlog = PadLog::open();
+            if let Some(log) = padlog.as_mut() {
+                for (id, g) in gilrs.gamepads() {
+                    log.pad_info(id, &g);
+                }
+            }
             loop {
                 while let Some(ev) = gilrs.next_event() {
+                    if let Some(log) = padlog.as_mut() {
+                        log.event(&ev);
+                        if matches!(ev.event, gilrs::EventType::Connected) {
+                            log.pad_info(ev.id, &gilrs.gamepad(ev.id));
+                        }
+                    }
                     match ev.event {
                         gilrs::EventType::Connected => {
                             let g = gilrs.gamepad(ev.id);
@@ -2136,6 +2148,9 @@ pub fn spawn() {
                     *CAPTURED_SOURCE.lock().unwrap() = Some(P2Input::Ble);
                     SOURCE_CAPTURE.store(false, Ordering::Relaxed);
                 } else if s.gamepads != gamepads || s.ble != ble || s.nav != nav {
+                    if let Some(log) = padlog.as_mut() {
+                        log.pads(&gamepads);
+                    }
                     s.gamepads = gamepads;
                     s.ble = ble;
                     s.nav = nav;
@@ -2219,6 +2234,83 @@ static ACTIVE_PAD_ID: Mutex<Option<gilrs::GamepadId>> = Mutex::new(None);
 /// The active pad, if one has been connected / used.
 pub fn active_pad() -> Option<PadInfo> {
     ACTIVE_PAD.lock().unwrap().clone()
+}
+
+/// Controller diagnostics for bug reports: when `PW64_PAD_LOG` is set or an
+/// empty `pad-debug.txt` exists in the data dir (next to the exe for a
+/// portable install), every raw gilrs event and every change of the N64 pad
+/// each gamepad produces is appended to that file. Capped, so a forgotten
+/// file stays small.
+struct PadLog {
+    file: std::fs::File,
+    start: std::time::Instant,
+    written: usize,
+}
+
+impl PadLog {
+    const MAX_BYTES: usize = 4 << 20;
+
+    fn open() -> Option<Self> {
+        let path = crate::paths::data_dir().join("pad-debug.txt");
+        if std::env::var_os("PW64_PAD_LOG").is_none() && !path.exists() {
+            return None;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| eprintln!("[input] can't open {}: {e}", path.display()))
+            .ok()?;
+        eprintln!("[input] controller diagnostics -> {}", path.display());
+        let mut log = Self {
+            file,
+            start: std::time::Instant::now(),
+            written: 0,
+        };
+        log.line(&format!(
+            "=== Birdman64 {} controller log ===",
+            env!("CARGO_PKG_VERSION")
+        ));
+        Some(log)
+    }
+
+    fn line(&mut self, text: &str) {
+        use std::io::Write;
+        if self.written > Self::MAX_BYTES {
+            return;
+        }
+        let t = self.start.elapsed().as_millis();
+        let l = format!("[{t:>8} ms] {text}\n");
+        self.written += l.len();
+        let _ = self.file.write_all(l.as_bytes());
+    }
+
+    fn pad_info(&mut self, id: gilrs::GamepadId, g: &gilrs::Gamepad) {
+        let uuid: String = g.uuid().iter().map(|b| format!("{b:02x}")).collect();
+        self.line(&format!(
+            "pad {id}: name={:?} os_name={:?} vendor={:04x?} product={:04x?} uuid={uuid} \
+             mapping={:?} connected={}",
+            g.name(),
+            g.os_name(),
+            g.vendor_id(),
+            g.product_id(),
+            g.mapping_source(),
+            g.is_connected()
+        ));
+    }
+
+    fn event(&mut self, ev: &gilrs::Event) {
+        self.line(&format!("pad {}: {:?}", ev.id, ev.event));
+    }
+
+    fn pads(&mut self, pads: &[(usize, String, Pad)]) {
+        for (id, name, p) in pads {
+            self.line(&format!(
+                "N64 pad from gamepad {id} ({name}): buttons={:#06x} stick=({}, {})",
+                p.button, p.stick_x, p.stick_y
+            ));
+        }
+    }
 }
 
 /// (Re)sets the active pad from a gilrs handle.
