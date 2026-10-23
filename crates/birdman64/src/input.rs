@@ -830,6 +830,9 @@ fn gamepad_button(b: Button) -> u16 {
 /// instead of a fixed button list, so remapped slots are picked up. One read
 /// lock for the whole scan: this runs every 4 ms per connected pad.
 fn gamepad_pad(g: &gilrs::Gamepad) -> Pad {
+    if is_nso_n64_switch_mode(g) {
+        return Pad::default();
+    }
     let bindings = gamepad_bindings();
     // Some raw controllers report the d-pad as a hat axis pair: it counts as
     // the d-pad buttons, so it follows their bindings.
@@ -851,11 +854,61 @@ fn gamepad_pad(g: &gilrs::Gamepad) -> Pad {
         }
     }
     let (stick_x, stick_y) = stick_to_n64(g.value(Axis::LeftStickX), g.value(Axis::LeftStickY));
+    let c_buttons = match eightbitdo64_c_buttons(g) {
+        Some(c) => c,
+        None => c_stick_buttons(g.value(Axis::RightStickX), g.value(Axis::RightStickY)),
+    };
     slot_bits_pad(bits).merge(Pad {
-        button: c_stick_buttons(g.value(Axis::RightStickX), g.value(Axis::RightStickY)),
+        button: c_buttons,
         stick_x,
         stick_y,
     })
+}
+
+/// Switch Online N64 controller on Windows: the OS gamepad API never gets the
+/// Switch handshake, so the pad streams cycling junk buttons and axes (the
+/// 8BitDo 64's "S" mode reports the same ids). Its input is ignored and a
+/// toast points to the DInput ("D") position instead.
+#[cfg(windows)]
+fn is_nso_n64_switch_mode(g: &gilrs::Gamepad) -> bool {
+    g.vendor_id() == Some(0x057E) && g.product_id() == Some(0x2019)
+}
+
+#[cfg(not(windows))]
+fn is_nso_n64_switch_mode(_g: &gilrs::Gamepad) -> bool {
+    false
+}
+
+/// 8BitDo 64 in DInput mode on Windows: the C buttons arrive as two raw axes
+/// (index 3: C-up -1 / C-down +1, index 2: C-left -1 / C-right +1) and ZR as
+/// axis 4 resting at +1, which the SDL mapping calls RightStickX/Y and would
+/// read as wrong C directions plus a stuck C-up. Returns the C buttons from
+/// the raw axes, or `None` for any other pad.
+#[cfg(windows)]
+fn eightbitdo64_c_buttons(g: &gilrs::Gamepad) -> Option<u16> {
+    if g.vendor_id() != Some(0x2DC8) || g.product_id() != Some(0x3019) {
+        return None;
+    }
+    // WGI codes: kind (axis = 1) << 16 | index.
+    let raw = |index: u32| {
+        g.state()
+            .axes()
+            .find(|(code, _)| code.into_u32() == (1 << 16) | index)
+            .map_or(0.0, |(_, d)| d.value())
+    };
+    Some(eightbitdo64_c_from_axes(raw(3), raw(2)))
+}
+
+#[cfg(not(windows))]
+fn eightbitdo64_c_buttons(_g: &gilrs::Gamepad) -> Option<u16> {
+    None
+}
+
+/// Raw 8BitDo 64 C axes (vertical = axis 3, horizontal = axis 2) → C buttons.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn eightbitdo64_c_from_axes(vertical: f32, horizontal: f32) -> u16 {
+    // `c_stick_buttons` has y up positive and the pad's -1 is up: flip.
+    c_stick_buttons(horizontal, -vertical)
 }
 
 /// Slot bits (CONT buttons + `STICK_*` directions) → pad: the directions
@@ -889,6 +942,9 @@ pub(crate) fn digital_stick(x: i32, y: i32) -> (i8, i8) {
 /// Positional like the default bindings (input.md): a Nintendo pad's bottom
 /// button confirms.
 fn gamepad_nav_pad(g: &gilrs::Gamepad) -> Pad {
+    if is_nso_n64_switch_mode(g) {
+        return Pad::default();
+    }
     let mut button = 0;
     for (b, bit) in [
         (Button::South, CONT_A),
@@ -2020,7 +2076,20 @@ pub fn spawn() {
                     log.pad_info(id, &g);
                 }
             }
+            let mut switch_hinted = false;
             loop {
+                if !switch_hinted
+                    && started.elapsed() > std::time::Duration::from_secs(2)
+                    && gilrs
+                        .gamepads()
+                        .any(|(_, g)| g.is_connected() && is_nso_n64_switch_mode(&g))
+                {
+                    switch_hinted = true;
+                    crate::window::notify_toast(
+                        "This controller is in Switch mode, which isn't supported.                          Set its back switch to D (DInput) and replug it."
+                            .to_string(),
+                    );
+                }
                 while let Some(ev) = gilrs.next_event() {
                     if let Some(log) = padlog.as_mut() {
                         log.event(&ev);
@@ -2655,6 +2724,15 @@ mod tests {
         assert_eq!(key_mapping(KeyCode::Space), Some((CONT_A, 0, 0)));
         assert_eq!(key_mapping(KeyCode::KeyW), Some((0, 0, 1)));
         assert_eq!(key_mapping(KeyCode::KeyX), None);
+    }
+
+    #[test]
+    fn eightbitdo64_c_axes() {
+        assert_eq!(eightbitdo64_c_from_axes(-1.0, 0.0), CONT_C_UP);
+        assert_eq!(eightbitdo64_c_from_axes(1.0, 0.0), CONT_C_DOWN);
+        assert_eq!(eightbitdo64_c_from_axes(0.0, -1.0), CONT_C_LEFT);
+        assert_eq!(eightbitdo64_c_from_axes(0.0, 1.0), CONT_C_RIGHT);
+        assert_eq!(eightbitdo64_c_from_axes(0.0, 0.0), 0);
     }
 
     #[test]

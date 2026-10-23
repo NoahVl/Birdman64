@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   graphics driver offers a 16-bit display format first.
 - iOS: opening the pause menu (the touch menu button or a controller's
   settings button) no longer crashes the game.
+- Windows: the 8BitDo 64 controller in DInput mode now has working C buttons
+  (up/down were swapped with left/right) and pressing R no longer leaves
+  C-up stuck.
+- Windows: a controller in Switch mode (Switch Online N64 pad, 8BitDo 64 on "S")
+  no longer sends phantom button presses; the game suggests the D (DInput)
+  position instead.
 
 ## [1.5.1] - 2026-10-21
 
