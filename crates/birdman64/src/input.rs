@@ -830,9 +830,6 @@ fn gamepad_button(b: Button) -> u16 {
 /// instead of a fixed button list, so remapped slots are picked up. One read
 /// lock for the whole scan: this runs every 4 ms per connected pad.
 fn gamepad_pad(g: &gilrs::Gamepad) -> Pad {
-    if is_nso_n64_switch_mode(g) {
-        return Pad::default();
-    }
     let bindings = gamepad_bindings();
     // Some raw controllers report the d-pad as a hat axis pair: it counts as
     // the d-pad buttons, so it follows their bindings.
@@ -865,20 +862,6 @@ fn gamepad_pad(g: &gilrs::Gamepad) -> Pad {
     })
 }
 
-/// Switch Online N64 controller on Windows: the OS gamepad API never gets the
-/// Switch handshake, so the pad streams cycling junk buttons and axes (the
-/// 8BitDo 64's "S" mode reports the same ids). Its input is ignored and a
-/// toast points to the DInput ("D") position instead.
-#[cfg(windows)]
-fn is_nso_n64_switch_mode(g: &gilrs::Gamepad) -> bool {
-    g.vendor_id() == Some(0x057E) && g.product_id() == Some(0x2019)
-}
-
-#[cfg(not(windows))]
-fn is_nso_n64_switch_mode(_g: &gilrs::Gamepad) -> bool {
-    false
-}
-
 /// 8BitDo 64 in DInput mode on Windows: the C buttons arrive as two raw axes
 /// (index 3: C-up -1 / C-down +1, index 2: C-left -1 / C-right +1) and ZR as
 /// axis 4 resting at +1, which the SDL mapping calls RightStickX/Y and would
@@ -886,6 +869,9 @@ fn is_nso_n64_switch_mode(_g: &gilrs::Gamepad) -> bool {
 /// the raw axes, or `None` for any other pad.
 #[cfg(windows)]
 fn eightbitdo64_c_buttons(g: &gilrs::Gamepad) -> Option<u16> {
+    if g.vendor_id() == Some(0x057E) && g.product_id() == Some(0x2019) {
+        return Some(nso_n64_c_buttons(g));
+    }
     if g.vendor_id() != Some(0x2DC8) || g.product_id() != Some(0x3019) {
         return None;
     }
@@ -897,6 +883,33 @@ fn eightbitdo64_c_buttons(g: &gilrs::Gamepad) -> Option<u16> {
             .map_or(0.0, |(_, d)| d.value())
     };
     Some(eightbitdo64_c_from_axes(raw(3), raw(2)))
+}
+
+/// Switch Online N64 controller on Windows: the SDL mapping turns its C
+/// buttons into half-axes (`+rightx:b8 -rightx:b3 +righty:b2 -righty:b7`) and
+/// gilrs reports the negative halves as +1, so C-left read as C-right and
+/// C-up/C-down were lost. The state keeps the raw button code on each axis
+/// entry: read them directly (button codes 2/7/3/8 = C-up/down/left/right).
+#[cfg(windows)]
+fn nso_n64_c_buttons(g: &gilrs::Gamepad) -> u16 {
+    let state = g.state();
+    let held = |index: u32| {
+        state
+            .axes()
+            .any(|(code, d)| code.into_u32() == index && d.value() > 0.5)
+            || state
+                .buttons()
+                .any(|(code, d)| code.into_u32() == index && d.is_pressed())
+    };
+    [
+        (2, CONT_C_UP),
+        (7, CONT_C_DOWN),
+        (3, CONT_C_LEFT),
+        (8, CONT_C_RIGHT),
+    ]
+    .into_iter()
+    .filter(|&(index, _)| held(index))
+    .fold(0, |b, (_, bit)| b | bit)
 }
 
 #[cfg(not(windows))]
@@ -942,9 +955,6 @@ pub(crate) fn digital_stick(x: i32, y: i32) -> (i8, i8) {
 /// Positional like the default bindings (input.md): a Nintendo pad's bottom
 /// button confirms.
 fn gamepad_nav_pad(g: &gilrs::Gamepad) -> Pad {
-    if is_nso_n64_switch_mode(g) {
-        return Pad::default();
-    }
     let mut button = 0;
     for (b, bit) in [
         (Button::South, CONT_A),
@@ -2076,20 +2086,7 @@ pub fn spawn() {
                     log.pad_info(id, &g);
                 }
             }
-            let mut switch_hinted = false;
             loop {
-                if !switch_hinted
-                    && started.elapsed() > std::time::Duration::from_secs(2)
-                    && gilrs
-                        .gamepads()
-                        .any(|(_, g)| g.is_connected() && is_nso_n64_switch_mode(&g))
-                {
-                    switch_hinted = true;
-                    crate::window::notify_toast(
-                        "This controller is in Switch mode, which isn't supported.                          Set its back switch to D (DInput) and replug it."
-                            .to_string(),
-                    );
-                }
                 while let Some(ev) = gilrs.next_event() {
                     if let Some(log) = padlog.as_mut() {
                         log.event(&ev);

@@ -16,9 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Windows: the 8BitDo 64 controller in DInput mode now has working C buttons
   (up/down were swapped with left/right) and pressing R no longer leaves
   C-up stuck.
-- Windows: a controller in Switch mode (Switch Online N64 pad, 8BitDo 64 on "S")
-  no longer sends phantom button presses; the game suggests the D (DInput)
-  position instead.
+- Windows: the Switch Online N64 controller (USB) now has working C buttons
+  (C-left read as C-right and C-up/C-down did nothing).
+- Added an opt-in controller log for bug reports: create an empty
+  `pad-debug.txt` next to the exe (or set `PW64_PAD_LOG`).
 
 ## [1.5.1] - 2026-10-21
 
