@@ -39,6 +39,5 @@ instance.lock
 !ROADMAP.md
 !.github/**/*.md
 !packaging/release-notes.md
-!packaging/test-release-notes.md
 !packaging/linux/README.md
 !docs/notes/*.md

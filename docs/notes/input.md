@@ -72,4 +72,4 @@ Sources: each vehicle's `*MovementFrame` (hang_glider1.c, code_AC1A0.c rocket be
 ## Controller log (bug reports)
 
 - `PadLog` (input.rs): with `PW64_PAD_LOG` set, or an empty `pad-debug.txt` in the data dir (exe dir when portable), the input thread appends pad info (name, os_name, vendor/product, uuid, mapping source), every raw gilrs event (`{:?}`, so axis/button codes show) and each change of the N64 pad per gamepad (buttons hex + stick) to `pad-debug.txt`, ms timestamps, capped at 4 MiB. Used for the 8BitDo 64 report (C-buttons, Switch mode, ZR).
-- Tags containing `-test` release with `packaging/test-release-notes.md` as a prerelease (release.yml).
+- Tags containing `-` (e.g. `v1.5.2-pre1`) publish as prereleases with the usual `packaging/release-notes.md` body (release.yml).

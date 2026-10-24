@@ -12,8 +12,8 @@
 #
 # The zip carries READ ME FIRST.txt; the debug symbols asset
 # is renamed Birdman64-windows-x64-debug-symbols.pdb; the release body comes
-# from packaging/release-notes.md (all jobs pass the same body_path); tags
-# with a `-` are prereleases, `-test` ones use packaging/test-release-notes.md.
+# from packaging/release-notes.md (all jobs pass the same body_path). Tags
+# with a `-` (e.g. v1.5.2-pre1) publish as prereleases.
 #
 # The zip contains only our code + zig + licences: no ROM, no decomp files,
 # no extracted assets (CONTRIBUTING.md). The decomp's MIT licence is mentioned
@@ -168,7 +168,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          body_path: ${{ contains(github.ref_name, '-test') && 'packaging/test-release-notes.md' || 'packaging/release-notes.md' }}
+          body_path: packaging/release-notes.md
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             Birdman64-windows-x64.zip
@@ -248,7 +248,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') && steps.signed.outputs.signed == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          body_path: ${{ contains(github.ref_name, '-test') && 'packaging/test-release-notes.md' || 'packaging/release-notes.md' }}
+          body_path: packaging/release-notes.md
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             Birdman64-android-arm64.apk
@@ -441,7 +441,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          body_path: ${{ contains(github.ref_name, '-test') && 'packaging/test-release-notes.md' || 'packaging/release-notes.md' }}
+          body_path: packaging/release-notes.md
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             Birdman64-x86_64.AppImage

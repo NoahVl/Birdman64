@@ -1,25 +1,29 @@
-## What's new in 1.5.1
+## What's new in 1.5.2-pre1
 
-Android controller fix: **sticks, analog triggers and d-pads now work**, including
-the built-in controls of handhelds (Retroid Pocket, AYN and similar).
+This is a pre-release of the upcoming 1.5.2: the Windows controller fixes for
+the 8BitDo 64 and Switch Online N64 controllers, plus the fixes that landed on
+main since 1.5.1. Please test it! If anything is off, attach the controller log
+(see below).
 
-### Changed
+### Added
 
-- iOS: the project no longer provides ready-made test builds. Build the app
-  yourself in a private copy of the repository (free, no Mac needed) or on a
-  Mac; the README's iPhone section has the steps.
+- A controller log for bug reports: create an empty `pad-debug.txt` next to
+  `Birdman64.exe` (or set `PW64_PAD_LOG`) and the game records what your
+  controller sends — name, USB ids, every raw button/axis event, and what the
+  game receives. It has no personal data. Attach it if you report a controller
+  problem.
 
 ### Fixed
 
-- Android: the analog sticks, analog triggers and hat-style d-pads of
-  controllers now work, including the built-in controls of Android handhelds.
-  Before, only the buttons were read, so you couldn't steer, and Z (on LT by
-  default) never fired. The triggers and d-pad can also be picked when rebinding.
-- Android: Settings › Controls no longer says "No controller connected" while
-  a controller works. It now names the controllers your phone or handheld
-  reports and shows the last button you pressed, so you can test your
-  controller there. The Switch 2 Bluetooth option is hidden on Android, where
-  it never worked.
+- Windows: the 8BitDo 64 controller in DInput mode now has working C buttons
+  (up/down were swapped with left/right) and pressing R no longer leaves C-up
+  stuck.
+- Windows: the Switch Online N64 controller (USB) now has working C buttons
+  (C-left read as C-right and C-up/C-down did nothing).
+- Linux: the game no longer crashes at startup on some Wayland setups whose
+  graphics driver offers a 16-bit display format first.
+- iOS: opening the pause menu (the touch menu button or a controller's
+  settings button) no longer crashes the game.
 
 **Windows:** download `Birdman64-windows-x64.zip`. **Linux:** download the `.AppImage`.
 
