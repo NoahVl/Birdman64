@@ -1,6 +1,18 @@
 --- a/src/app/code_7CF30.c
 +++ b/src/app/code_7CF30.c
-@@ -196,6 +196,11 @@ void func_802F5F80(GyrocopterData* gcData) {
+@@ -53,4 +53,5 @@ void gyrocopterLoadLevel(u8 contIdx, u8 pilot, GyrocopterData* gcData, Camera* camera) {
+     uvMemSet(gcData, 0, sizeof(GyrocopterData));
+     gyrocopterLoadPilot(pilot, gcData);
++    pw64_plane_load(gcData); // PW64 plane variant (pw64_plane.c): model + geometry
+     gcData->objId = uvDobjAllocIdx();
+     gcData->unk2 = 2;
+@@ -170,4 +171,5 @@ void gyrocopterEnterLeave(GyrocopterData* gcData) {
+     gcData->camera->unk228 = 0.0f;
+     uvModelGetProps(gcData->modelId, MODEL_PROP_UNK1(&gcData->camera->unk8), MODEL_PROP_END);
++    pw64_plane_enter(gcData); // PW64 plane variant: camera distances, model pose
+     camera_802D45C4(gcData->camera, gcData->unk68);
+ }
+@@ -196,6 +198,11 @@ void func_802F5F80(GyrocopterData* gcData) {
      shadow_80334C70();
  }
  
@@ -25,7 +37,12 @@
          }
  
          gcData->unk9C = func_80313F08(&D_80368880, ABS_NOEQ(xAxisInput));
-@@ -438,9 +447,12 @@ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
+@@ -396,3 +409,4 @@ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
+         func_802F7224(gcData);
+         uvDobjPosm(gcData->objId, 0, &gcData->unk10);
++        pw64_plane_posm(gcData); // PW64 plane variant: the model's origin offset
+         if (gameState != GAME_STATE_RESULTS) {
+@@ -438,9 +452,12 @@ void gyrocopterMovementFrame(GyrocopterData* gcData, u8 gameState) {
          if (gcData->unk5D != 0) {
              gcData->unk2 |= 2;
              uvDobjState(gcData->objId, gcData->unk2);
@@ -67,7 +84,14 @@
          gcData->unk2 = gcData->camera->unk6;
          uvDobjState(gcData->objId, gcData->unk2);
 +        pw64_dobj_cockpit[gcData->objId] = 0; // PW64 split-screen: sunk, hidden in every view
-@@ -1188,3 +1199,11 @@ void gyrocopterLoadPilot(u8 pilot, GyrocopterData* gcData) {
+@@ -769,5 +781,6 @@ void func_802F764C(GyrocopterData* gcData) {
+             uvDobjModel(gcData->objId, gcData->crashModelId);
+             uvDobjPosm(gcData->objId, 0, &gcData->unk10);
+         }
++        pw64_plane_posm(gcData); // PW64 plane variant: the model's origin offset
+     }
+     shadow_803343D8(0);
+@@ -1188,3 +1201,11 @@ void gyrocopterLoadPilot(u8 pilot, GyrocopterData* gcData) {
          break;
      }
  }

@@ -11,12 +11,31 @@
 +static f32 D_8034F374 = 0.5f;
  
  void func_802F5358(GyrocopterData*);
-@@ -136,5 +140,3 @@
+@@ -49,3 +53,6 @@ void func_802F50CC(GyrocopterData* gcData) {
+     f32 sp24;
+
++    if (pw64_plane_pose(gcData)) { // PW64 plane variant (pw64_plane.c): no gyro parts
++        return;
++    }
+     if (gcData->objId != 0xFFFF) {
+@@ -83,3 +90,6 @@ void func_802F5358(GyrocopterData* gcData) {
+     f32 var_fs0;
+
++    if (pw64_plane_props(gcData)) { // PW64 plane variant: no rotor fx or rotor parts
++        return;
++    }
+     gcData->unkF4 += gcData->unkF0 * D_8034F854;
+@@ -136,7 +146,8 @@
  void func_802F56B4(GyrocopterData* gcData, u8 arg1) {
 -    static f32 D_8034F370 = 0.0f;
 -    static f32 D_8034F374 = 0.5f;
      f32 var_fa1;
      u8 sp23;
+
++    if (pw64_plane_rest(gcData)) { // PW64 plane variant: no pilot animation to pose
++        return;
++    }
+     if ((fdr_802E6B5C() == 3) || (fdr_802E6B5C() == 4)) {
 @@ -223,4 +225,14 @@
      gcData->unkF0 = 0.0f;
      gcData->unkE8 = 0.0f;

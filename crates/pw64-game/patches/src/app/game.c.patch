@@ -1190,7 +1190,7 @@
 +        }
          return cannonLoad802D77D8(arg0, D_803676FC);
      }
-@@ -459,7 +947,12 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
+@@ -459,7 +947,14 @@ s32 gameUpdateStateTestSetup(Unk80362690* arg0) {
      levelLoad(arg0->map, temp_s0->pilot, temp_s0->veh, TRUE);
      uvChanTerra(temp_s0->unk70->unk22C, arg0->terraId);
      uvEnvFunc(arg0->envId, 0, env_802E0CF0);
@@ -1200,6 +1200,7 @@
 +    if ((pw64_players < 2) || arg0->unkA4 || !pw64_split_vehicle(temp_s0->veh)) {
 +        pw64_free_flight = 0;
 +    }
++    pw64_plane_end(); // PW64 plane variant: gyrocopterLoadLevel latches it again
 +    arg0->unkA0 = !pw64_free_flight;
      taskLoad();
      windObjLoad();
@@ -1255,15 +1256,18 @@
  
      if (temp_s0->unk79 != 0) {
          switch (temp_s0->veh) {
-@@ -681,9 +1200,10 @@ void func_802ECE94(Unk80362690* arg0) {
+@@ -681,9 +1202,13 @@ void func_802ECE94(Unk80362690* arg0) {
          func_8033FCD0(0xFF);
      }
      if (temp_s0->vehicleData != NULL) {
 -        if (!arg0->unkA4 && (arg0->unkA2 == 0)) {
-+        if (!arg0->unkA4 && (arg0->unkA2 == 0) && !pw64_free_flight) { // PW64: free flight saves nothing
++        // PW64: free flight and the plane variant save nothing; the plane
++        // run's in-memory results are rolled back too (pw64_plane_end).
++        if (!arg0->unkA4 && (arg0->unkA2 == 0) && !pw64_free_flight && !pw64_plane_run) {
              saveFileWrite(temp_s0->unk8A);
          }
 +        pw64_free_flight = 0;
++        pw64_plane_end();
          switch (temp_s0->veh) {
          case VEHICLE_HANG_GLIDER:
              hangGliderEnterLeave(temp_s0->vehicleData);

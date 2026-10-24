@@ -274,6 +274,28 @@ float pw64_player_dist(int i, float x, float y, float z); /* from player i > 0 *
 /* Split-screen free flight (game.c.patch, test_menu.c.patch): 1 while a
  * flight started from the test menu's Free flight item runs. */
 extern int pw64_free_flight;
+/* Plane variant of the gyrocopter (native/src/pw64_plane.c, experimental):
+ * pw64_plane (Rust, live) = which plane flies from the next test (values
+ * below; pw64_game::set_plane mirrors them); pw64_plane_run = 1
+ * while the current test does (latched by gyrocopterLoadLevel, cleared by
+ * pw64_plane_end at test setup and leave). Each hook does nothing / returns
+ * 0 without a plane run, so the stock gyrocopter path runs unchanged. */
+struct GyrocopterData;
+#define PW64_PLANE_OFF 0   /* the gyrocopter */
+#define PW64_PLANE_BIG 1   /* model 39, or 27 where 39 isn't loaded */
+#define PW64_PLANE_SMALL 2 /* model 27 */
+extern int pw64_plane;
+extern int pw64_plane_run;
+void pw64_plane_load(struct GyrocopterData* gc);
+void pw64_plane_enter(struct GyrocopterData* gc);
+void pw64_plane_posm(struct GyrocopterData* gc);
+void pw64_plane_end(void);
+int pw64_plane_forces(struct GyrocopterData* gc);
+int pw64_plane_control(struct GyrocopterData* gc);
+int pw64_plane_accel(struct GyrocopterData* gc);
+int pw64_plane_props(struct GyrocopterData* gc);
+int pw64_plane_pose(struct GyrocopterData* gc);
+int pw64_plane_rest(struct GyrocopterData* gc);
 /* Split-screen: player 2's pilot (native/src/pw64_split.c), -1 = player
  * 1's. Set by the pilot select's second pass (game.c.patch) or, on a
  * PW64_START boot, by PW64_P2_PILOT (pw64-platform start.rs). */

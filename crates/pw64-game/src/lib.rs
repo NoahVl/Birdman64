@@ -56,6 +56,9 @@ unsafe extern "C" {
     static mut pw64_infinite_lod: i32;
     /// native/src/pw64_visibility.c: whole-island view distance, 0 = off.
     static mut pw64_infinite_view_distance: i32;
+    /// native/src/pw64_plane.c: the plane the gyrocopter slot flies,
+    /// `PLANE_*` (0 = off).
+    static mut pw64_plane: i32;
 }
 
 /// Infinite LOD (models always at their most detailed level) and infinite
@@ -240,6 +243,31 @@ pub fn set_split_share(on: bool) {
     #[cfg(feature = "dylib")]
     if let Some(g) = dylib::try_game() {
         unsafe { *g.split_share = on as i32 };
+    }
+}
+
+/// `pw64_plane` values (pw64_native.h `PW64_PLANE_*`): the gyrocopter.
+pub const PLANE_OFF: i32 = 0;
+/// The big plane (model 39; model 27 where the level didn't load 39).
+pub const PLANE_BIG: i32 = 1;
+/// The small plane (model 27).
+pub const PLANE_SMALL: i32 = 2;
+
+/// Experimental plane variant of the gyrocopter for the C side
+/// (pw64_plane.c): `mode` is one of the `PLANE_*` values; with a plane the
+/// slot flies it (its model and a fixed-wing flight model) and the run saves
+/// nothing. Latched at each test start, so this may be called any time (also
+/// live from the settings screen).
+pub fn set_plane(mode: i32) {
+    // SAFETY: plain C flag; the game reads it on its own thread.
+    #[cfg(feature = "static")]
+    unsafe {
+        pw64_plane = mode
+    };
+    // SAFETY: same global, exported by the loaded game module.
+    #[cfg(feature = "dylib")]
+    if let Some(g) = dylib::try_game() {
+        unsafe { *g.plane = mode };
     }
 }
 

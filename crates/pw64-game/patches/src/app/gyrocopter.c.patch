@@ -14,7 +14,39 @@
  
  void func_80304738(GyrocopterData* gcData);
  void func_80304B98(GyrocopterData* gcData);
-@@ -1573,6 +1580,8 @@ void func_80308478(GyrocopterData* gcData) {
+@@ -274,9 +281,14 @@ void func_8030399C(GyrocopterData* gcData) {
+     func_80307A9C(gcData);
+     func_80307E2C(gcData);
+-    func_80308478(gcData);
+-    func_80307BAC(gcData);
+-    func_80307EA8(gcData);
++    // PW64 plane variant (pw64_plane.c): wind, wing and propeller in place
++    // of the hover lock, rotor and rotor thrust.
++    if (!pw64_plane_forces(gcData)) {
++        func_80308478(gcData);
++        func_80307BAC(gcData);
++        func_80307EA8(gcData);
++    }
+
+     switch (gcData->unkC0) {
+     case 0:
+-        func_80304738(gcData);
++        if (!pw64_plane_control(gcData)) { // PW64 plane variant: attitude hold
++            func_80304738(gcData);
++        }
+         break;
+     case 1:
+     case 4:
+@@ -293,6 +305,8 @@ void func_8030399C(GyrocopterData* gcData) {
+     default:
+         break;
+     }
+-    func_80309090(gcData);
++    if (!pw64_plane_accel(gcData)) { // PW64 plane variant: no autorotation/trim
++        func_80309090(gcData);
++    }
+     if ((gcData->unkC0 == 0) && (gcData->unk190.z < gcData->unk190.y) && (gcData->unk6D == 0)) {
+@@ -1573,6 +1587,8 @@ void func_80308478(GyrocopterData* gcData) {
              (gcData->fuel > 0.0f)) {
              if (gcData->unk7C == 0) {
                  gcData->unk7C = 1;

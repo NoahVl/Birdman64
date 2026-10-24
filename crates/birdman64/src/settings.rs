@@ -287,6 +287,9 @@ enum Opt {
     /// U26: pause (open the overlay) when the window loses focus or the
     /// last controller disconnects (Main page).
     PauseBackground,
+    /// Experimental plane variant of the gyrocopter (Main page): live from
+    /// the next test start (`pw64_game::set_plane`); plane runs save nothing.
+    Plane,
     /// Switch 2 pads over Bluetooth LE (`ble.rs`, Controls page): live,
     /// switches the scanner on/off without a restart.
     Ble,
@@ -523,6 +526,8 @@ pub struct Overlay {
     /// U26 (live): pause when the window loses focus / the last pad
     /// disconnects (Main page row).
     pause_background: bool,
+    /// Staged gyrocopter plane variant (live from the next test start).
+    plane: opts::PlaneMode,
     /// Switch 2 pads over BLE (live: `ble::set_enabled` on change).
     ble: bool,
     /// Split-screen (live: `input::request_split` on change; the game
@@ -709,6 +714,7 @@ impl Overlay {
             show_fps: opts::show_fps(),
             perf: crate::perf::cfg(),
             pause_background: opts::pause_in_background(),
+            plane: opts::live_plane(),
             ble: crate::ble::is_on(),
             saved_toast: None,
             snapshot: config::SavedSettings::default(),
@@ -781,6 +787,8 @@ impl Overlay {
         self.show_fps = gpu.show_fps;
         self.perf = crate::perf::cfg();
         self.pause_background = gpu.pause_background;
+        // Plane variant (live): the value in force.
+        self.plane = opts::live_plane();
         // BLE pads (live): the switch as it stands.
         self.ble = crate::ble::is_on();
         // Pilot collisions, score sharing, layout (live): the values in
@@ -1739,6 +1747,8 @@ impl Overlay {
                     Row::Opt(Opt::Volume),
                     // U26: pause when the window goes to the background.
                     Row::Opt(Opt::PauseBackground),
+                    // Experimental: the gyrocopter's plane variant.
+                    Row::Opt(Opt::Plane),
                     Row::UnlockAll,
                     Row::RestoreUnlock,
                     Row::OpenSaveFolder,
@@ -1937,6 +1947,7 @@ impl Overlay {
                 self.text_row(ui, at(Row::PerfPage), "Performance overlay \u{203a}");
                 self.opt_row(ui, at(Row::Opt(Opt::Volume)), Opt::Volume);
                 self.opt_row(ui, at(Row::Opt(Opt::PauseBackground)), Opt::PauseBackground);
+                self.opt_row(ui, at(Row::Opt(Opt::Plane)), Opt::Plane);
                 if rows.contains(&Row::UnlockAll) {
                     self.unlock_row(ui, at(Row::UnlockAll));
                 }
@@ -2547,6 +2558,7 @@ impl Overlay {
                 if self.pause_background { "On" } else { "Off" }.into(),
                 "",
             ),
+            Opt::Plane => ("Gyrocopter", self.plane.label().into(), "(experimental)"),
             Opt::Ble => (
                 "Switch 2 controllers (Bluetooth)",
                 if self.ble { "On" } else { "Off" }.into(),
@@ -2979,6 +2991,12 @@ impl Overlay {
                 Opt::PerfCorner if self.perf.pos.is_some() => self.perf.pos = None,
                 Opt::PerfCorner => self.perf.corner = self.perf.corner.step(d),
                 Opt::PauseBackground => self.pause_background = !self.pause_background,
+                Opt::Plane => {
+                    // Gyrocopter, Small plane, Big plane (wrapping).
+                    self.plane = self.plane.step(d);
+                    // Live: the game latches it at each test start.
+                    opts::apply_plane(self.plane);
+                }
                 // Set by an env var, or no controller input at all: the row
                 // is disabled and shows why (`ble_status_lines`).
                 Opt::Ble if crate::ble::locked_by().is_some() => {}
@@ -3124,6 +3142,7 @@ impl Overlay {
             splitscreen_collisions: Some(self.collisions),
             splitscreen_share: Some(self.share_scores),
             split_layout: Some(self.split_layout.to_config()),
+            plane: Some(self.plane.to_config()),
             // The rebinding maps as they stand now (empty = defaults, so
             // the sub-table is dropped from the file).
             keyboard: Some(input::keyboard_overrides()),
@@ -3487,6 +3506,7 @@ fn changed_since(s: config::SavedSettings, snap: &config::SavedSettings) -> conf
         splitscreen_collisions: keep(s.splitscreen_collisions, &snap.splitscreen_collisions),
         splitscreen_share: keep(s.splitscreen_share, &snap.splitscreen_share),
         split_layout: keep(s.split_layout, &snap.split_layout),
+        plane: keep(s.plane, &snap.plane),
         keyboard: keep(s.keyboard, &snap.keyboard),
         gamepad: keep(s.gamepad, &snap.gamepad),
     }
@@ -3732,6 +3752,10 @@ fn help(row: Row) -> &'static str {
             Opt::PauseBackground => {
                 "Pauses the game when you switch to another window or your last controller \
                  disconnects."
+            }
+            Opt::Plane => {
+                "Experimental: fly the gyrocopter tests in a small or a big plane. Applies from \
+                 the next test. Plane flights don't save scores."
             }
             Opt::Ble => {
                 "Play with Switch 2 Joy-Con or a Pro Controller 2 over Bluetooth. Experimental: \
@@ -4338,6 +4362,7 @@ mod tests {
             splitscreen_collisions: Some(true),
             splitscreen_share: Some(true),
             split_layout: Some("left_right"),
+            plane: Some("big"),
             perf: Some(crate::perf::Cfg {
                 graph: true,
                 cpu: true,
@@ -4381,6 +4406,7 @@ mod tests {
             splitscreen_collisions: Some(false),
             splitscreen_share: Some(false),
             split_layout: Some("top_bottom"),
+            plane: Some("off"),
             perf: Some(crate::perf::Cfg::default()),
             keyboard: Some(std::collections::BTreeMap::new()),
             gamepad: Some(std::collections::BTreeMap::new()),
@@ -4396,10 +4422,12 @@ mod tests {
              \n[input.keyboard]\nA = \"KeyX\"\n\n[input.gamepad]\nA = \"East\"\n\
              \n[input.ble]\nenabled = true\n\
              \n[splitscreen]\nenabled = true\np2_input = \"keyboard\"\ncollisions = true\n\
-             share_scores = true\nlayout = \"left_right\"\n",
+             share_scores = true\nlayout = \"left_right\"\n\n[extras]\nplane = \"big\"\n",
         )
         .unwrap();
         config::apply(&mut table, &d, false).unwrap();
+        // The plane variant's default removes the key and its table.
+        assert!(table.get("extras").is_none());
         let g = &table["graphics"];
         for k in [
             "msaa",
@@ -4535,10 +4563,11 @@ mod tests {
     fn rows_pages_and_controls_row() {
         let mut o = Overlay::new();
         // Main: Resume, Controls, Move HUD, the three sub-pages, Volume, the
-        // background-pause row, Unlock everything, Open save folder, Export /
-        // Import save, Quit (U2, U3, U15, U26).
+        // background-pause row, the gyrocopter's plane variant, Unlock
+        // everything, Open save folder, Export / Import save, Quit (U2, U3,
+        // U15, U26).
         let rows = o.rows();
-        assert_eq!(rows.len(), 13);
+        assert_eq!(rows.len(), 14);
         assert_eq!(rows[0], Row::Resume);
         assert_eq!(rows[1], Row::Controls);
         assert_eq!(rows[2], Row::HudLayout);
@@ -4547,11 +4576,27 @@ mod tests {
         assert_eq!(rows[5], Row::PerfPage);
         assert_eq!(rows[6], Row::Opt(Opt::Volume));
         assert_eq!(rows[7], Row::Opt(Opt::PauseBackground));
-        assert_eq!(rows[8], Row::UnlockAll);
-        assert_eq!(rows[9], Row::OpenSaveFolder);
-        assert_eq!(rows[10], Row::ExportSave);
-        assert_eq!(rows[11], Row::ImportSave);
-        assert_eq!(rows[12], Row::Quit);
+        assert_eq!(rows[8], Row::Opt(Opt::Plane));
+        assert_eq!(rows[9], Row::UnlockAll);
+        assert_eq!(rows[10], Row::OpenSaveFolder);
+        assert_eq!(rows[11], Row::ExportSave);
+        assert_eq!(rows[12], Row::ImportSave);
+        assert_eq!(rows[13], Row::Quit);
+        // The Gyrocopter row cycles Gyrocopter → Small plane → Big plane.
+        o.plane = opts::PlaneMode::Gyrocopter;
+        o.sel = 8;
+        let labels: Vec<String> = (0..4)
+            .map(|_| {
+                o.change(1, true);
+                o.row_text(Opt::Plane).1
+            })
+            .collect();
+        assert_eq!(
+            labels,
+            ["Small plane", "Big plane", "Gyrocopter", "Small plane"]
+        );
+        o.change(-1, true);
+        assert_eq!(o.plane, opts::PlaneMode::Gyrocopter);
         // Move HUD closes the overlay into the edit mode (once).
         o.sel = 2;
         o.confirm();
@@ -4560,9 +4605,9 @@ mod tests {
         // With an unlock backup, the restore row sits under Unlock everything.
         o.restore_available = true;
         let rows = o.rows();
-        assert_eq!(rows.len(), 14);
-        assert_eq!(rows[9], Row::RestoreUnlock);
-        assert_eq!(rows[10], Row::OpenSaveFolder);
+        assert_eq!(rows.len(), 15);
+        assert_eq!(rows[10], Row::RestoreUnlock);
+        assert_eq!(rows[11], Row::OpenSaveFolder);
         o.restore_available = false;
         // The performance overlay page: the counter, the opt-in extras, Back.
         o.sel = 5;

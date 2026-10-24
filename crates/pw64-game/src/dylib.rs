@@ -57,6 +57,8 @@ pub struct Game {
     pub infinite_lod: *mut i32,
     /// `pw64_infinite_view_distance` (pw64_visibility.c): 0 = off.
     pub infinite_view_distance: *mut i32,
+    /// `pw64_plane` (pw64_plane.c): gyrocopter plane variant, `PLANE_*`.
+    pub plane: *mut i32,
     /// `D_802B892C` (memory.c): the sample global memmap checks.
     pub sample_global: *const u32,
     /// `[start, end)` of the module image.
@@ -186,6 +188,7 @@ fn bind_module(h: *mut c_void, path: &Path) -> Result<(), String> {
             split_hint: sym(c"pw64_split_hint")?.cast(),
             infinite_lod: sym(c"pw64_infinite_lod")?.cast(),
             infinite_view_distance: sym(c"pw64_infinite_view_distance")?.cast(),
+            plane: sym(c"pw64_plane")?.cast(),
             sample_global: sym(c"D_802B892C")?.cast(),
             range,
         };

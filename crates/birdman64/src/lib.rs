@@ -521,6 +521,8 @@ pub fn run_game(
     input::apply_split_share(input::split_share());
     // View layout (latched at each test start; also live from settings).
     input::apply_split_layout(input::split_layout());
+    // Gyrocopter plane variant (latched at each test start; also live).
+    opts::apply_plane(opts::plane());
     // `PW64_RELOC` vaddr regions (option-a.md): after the game module is
     // loaded (firstrun.rs, before this), before the C runs.
     pw64_game::memmap::register_regions();

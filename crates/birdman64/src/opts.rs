@@ -286,6 +286,108 @@ pub fn infinite_view_distance() -> bool {
     )
 }
 
+/// What the gyrocopter slot flies (experimental plane variant; the C
+/// `pw64_plane` value, latched at each test start; plane runs save nothing).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlaneMode {
+    /// The gyrocopter itself.
+    #[default]
+    Gyrocopter,
+    /// The small plane (model 27).
+    Small,
+    /// The big plane (model 39; model 27 where the level didn't load 39).
+    Big,
+}
+
+impl PlaneMode {
+    /// Settings row order.
+    pub const ALL: [PlaneMode; 3] = [PlaneMode::Gyrocopter, PlaneMode::Small, PlaneMode::Big];
+
+    /// The C `pw64_plane` value.
+    pub fn to_c(self) -> i32 {
+        match self {
+            PlaneMode::Gyrocopter => pw64_game::PLANE_OFF,
+            PlaneMode::Small => pw64_game::PLANE_SMALL,
+            PlaneMode::Big => pw64_game::PLANE_BIG,
+        }
+    }
+
+    /// The `[extras] plane` spelling.
+    pub fn to_config(self) -> &'static str {
+        match self {
+            PlaneMode::Gyrocopter => "off",
+            PlaneMode::Small => "small",
+            PlaneMode::Big => "big",
+        }
+    }
+
+    /// The settings row value.
+    pub fn label(self) -> &'static str {
+        match self {
+            PlaneMode::Gyrocopter => "Gyrocopter",
+            PlaneMode::Small => "Small plane",
+            PlaneMode::Big => "Big plane",
+        }
+    }
+
+    /// `d` steps along the row order (wrapping; +1 = next).
+    pub fn step(self, d: i32) -> Self {
+        let n = Self::ALL.len() as i32;
+        let i = Self::ALL.iter().position(|&m| m == self).unwrap_or(0) as i32;
+        Self::ALL[(i + d.signum()).rem_euclid(n) as usize]
+    }
+}
+
+/// `off|gyrocopter|0`, `small`, `big|1` (case-insensitive; `1` is the old
+/// on/off flag's "on" = the big plane); None otherwise.
+pub fn parse_plane(v: &str) -> Option<PlaneMode> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "off" | "gyrocopter" | "gyro" | "0" | "false" => Some(PlaneMode::Gyrocopter),
+        "small" => Some(PlaneMode::Small),
+        "big" | "1" | "true" => Some(PlaneMode::Big),
+        _ => None,
+    }
+}
+
+/// The plane variant: `PW64_PLANE=0|1|small|big` or a
+/// `PW64_START=<class>:pl|ps:<test>` boot > `[extras] plane` > the gyrocopter.
+pub fn plane() -> PlaneMode {
+    let start = match pw64_platform::start::env_plane() {
+        pw64_game::PLANE_BIG => Some(PlaneMode::Big),
+        pw64_game::PLANE_SMALL => Some(PlaneMode::Small),
+        _ => None,
+    };
+    precedence(
+        env_opt("PW64_PLANE", "use 0, 1, small or big", parse_plane).or(start),
+        crate::config::get().extras.plane,
+        PlaneMode::Gyrocopter,
+    )
+}
+
+/// The plane mode as last handed to the game: 0 = never, else C value + 1.
+static PLANE_LIVE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Hands the plane mode to the game (boot, settings row) and remembers it.
+pub fn apply_plane(mode: PlaneMode) {
+    // Unit tests drive the settings rows in parallel: no process-wide mirror.
+    if !cfg!(test) {
+        PLANE_LIVE.store(1 + mode.to_c() as u8, std::sync::atomic::Ordering::Relaxed);
+    }
+    pw64_game::set_plane(mode.to_c());
+}
+
+/// The plane mode as in force (live changes included), else [`plane`].
+pub fn live_plane() -> PlaneMode {
+    let v = PLANE_LIVE.load(std::sync::atomic::Ordering::Relaxed);
+    if v == 0 {
+        return plane();
+    }
+    PlaneMode::ALL
+        .into_iter()
+        .find(|m| m.to_c() == i32::from(v) - 1)
+        .unwrap_or_default()
+}
+
 /// The default for `fill_screen` given the widescreen setting.
 pub(crate) fn fill_default(widescreen: Option<f32>) -> bool {
     widescreen.is_some()
