@@ -132,39 +132,48 @@ static ParsedUVMD* plane_model_loaded(s32 modelId) {
 /* Tuning (metres, seconds; accelerations in m/s^2)                         */
 /* ------------------------------------------------------------------------ */
 
+/* Estimated body drag coefficient of the gyro (a = AP_BODY_DRAG * V^2), fitted
+ * to the old top-speed numbers (~45 m/s at 0.5 throttle, ~62 m/s at full).
+ * If a mode's speed lands off target in game, tune this one value. */
+#define AP_BODY_DRAG 0.0029f
+#define AP_MIN_CD0 0.0005f
+#define AP_FLAP_RATE 2.0f      /* eases toward the new mode (1/s) */
+#define KMH_TO_MS(k) ((k) / 3.6f)
+
 #define AP_GRAVITY 9.8f
 /* Lift: K * CL * airspeed^2. CL = 0.35 (wing incidence alone) holds level
  * flight at ~45 m/s; CL_MAX gives a ~22 m/s stall. */
-#define AP_LIFT_K 0.0138f
 #define AP_CL_SLOPE 5.0f      /* CL per unit AoA (tan) */
-#define AP_ALPHA_STALL 0.28f  /* stall AoA (tan, ~16 deg) */
+#define AP_ALPHA_STALL 0.24f  /* stall AoA (tan, ~16 deg) */
 #define AP_CL_MAX 1.4f
 #define AP_CL_FALL 6.0f       /* CL lost per unit AoA past the stall */
 #define AP_CL_POST_STALL 0.6f
 #define AP_WING_INCIDENCE 0.07f
 #define AP_GROUND_RAKE 0.03f  /* extra AoA from the gear stance */
-#define AP_ROTATE_AOA 0.2f    /* full stick back on the runway (takeoff) */
-#define AP_ROTATE_SPEED 15.0f /* the elevator bites from this airspeed */
+#define AP_ROTATE_AOA 0.14f    /* full stick back on the runway (takeoff) */
 /* Drag on top of the gyro's body drag (func_80307A9C, which levels off at
  * ~7.6 m/s^2): parasitic CD0 * V^2 and induced K_I * CL * lift. Top speed
  * ~62 m/s at full throttle, ~45 m/s at the 0.5 the throttle returns to. */
-#define AP_CD0 0.0015f
-#define AP_INDUCED_K 0.08f
-#define AP_THRUST_MAX 19.0f   /* static thrust at full throttle */
-#define AP_PROP_VMAX 150.0f   /* thrust falls linearly to 0 at this airspeed */
+#define AP_INDUCED_K 0.02f
+#define AP_THRUST_MAX 20.5f   /* static thrust at full throttle */
+#define AP_PROP_VMAX 370.0f   /* thrust falls linearly to 0 at this airspeed */
 #define AP_SIDE_DAMP 1.5f     /* fin: turns the velocity toward the nose */
-#define AP_BRAKE 5.0f         /* wheel brakes, throttle closed on the ground */
+#define AP_BRAKE 0.00001f         /* wheel brakes, throttle closed on the ground */
 #define AP_GROUND_SPOIL 0.3f  /* lift kept on the ground, throttle closed */
 /* Control: attitude hold, the stick sets bank and pitch angles. */
 #define AP_MAX_BANK 0.96f     /* 55 deg */
 #define AP_MAX_PITCH 0.61f    /* 35 deg */
-#define AP_ROLL_GAIN 1.6f     /* rad/s at full bank error */
-#define AP_PITCH_GAIN 1.0f
-#define AP_CTRL_SPEED 35.0f   /* full authority from this airspeed */
+#define AP_ROLL_GAIN 0.8f     /* rad/s at full bank error */
+#define AP_PITCH_GAIN 0.5f
 #define AP_MIN_AUTHORITY 0.15f
 #define AP_STALL_NOSE_DROP 0.6f /* rad/s, wing fully stalled */
 #define AP_MIN_TURN_SPEED 18.0f
 #define AP_MAX_TURN_RATE 0.8f
+
+#define AP_WIND_STRENGTH 1.5f
+
+#define AP_FUEL_DRAIN_MULTIPLIER 1.0f
+
 /* func_8030399C tumbles the vehicle past |pitch| 0.803 or |roll| 1.065:
  * the rates stop short of that. */
 #define AP_PITCH_GUARD 0.72f
@@ -178,6 +187,78 @@ static f32 ap_clamp(f32 v, f32 lo, f32 hi) {
         return hi;
     }
     return v;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Flap modes (gcData->flapMode: 0 = take off, 1 = cruise, 2 = landing)     */
+/* ------------------------------------------------------------------------ */
+
+typedef struct {
+    f32 speedKmh;       /* steady speed at refThrottle */
+    f32 stallKmh;       /* 1 g stall speed */
+    f32 refThrottle;    /* throttle at which speedKmh is reached */
+    f32 ctrlSpeedKmh;   /* full control authority from this airspeed */
+    f32 rotateMarginKmh;/* elevator bites / liftoff rotation = stall + this */
+} FlapSpec;
+
+static const FlapSpec sFlapSpecs[3] = {
+    { 95.0f, 75.0f, 0.70f, 80.0f, 5.0f },    /* take off */
+    { 200.0f, 130.0f, 0.80f, 126.0f, 10.0f }, /* cruise */
+    { 120.0f, 70.0f, 0.50f, 80.0f, 5.0f },   /* landing */
+};
+
+typedef struct {
+    f32 liftK;
+    f32 cd0;
+    f32 rotateSpeed; /* m/s */
+    f32 ctrlSpeed;   /* m/s */
+} FlapParams;
+
+static FlapParams sFlap = { 0.0138f, 0.0015f, 47.22f, 35.0f };
+
+static void flap_params_for(s32 mode, FlapParams* out) {
+    const FlapSpec* s;
+    f32 vs, v, k, cl, thrust, c;
+
+    if (mode < 0) {
+        mode = 0;
+    } else if (mode > 2) {
+        mode = 2;
+    }
+    s = &sFlapSpecs[mode];
+    vs = KMH_TO_MS(s->stallKmh);
+    v = KMH_TO_MS(s->speedKmh);
+
+    /* Stall: K * CL_MAX * vs^2 = g */
+    k = AP_GRAVITY / (AP_CL_MAX * SQ(vs));
+
+    /* Level-flight CL at the mode's speed, then the drag that balances
+     * thrust there: thrust = (body + CD0) * v^2 + induced. */
+    cl = AP_GRAVITY / (k * SQ(v));
+    thrust = s->refThrottle * AP_THRUST_MAX * (1.0f - (v / AP_PROP_VMAX));
+    c = (thrust - (AP_INDUCED_K * cl * AP_GRAVITY)) / SQ(v);
+
+    out->liftK = k;
+    out->cd0 = ap_clamp(c - AP_BODY_DRAG, AP_MIN_CD0, 1.0f);
+    out->rotateSpeed = KMH_TO_MS(s->stallKmh + s->rotateMarginKmh);
+    out->ctrlSpeed = KMH_TO_MS(s->ctrlSpeedKmh);
+}
+
+/* Snap to the current mode (test start / replay). */
+static void plane_flap_reset(GyrocopterData* gcData) {
+    flap_params_for(gcData->flapMode, &sFlap);
+}
+
+/* Ease toward the current mode, once per physics frame. */
+static void plane_flap_update(GyrocopterData* gcData) {
+    FlapParams t;
+    f32 a = ap_clamp(AP_FLAP_RATE * D_8034F854, 0.0f, 1.0f);
+
+    flap_params_for(gcData->flapMode, &t);
+    sFlap.liftK += (t.liftK - sFlap.liftK) * a;
+    sFlap.cd0 += (t.cd0 - sFlap.cd0) * a;
+    sFlap.rotateSpeed += (t.rotateSpeed - sFlap.rotateSpeed) * a;
+    sFlap.ctrlSpeed += (t.ctrlSpeed - sFlap.ctrlSpeed) * a;
 }
 
 /* Lift coefficient vs. angle of attack (tan), with a stall. */
@@ -212,7 +293,7 @@ static f32 ap_alpha(GyrocopterData* gcData) {
         alpha += AP_GROUND_RAKE;
         /* Takeoff rotation: the main gear holds the attitude, so stick back
          * stands in for the nose coming up (pitch stick back = negative). */
-        if ((gcData->unkA0 < 0.0f) && (airspeed > AP_ROTATE_SPEED)) {
+        if ((gcData->unkA0 < 0.0f) && (airspeed > sFlap.rotateSpeed)) {
             alpha -= AP_ROTATE_AOA * gcData->unkA0;
         }
     }
@@ -271,6 +352,8 @@ void pw64_plane_load(struct GyrocopterData* gc) {
     gcData->unk634 = p->eye.x;
     gcData->unk638 = p->eye.y;
     gcData->unk63C = p->eye.z;
+
+    plane_flap_reset(gcData);
 }
 
 /* Root pose with the model's offset (after each uvDobjPosm(objId, 0)). */
@@ -344,12 +427,12 @@ static void plane_wind(GyrocopterData* gcData) {
     gcData->unk364.x = local.x - gcData->unk190.x;
     gcData->unk364.y = local.y - gcData->unk190.y;
     gcData->unk364.z = local.z - gcData->unk190.z;
-    gcData->unk31C.x += 0.21f * local.x;
-    gcData->unk31C.y += 0.21f * local.y;
-    gcData->unk31C.z += 0.21f * local.z;
-    gcData->unk1B8.x += 0.21f * world.x;
-    gcData->unk1B8.y += 0.21f * world.y;
-    gcData->unk1B8.z += 0.21f * world.z;
+    gcData->unk31C.x += AP_WIND_STRENGTH * local.x;
+    gcData->unk31C.y += AP_WIND_STRENGTH * local.y;
+    gcData->unk31C.z += AP_WIND_STRENGTH * local.z;
+    gcData->unk1B8.x += AP_WIND_STRENGTH * world.x;
+    gcData->unk1B8.y += AP_WIND_STRENGTH * world.y;
+    gcData->unk1B8.z += AP_WIND_STRENGTH * world.z;
 }
 
 /* Wing lift and drag, fin, and the wing collision capsule (in place of
@@ -380,7 +463,7 @@ static void plane_aero(GyrocopterData* gcData) {
         return;
     }
     cl =ap_lift_coef(ap_alpha(gcData));
-    lift = AP_LIFT_K * cl * SQ(airspeed);
+    lift = sFlap.liftK * cl * SQ(airspeed);
     /* Landing: on the wheels with the throttle closed the lift is spoiled,
      * so a touchdown sticks instead of floating off the short runways. */
     if ((gcData->unkC0 == 1) && (gcData->unkB4 < 0.05f)) {
@@ -392,10 +475,10 @@ static void plane_aero(GyrocopterData* gcData) {
     /* After a touchdown faster than 1 m/s the ground solver (func_80304B98)
      * cancels the lift for 4 s (unk8C counts up) so the gyro settles; a
      * pilot pulling back for takeoff (or a touch-and-go) ends that early. */
-    if ((gcData->unkC0 == 1) && (gcData->unkA0 < 0.0f) && (airspeed > AP_ROTATE_SPEED) && (gcData->unk8C < 4.0f)) {
+    if ((gcData->unkC0 == 1) && (gcData->unkA0 < 0.0f) && (airspeed > sFlap.rotateSpeed) && (gcData->unk8C < 4.0f)) {
         gcData->unk8C = 4.0f;
     }
-    drag = (AP_CD0 * SQ(airspeed)) + (AP_INDUCED_K * cl * lift);
+    drag = (sFlap.cd0 * SQ(airspeed)) + (AP_INDUCED_K * cl * lift);
     gcData->unk31C.y -= drag;
 
     /* Fin: side airflow pushes the velocity back toward the nose. */
@@ -429,7 +512,21 @@ static void plane_engine(GyrocopterData* gcData) {
         }
     }
     if ((gcData->fuel > 0.0f) && gcData->usingFuel) {
-        gcData->fuel -= func_80313F08(&D_803694D0, gcData->unkB4) * D_8034F854;
+        f32 throttle = gcData->unkB4;
+        f32 fuelMultiplier = AP_FUEL_DRAIN_MULTIPLIER;
+
+        if (throttle > 0.965f) {
+            // Above 90%: very fast fuel consumption
+            fuelMultiplier = 3.0f + (throttle - 0.5f) * 8.0f;
+        } else if (throttle > 0.5f) {
+            // Above 50%: moderately faster fuel consumption
+            fuelMultiplier = 0.4f + (throttle - 0.5f) * 1.50f;
+        } else {
+            fuelMultiplier = 0.4f;
+        }
+
+        gcData->fuel -= func_80313F08(&D_803694D0, throttle) * fuelMultiplier * D_8034F854;
+        //gcData->fuel -= func_80313F08(&D_803694D0, gcData->unkB4) * D_8034F854;
         if (gcData->fuel <= 0.0f) {
             gcData->usingFuel = FALSE;
         }
@@ -465,6 +562,7 @@ int pw64_plane_forces(struct GyrocopterData* gc) {
     if (!pw64_plane_run) {
         return 0;
     }
+    plane_flap_update(gc);
     plane_wind(gc);
     plane_aero(gc);
     plane_engine(gc);
@@ -511,7 +609,7 @@ int pw64_plane_control(struct GyrocopterData* gc) {
     gcData->unkA8 = gcData->unkA0;
 
     airspeed = ap_clamp(-gcData->unk364.y, 0.0f, 1000.0f);
-    authority = ap_clamp(airspeed / AP_CTRL_SPEED, AP_MIN_AUTHORITY, 1.0f);
+        authority = ap_clamp(airspeed / sFlap.ctrlSpeed, AP_MIN_AUTHORITY, 1.0f);
     alpha = ap_alpha(gcData);
     stall = ap_clamp((ABS_NOEQ(alpha) - AP_ALPHA_STALL) / 0.15f, 0.0f, 1.0f);
 
