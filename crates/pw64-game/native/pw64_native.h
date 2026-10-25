@@ -132,6 +132,7 @@ void pw64_hud_tag(int on);
 #define PW64_HUD_CB_POWER 10
 #define PW64_HUD_CB_HEADING 11
 #define PW64_HUD_CB_ELEVATION 12
+#define PW64_HUD_FLAPS 13
 extern int pw64_hud_elem;
 void pw64_hud_element(int id);
 void pw64_hud_emit_element(int id);

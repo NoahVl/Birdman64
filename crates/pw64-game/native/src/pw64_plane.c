@@ -137,34 +137,39 @@ static ParsedUVMD* plane_model_loaded(s32 modelId) {
  * flight at ~45 m/s; CL_MAX gives a ~22 m/s stall. */
 #define AP_LIFT_K 0.0138f
 #define AP_CL_SLOPE 5.0f      /* CL per unit AoA (tan) */
-#define AP_ALPHA_STALL 0.28f  /* stall AoA (tan, ~16 deg) */
+#define AP_ALPHA_STALL 0.24f  /* stall AoA (tan, ~16 deg) */
 #define AP_CL_MAX 1.4f
 #define AP_CL_FALL 6.0f       /* CL lost per unit AoA past the stall */
 #define AP_CL_POST_STALL 0.6f
 #define AP_WING_INCIDENCE 0.07f
 #define AP_GROUND_RAKE 0.03f  /* extra AoA from the gear stance */
-#define AP_ROTATE_AOA 0.2f    /* full stick back on the runway (takeoff) */
-#define AP_ROTATE_SPEED 15.0f /* the elevator bites from this airspeed */
+#define AP_ROTATE_AOA 0.14f    /* full stick back on the runway (takeoff) */
+#define AP_ROTATE_SPEED 47.22f /* the elevator bites from this airspeed */
 /* Drag on top of the gyro's body drag (func_80307A9C, which levels off at
  * ~7.6 m/s^2): parasitic CD0 * V^2 and induced K_I * CL * lift. Top speed
  * ~62 m/s at full throttle, ~45 m/s at the 0.5 the throttle returns to. */
 #define AP_CD0 0.0015f
-#define AP_INDUCED_K 0.08f
-#define AP_THRUST_MAX 19.0f   /* static thrust at full throttle */
-#define AP_PROP_VMAX 150.0f   /* thrust falls linearly to 0 at this airspeed */
+#define AP_INDUCED_K 0.02f
+#define AP_THRUST_MAX 20.5f   /* static thrust at full throttle */
+#define AP_PROP_VMAX 370.0f   /* thrust falls linearly to 0 at this airspeed */
 #define AP_SIDE_DAMP 1.5f     /* fin: turns the velocity toward the nose */
-#define AP_BRAKE 5.0f         /* wheel brakes, throttle closed on the ground */
+#define AP_BRAKE 0.00001f         /* wheel brakes, throttle closed on the ground */
 #define AP_GROUND_SPOIL 0.3f  /* lift kept on the ground, throttle closed */
 /* Control: attitude hold, the stick sets bank and pitch angles. */
 #define AP_MAX_BANK 0.96f     /* 55 deg */
 #define AP_MAX_PITCH 0.61f    /* 35 deg */
-#define AP_ROLL_GAIN 1.6f     /* rad/s at full bank error */
-#define AP_PITCH_GAIN 1.0f
+#define AP_ROLL_GAIN 0.8f     /* rad/s at full bank error */
+#define AP_PITCH_GAIN 0.5f
 #define AP_CTRL_SPEED 35.0f   /* full authority from this airspeed */
 #define AP_MIN_AUTHORITY 0.15f
 #define AP_STALL_NOSE_DROP 0.6f /* rad/s, wing fully stalled */
 #define AP_MIN_TURN_SPEED 18.0f
 #define AP_MAX_TURN_RATE 0.8f
+
+#define AP_WIND_STRENGTH 1.5f
+
+#define AP_FUEL_DRAIN_MULTIPLIER 1.0f
+
 /* func_8030399C tumbles the vehicle past |pitch| 0.803 or |roll| 1.065:
  * the rates stop short of that. */
 #define AP_PITCH_GUARD 0.72f
@@ -344,12 +349,12 @@ static void plane_wind(GyrocopterData* gcData) {
     gcData->unk364.x = local.x - gcData->unk190.x;
     gcData->unk364.y = local.y - gcData->unk190.y;
     gcData->unk364.z = local.z - gcData->unk190.z;
-    gcData->unk31C.x += 0.21f * local.x;
-    gcData->unk31C.y += 0.21f * local.y;
-    gcData->unk31C.z += 0.21f * local.z;
-    gcData->unk1B8.x += 0.21f * world.x;
-    gcData->unk1B8.y += 0.21f * world.y;
-    gcData->unk1B8.z += 0.21f * world.z;
+    gcData->unk31C.x += AP_WIND_STRENGTH * local.x;
+    gcData->unk31C.y += AP_WIND_STRENGTH * local.y;
+    gcData->unk31C.z += AP_WIND_STRENGTH * local.z;
+    gcData->unk1B8.x += AP_WIND_STRENGTH * world.x;
+    gcData->unk1B8.y += AP_WIND_STRENGTH * world.y;
+    gcData->unk1B8.z += AP_WIND_STRENGTH * world.z;
 }
 
 /* Wing lift and drag, fin, and the wing collision capsule (in place of
@@ -429,7 +434,21 @@ static void plane_engine(GyrocopterData* gcData) {
         }
     }
     if ((gcData->fuel > 0.0f) && gcData->usingFuel) {
-        gcData->fuel -= func_80313F08(&D_803694D0, gcData->unkB4) * D_8034F854;
+        f32 throttle = gcData->unkB4;
+        f32 fuelMultiplier = AP_FUEL_DRAIN_MULTIPLIER;
+
+        if (throttle > 0.965f) {
+            // Above 90%: very fast fuel consumption
+            fuelMultiplier = 3.0f + (throttle - 0.5f) * 8.0f;
+        } else if (throttle > 0.5f) {
+            // Above 50%: moderately faster fuel consumption
+            fuelMultiplier = 0.4f + (throttle - 0.5f) * 1.50f;
+        } else {
+            fuelMultiplier = 0.4f;
+        }
+
+        gcData->fuel -= func_80313F08(&D_803694D0, throttle) * fuelMultiplier * D_8034F854;
+        //gcData->fuel -= func_80313F08(&D_803694D0, gcData->unkB4) * D_8034F854;
         if (gcData->fuel <= 0.0f) {
             gcData->usingFuel = FALSE;
         }
