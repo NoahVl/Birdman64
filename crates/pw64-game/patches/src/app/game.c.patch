@@ -1333,6 +1333,19 @@
      switch (sp6C->veh) {
      case VEHICLE_HANG_GLIDER:
          D_803676F0 = (HangGliderData*)sp6C->vehicleData;
+@@ -796,7 +796,11 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
+         break;
+     case VEHICLE_GYROCOPTER:
+         D_803676F4 = (GyrocopterData*)sp6C->vehicleData;
+-        gyrocopterMovementFrame(D_803676F4, arg0->state);
++        if (pw64_plane_run) {
++            pw64_plane_movement_frame(D_803676F4, arg0->state);
++        } else {
++            gyrocopterMovementFrame(D_803676F4, arg0->state);
++        }
+         switch (D_803676F4->unkC0) {
+         case 0:
+             sp6B = 1;
 @@ -938,18 +1487,53 @@ s32 gameUpdateStateTestUpdate(Unk80362690* arg0) {
          gameState = GAME_STATE_RESULTS;
          break;

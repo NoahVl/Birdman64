@@ -36,10 +36,4 @@ Settings Main page "Gyrocopter" cycles Gyrocopter / Small plane / Big plane;
   `func_80309090` (no autorotation/trim/speed cap). Ground handling stays the gyro's.
 - **Tumble guard:** `func_8030399C` tumbles past |pitch| 0.803 / |roll| 1.065; rates
   are zeroed beyond 0.72 / 1.0.
-- **Ground:** after a touchdown >1 m/s the ground solver cancels lift for 4 s
-  (`unk8C` < 4); stick back above 15 m/s ends that (takeoff/touch-and-go). Throttle
-  closed on the wheels spoils lift (×0.3) and brakes; the test ends at <0.1 m/s.
-  Lift-off chatters 0↔1 for ~0.7 s (harmless).
-- **Numbers seen:** lift-off ~90-110 km/h HUD, cruise (throttle 0.5) ~115, full ~150,
-  stall ~55. The gyro runways are short: land slow (cut throttle early).
-- Open: no plane-specific sound/shadow; split-screen flies two planes (one global flag).
+- **Ground:** The ground solver has been modified to not remove speed after a touchdown. 
