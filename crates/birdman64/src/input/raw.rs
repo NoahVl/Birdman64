@@ -16,7 +16,8 @@
 //! A = "KEY(290)"            # a raw button
 //! C_UP = "ABS(5)-"          # half an axis, as a button (pressed past half way)
 //! STICK_UP = "ABS(17)-"     # a hat direction: a digital stick direction
-//! SETTINGS = "KEY(296)"     # opens the settings screen (optional)
+//! SETTINGS = "KEY(296)"     # opens the settings screen (optional; a
+//!                           # combination too: "KEY(296)+KEY(297)")
 //! ```
 //!
 //! A raw input is the code's gilrs spelling (`Display`, platform specific:
@@ -35,9 +36,6 @@ use super::{
 };
 use std::collections::BTreeMap;
 
-/// The settings-screen trigger as a raw-setup slot (above the stick bits).
-pub(crate) const SETTINGS_BIT: u32 = 1 << 20;
-
 /// A half axis or a hat direction counts as pressed past this (gilrs's own
 /// axis-to-button threshold is 0.75; a worn clone stick may never get there).
 const PRESS: f32 = 0.5;
@@ -51,6 +49,11 @@ const CAPTURE_TRAVEL: f32 = 0.6;
 pub(crate) enum Half {
     Pos,
     Neg,
+}
+
+/// How far an axis value `v` presses half `h` (0..1).
+pub(crate) fn half_level(h: Half, v: f32) -> f32 {
+    (h.sign() * v).max(0.0)
 }
 
 impl Half {
@@ -157,13 +160,11 @@ pub(crate) fn looks_like_hat(code: &str) -> bool {
 }
 
 /// Digital slots beyond `[input.gamepad]`'s: a gamepad's C Down / Left /
-/// Right come from its right stick, a clone's are buttons; and the settings
-/// trigger.
-const EXTRA_SLOTS: [(u32, &str); 4] = [
+/// Right come from its right stick, a clone's are buttons.
+const EXTRA_SLOTS: [(u32, &str); 3] = [
     (CONT_C_DOWN as u32, "C_DOWN"),
     (CONT_C_LEFT as u32, "C_LEFT"),
     (CONT_C_RIGHT as u32, "C_RIGHT"),
-    (SETTINGS_BIT, "SETTINGS"),
 ];
 
 /// Every digital slot of a setup: bit and name.
@@ -174,12 +175,51 @@ fn digital_slots() -> impl Iterator<Item = (u32, &'static str)> {
         .chain(EXTRA_SLOTS)
 }
 
-/// Slot names a setup accepts: the digital slots and the two analog stick
-/// axes.
+/// Slot names a setup accepts: the digital slots, the two analog stick
+/// axes and the settings trigger.
 pub(crate) fn slot_names() -> impl Iterator<Item = &'static str> {
     digital_slots()
         .map(|(_, n)| n)
-        .chain(["STICK_X", "STICK_Y"])
+        .chain(["STICK_X", "STICK_Y", "SETTINGS"])
+}
+
+/// The most inputs a settings combination may have.
+const MAX_CHORD: usize = 3;
+
+/// A `SETTINGS` value: one raw input or a combination joined by `+`
+/// (`"KEY(296)+KEY(297)"`, `"ABS(2)++KEY(5)"`: a `+` starts a new input only
+/// where a name follows, so an axis half's own `+` stays). `None`: an
+/// unreadable part, a repeat, or more than three.
+pub(crate) fn parse_chord(s: &str) -> Option<Vec<RawInput>> {
+    let b = s.as_bytes();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for i in 0..b.len() {
+        let next = s[i + 1..].trim_start().as_bytes().first();
+        if b[i] == b'+' && next.is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_') {
+            parts.push(&s[start..i]);
+            start = i + 1;
+        }
+    }
+    parts.push(&s[start..]);
+    let mut out: Vec<RawInput> = Vec::new();
+    for p in parts {
+        let i = RawInput::parse(p)?;
+        if out.contains(&i) {
+            return None;
+        }
+        out.push(i);
+    }
+    (out.len() <= MAX_CHORD).then_some(out)
+}
+
+/// A combination's `pw64.toml` spelling (`parse_chord` reads it back).
+fn chord_config(inputs: &[RawInput]) -> String {
+    inputs
+        .iter()
+        .map(RawInput::to_config)
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 /// One controller model's custom setup (`[input.devices."<GUID>"]`).
@@ -187,8 +227,11 @@ pub(crate) fn slot_names() -> impl Iterator<Item = &'static str> {
 pub(crate) struct Profile {
     /// The name saved with it (the pad's name when it was set up).
     pub name: String,
-    /// Digital slots: CONT bits, `STICK_*` bits, [`SETTINGS_BIT`].
+    /// Digital slots: CONT bits, `STICK_*` bits.
     pub buttons: Vec<(u32, RawInput)>,
+    /// The settings trigger: inputs held together (empty: keyboard only).
+    /// A combination's inputs may also be game buttons.
+    pub settings: Vec<RawInput>,
     /// Analog stick: the raw axis half that is right / up.
     pub stick_x: Option<RawInput>,
     pub stick_y: Option<RawInput>,
@@ -210,6 +253,16 @@ impl Profile {
                 problems.push(format!("unknown slot {slot:?}"));
                 continue;
             };
+            if name == "SETTINGS" {
+                match parse_chord(value) {
+                    Some(c) => p.settings = c,
+                    None => problems.push(format!(
+                        "SETTINGS = {value:?}: not a raw input or a combination like \
+                         \"KEY(296)+KEY(297)\""
+                    )),
+                }
+                continue;
+            }
             let Some(input) = RawInput::parse(value) else {
                 problems.push(format!(
                     "{name} = {value:?}: not a raw input like \"KEY(304)\""
@@ -242,10 +295,13 @@ impl Profile {
         for (bit, input) in &self.buttons {
             m.insert(slot_name(*bit).to_string(), input.to_config());
         }
+        if !self.settings.is_empty() {
+            m.insert("SETTINGS".to_string(), chord_config(&self.settings));
+        }
         m
     }
 
-    /// Slot bits held right now (CONT, `STICK_*`, [`SETTINGS_BIT`]).
+    /// Slot bits held right now (CONT, `STICK_*`).
     fn bits(&self, state: &impl RawState) -> u32 {
         self.buttons
             .iter()
@@ -264,18 +320,21 @@ impl Profile {
         (axis(&self.stick_x), axis(&self.stick_y))
     }
 
-    /// The N64 pad this controller gives the game (the settings trigger
-    /// never reaches it).
+    /// The N64 pad this controller gives the game. (A single settings
+    /// input is never also a game button: the guided setup refuses that; a
+    /// combination's inputs are kept from the game by the trigger gate.)
     pub fn pad(&self, state: &impl RawState) -> Pad {
-        self.pad_from(self.bits(state) & !SETTINGS_BIT, state)
+        self.pad_from(self.bits(state), state)
     }
 
     /// The settings overlay's navigation pad: the setup's own A / B / Start
     /// confirm / go back / close; its stick, `STICK_*` and N64 d-pad
     /// directions move.
     pub fn nav(&self, state: &impl RawState) -> Pad {
-        let menu = CONT_A | CONT_B | CONT_START | CONT_UP | CONT_DOWN | CONT_LEFT | CONT_RIGHT;
-        self.pad_from(self.bits(state) & (u32::from(menu) | STICK_BITS), state)
+        self.pad_from(
+            self.bits(state) & (u32::from(MENU_BITS) | STICK_BITS),
+            state,
+        )
     }
 
     fn pad_from(&self, bits: u32, state: &impl RawState) -> Pad {
@@ -288,11 +347,25 @@ impl Profile {
         })
     }
 
-    /// The settings trigger is held.
-    pub fn settings(&self, state: &impl RawState) -> bool {
-        self.bits(state) & SETTINGS_BIT != 0
+    /// Per settings input: is it held (for the trigger gate).
+    pub fn settings_held(&self, state: &impl RawState) -> Vec<bool> {
+        self.settings.iter().map(|i| i.pressed(state)).collect()
+    }
+
+    /// The N64 buttons (game, overlay navigation) an input gives here: what
+    /// the trigger gate masks while a combination holds it.
+    pub fn input_bits(&self, input: &RawInput) -> (u16, u16) {
+        let game = self
+            .buttons
+            .iter()
+            .filter(|(_, i)| i == input)
+            .fold(0u32, |b, (bit, _)| b | bit) as u16;
+        (game, game & MENU_BITS)
     }
 }
+
+/// The N64 buttons the settings overlay reads.
+const MENU_BITS: u16 = CONT_A | CONT_B | CONT_START | CONT_UP | CONT_DOWN | CONT_LEFT | CONT_RIGHT;
 
 const STICK_BITS: u32 = STICK_UP_BIT | STICK_DOWN_BIT | STICK_LEFT_BIT | STICK_RIGHT_BIT;
 
@@ -317,6 +390,9 @@ pub(crate) enum Want {
     Axis,
     /// A button, or an axis / hat moved off its rest.
     Any,
+    /// Like `Any`, but everything pressed before the first release: one
+    /// input or a combination (the settings step).
+    Chord,
 }
 
 /// One gilrs event, reduced to what the capture needs.
@@ -330,7 +406,7 @@ pub(crate) enum RawEvent {
 /// axis value when the capture armed (0 for an axis not seen yet).
 pub(crate) fn capture(want: Want, ev: &RawEvent, rest: f32) -> Option<RawInput> {
     match ev {
-        RawEvent::Pressed(code) if want == Want::Any => Some(RawInput::button(code.clone())),
+        RawEvent::Pressed(code) if want != Want::Axis => Some(RawInput::button(code.clone())),
         RawEvent::Axis(code, v) if (v - rest).abs() >= CAPTURE_TRAVEL && v.abs() >= PRESS => {
             let half = if *v > 0.0 { Half::Pos } else { Half::Neg };
             Some(RawInput::axis(code.clone(), half))
@@ -365,8 +441,9 @@ pub(crate) const STEPS: [(&str, &str, Want); 17] = [
     ("STICK_RIGHT", "Press D-pad right", Want::Any),
     (
         "SETTINGS",
-        "Press the button that should open Settings (skip: keyboard only)",
-        Want::Any,
+        "Hold the button (or two or three together) that should open Settings, then \
+         let go (skip: keyboard only)",
+        Want::Chord,
     ),
 ];
 
@@ -389,12 +466,26 @@ impl Wizard {
         STEPS.get(self.step).copied()
     }
 
-    /// Takes a captured input for the current step. `Err` names the step
-    /// that already uses it (the same code: an axis's other half counts, so
-    /// the stick's X and Y can't share an axis, and a C button can't take a
-    /// stick axis by accident). `Ok` moves on.
-    pub fn take(&mut self, input: RawInput) -> Result<(), &'static str> {
+    /// Takes a captured input for the current step (a settings
+    /// combination: all its inputs). `Err` names the step that already uses
+    /// it (the same code: an axis's other half counts, so the stick's X and
+    /// Y can't share an axis, and a C button can't take a stick axis by
+    /// accident). A combination's inputs may be game buttons too: that is
+    /// what keeps every button free for the game. `Ok` moves on.
+    pub fn take(&mut self, inputs: Vec<RawInput>) -> Result<(), &'static str> {
         let Some((slot, _, _)) = self.current() else {
+            return Ok(());
+        };
+        if inputs.len() > 1 {
+            if slot != "SETTINGS" {
+                // Only the settings step takes a combination.
+                return Err("a combination");
+            }
+            self.got.extend(inputs.into_iter().map(|i| (slot, i)));
+            self.step += 1;
+            return Ok(());
+        }
+        let Some(input) = inputs.into_iter().next() else {
             return Ok(());
         };
         // A stick axis owns both its halves; otherwise one input per slot,
@@ -430,6 +521,7 @@ impl Wizard {
             match *slot {
                 "STICK_X" => p.stick_x = Some(input.clone()),
                 "STICK_Y" => p.stick_y = Some(input.clone()),
+                "SETTINGS" => p.settings.push(input.clone()),
                 s => p.buttons.push((slot_bit(s), input.clone())),
             }
         }
@@ -529,7 +621,8 @@ mod tests {
         );
         assert_eq!(p.name, "USB Joystick");
         assert_eq!(p.stick_x, Some(RawInput::axis("ABS(0)", Half::Pos)));
-        assert_eq!(p.buttons.len(), 3);
+        assert_eq!(p.buttons.len(), 2);
+        assert_eq!(p.settings, [RawInput::button("KEY(296)")]);
         assert_eq!(problems.len(), 3, "{problems:?}");
         // A stick axis without a half is refused, not guessed.
         let mut problems = Vec::new();
@@ -576,7 +669,7 @@ mod tests {
         t.axes.insert("ABS(5)", -0.9);
         let pad = p.pad(&t);
         assert_eq!(pad.button, CONT_Z | CONT_C_UP);
-        assert!(p.settings(&t));
+        assert_eq!(p.settings_held(&t), [true]);
         // The other half of the same axis does nothing.
         t.axes.insert("ABS(5)", 0.9);
         assert_eq!(p.pad(&t).button & CONT_C_UP, 0);
@@ -629,23 +722,32 @@ mod tests {
     #[test]
     fn wizard_rejects_reuse_and_builds_the_profile() {
         let mut w = Wizard::default();
-        assert_eq!(w.take(RawInput::axis("ABS(0)", Half::Pos)), Ok(()));
+        assert_eq!(w.take(vec![RawInput::axis("ABS(0)", Half::Pos)]), Ok(()));
         // The stick's Y can't be the X axis, whichever half.
-        assert_eq!(w.take(RawInput::axis("ABS(0)", Half::Neg)), Err("STICK_X"));
-        assert_eq!(w.take(RawInput::axis("ABS(1)", Half::Neg)), Ok(()));
-        assert_eq!(w.take(RawInput::button("KEY(1)")), Ok(())); // A
-        assert_eq!(w.take(RawInput::button("KEY(1)")), Err("A")); // B
-        assert_eq!(w.take(RawInput::button("KEY(2)")), Ok(())); // B
+        assert_eq!(
+            w.take(vec![RawInput::axis("ABS(0)", Half::Neg)]),
+            Err("STICK_X")
+        );
+        assert_eq!(w.take(vec![RawInput::axis("ABS(1)", Half::Neg)]), Ok(()));
+        assert_eq!(w.take(vec![RawInput::button("KEY(1)")]), Ok(())); // A
+        assert_eq!(w.take(vec![RawInput::button("KEY(1)")]), Err("A")); // B
+        assert_eq!(w.take(vec![RawInput::button("KEY(2)")]), Ok(())); // B
         // A stick axis can't become a button.
-        assert_eq!(w.take(RawInput::axis("ABS(1)", Half::Pos)), Err("STICK_Y"));
+        assert_eq!(
+            w.take(vec![RawInput::axis("ABS(1)", Half::Pos)]),
+            Err("STICK_Y")
+        );
         w.skip(); // Z
         // Two halves of one axis are fine as two buttons (C up / C down).
         while w.current().map(|c| c.0) != Some("C_UP") {
             w.skip();
         }
-        assert_eq!(w.take(RawInput::axis("ABS(5)", Half::Neg)), Ok(()));
-        assert_eq!(w.take(RawInput::axis("ABS(5)", Half::Neg)), Err("C_UP"));
-        assert_eq!(w.take(RawInput::axis("ABS(5)", Half::Pos)), Ok(()));
+        assert_eq!(w.take(vec![RawInput::axis("ABS(5)", Half::Neg)]), Ok(()));
+        assert_eq!(
+            w.take(vec![RawInput::axis("ABS(5)", Half::Neg)]),
+            Err("C_UP")
+        );
+        assert_eq!(w.take(vec![RawInput::axis("ABS(5)", Half::Pos)]), Ok(()));
         while !w.done() {
             w.skip();
         }
@@ -663,12 +765,88 @@ mod tests {
     fn every_step_is_a_slot() {
         for (slot, _, _) in STEPS {
             assert!(slot_names().any(|n| n == slot), "{slot}");
-            if !is_stick(slot) {
+            if !is_stick(slot) && slot != "SETTINGS" {
                 assert_ne!(slot_bit(slot), 0, "{slot} has a bit");
                 assert_eq!(slot_name(slot_bit(slot)), slot);
             }
         }
         assert_eq!(slot_bit("C_RIGHT"), u32::from(crate::input::CONT_C_RIGHT));
+    }
+
+    #[test]
+    fn settings_combinations() {
+        let c = parse_chord("KEY(296)+KEY(297)").unwrap();
+        assert_eq!(
+            c,
+            [RawInput::button("KEY(296)"), RawInput::button("KEY(297)")]
+        );
+        // An axis half's own `+` is not a separator.
+        let c = parse_chord("ABS(2)+ + KEY(5)").unwrap();
+        assert_eq!(
+            c,
+            [
+                RawInput::axis("ABS(2)", Half::Pos),
+                RawInput::button("KEY(5)")
+            ]
+        );
+        assert_eq!(chord_config(&c), "ABS(2)++KEY(5)");
+        assert_eq!(parse_chord(&chord_config(&c)), Some(c));
+        assert_eq!(
+            parse_chord("KEY(1)"),
+            Some(vec![RawInput::button("KEY(1)")])
+        );
+        for bad in [
+            "",
+            "KEY(1)+KEY(1)",
+            "KEY(1)+x",
+            "KEY(1)+KEY(2)+KEY(3)+KEY(4)",
+        ] {
+            assert_eq!(parse_chord(bad), None, "{bad:?}");
+        }
+        // A combination may reuse game buttons; it round-trips; its inputs'
+        // game bits are what the gate masks.
+        let mut problems = Vec::new();
+        let p = Profile::from_map(
+            &map(&[("START", "KEY(297)"), ("SETTINGS", "KEY(296)+KEY(297)")]),
+            &mut problems,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(p.settings.len(), 2);
+        assert_eq!(p.to_map()["SETTINGS"], "KEY(296)+KEY(297)");
+        assert_eq!(
+            p.input_bits(&RawInput::button("KEY(297)")),
+            (CONT_START, CONT_START)
+        );
+        assert_eq!(p.input_bits(&RawInput::button("KEY(296)")), (0, 0));
+        // The wizard: only the settings step takes several inputs, and they
+        // may be game buttons already.
+        let mut w = Wizard::default();
+        assert_eq!(
+            w.take(vec![RawInput::button("KEY(1)"), RawInput::button("KEY(2)")]),
+            Err("a combination")
+        );
+        while w.current().map(|c| c.0) != Some("START") {
+            w.skip();
+        }
+        assert_eq!(w.take(vec![RawInput::button("KEY(297)")]), Ok(()));
+        while w.current().map(|c| c.0) != Some("SETTINGS") {
+            w.skip();
+        }
+        assert_eq!(w.current().unwrap().2, Want::Chord);
+        let chord = vec![RawInput::button("KEY(296)"), RawInput::button("KEY(297)")];
+        assert_eq!(w.take(chord.clone()), Ok(()));
+        assert!(w.done());
+        assert_eq!(w.profile().settings, chord);
+        // A single settings input still can't be a game button.
+        let mut w = Wizard::default();
+        while w.current().map(|c| c.0) != Some("START") {
+            w.skip();
+        }
+        w.take(vec![RawInput::button("KEY(297)")]).unwrap();
+        while w.current().map(|c| c.0) != Some("SETTINGS") {
+            w.skip();
+        }
+        assert_eq!(w.take(vec![RawInput::button("KEY(297)")]), Err("START"));
     }
 
     #[test]

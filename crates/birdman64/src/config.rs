@@ -46,7 +46,7 @@
 //!
 //! [input]                  # settings-screen triggers (default: F10 / Select)
 //! settings_key = "F10"
-//! settings_pad_button = "Select"
+//! settings_pad_button = "Select" # or a combination, "Select+Start" (reserves nothing)
 //!
 //! [input.keyboard]         # N64 slot → key; unlisted slots keep their defaults
 //! A = "Space"
@@ -974,6 +974,42 @@ fn with_device(
     }
     if devices.is_empty() {
         input.remove("devices");
+    }
+    if input.is_empty() {
+        table.remove("input");
+    }
+    Ok(table)
+}
+
+/// Writes `[input] settings_pad_button` right away (the Controls page's
+/// "Open settings" row; `None`: back to the default, the key goes).
+pub fn save_settings_pad_button(value: Option<&str>) -> Result<(), String> {
+    let table = read_table()?;
+    write_table(&with_settings_pad_button(table, value)?)
+}
+
+/// [`save_settings_pad_button`]'s table edit (separate for tests). An
+/// `[input]` left empty goes too.
+fn with_settings_pad_button(
+    mut table: toml::Table,
+    value: Option<&str>,
+) -> Result<toml::Table, String> {
+    if value.is_none() && !table.contains_key("input") {
+        return Ok(table);
+    }
+    let input = table
+        .entry("input")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let toml::Value::Table(input) = input else {
+        return Err("[input] is not a table in pw64.toml; not saved".to_string());
+    };
+    match value {
+        Some(v) => {
+            input.insert("settings_pad_button".into(), v.into());
+        }
+        None => {
+            input.remove("settings_pad_button");
+        }
     }
     if input.is_empty() {
         table.remove("input");
@@ -2506,6 +2542,26 @@ mod tests {
         assert_eq!(c.graphics.widescreen.as_deref(), Some("0"));
         let c = parse("[graphics]\nwidescreen = \"wide\"\n").unwrap();
         assert_eq!(c.graphics.widescreen, None);
+    }
+
+    #[test]
+    fn settings_pad_button_writes_or_removes() {
+        let t: toml::Table = toml::from_str("[input]\nsettings_key = \"F1\"\n").unwrap();
+        let t = with_settings_pad_button(t, Some("Select+Start")).unwrap();
+        let c = from_table(&t);
+        assert_eq!(c.input.settings.pad_button.as_deref(), Some("Select+Start"));
+        assert_eq!(c.input.settings.key.as_deref(), Some("F1"));
+        let t = with_settings_pad_button(t, None).unwrap();
+        assert!(t["input"].get("settings_pad_button").is_none());
+        assert_eq!(t["input"]["settings_key"].as_str(), Some("F1"));
+        // The default on a file without [input] creates nothing.
+        assert!(
+            with_settings_pad_button(toml::Table::new(), None)
+                .unwrap()
+                .is_empty()
+        );
+        let t = with_settings_pad_button(toml::Table::new(), Some("Mode")).unwrap();
+        assert!(with_settings_pad_button(t, None).unwrap().is_empty());
     }
 
     #[test]

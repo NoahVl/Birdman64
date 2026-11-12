@@ -58,6 +58,9 @@ pub mod generic;
 pub(crate) mod raw;
 mod sdl_map;
 pub(crate) use raw::normalise_guid;
+// The controller's settings trigger: one button or a combination.
+pub mod trigger;
+pub use trigger::{pad_trigger, set_pad_trigger};
 
 // libultra `os_cont.h` button bits.
 pub const CONT_A: u16 = 0x8000;
@@ -414,12 +417,13 @@ static KEYBOARD: LiveTable<KeyCode> = LiveTable {
     parse: parse_key,
 };
 
-/// Gamepad bindings never include the settings pad button.
+/// Gamepad bindings never include a single-button settings trigger (a
+/// combination reserves nothing).
 static GAMEPAD: LiveTable<Button> = LiveTable {
     state: Mutex::new(None),
     config: || &config::get().input.gamepad,
     resolve: |m| {
-        let reserved = Some(crate::settings::pad_button());
+        let reserved = trigger::reserved();
         resolve(&GAMEPAD_SLOTS, m, "gamepad", parse_gamepad_button, reserved)
     },
     parse: parse_gamepad_button,
@@ -428,6 +432,37 @@ static GAMEPAD: LiveTable<Button> = LiveTable {
 /// Snapshot of the resolved keyboard bindings (config + rebinds).
 fn keyboard_bindings() -> Arc<Vec<Binding<KeyCode>>> {
     KEYBOARD.snapshot()
+}
+
+/// Re-resolves the gamepad bindings (the settings trigger changed: a single
+/// button leaves them, a combination's buttons come back).
+pub(crate) fn refresh_gamepad_bindings() {
+    GAMEPAD.edit(|_| {});
+}
+
+/// The N64 buttons a gamepad button gives the game (its CONT bits; the
+/// settings trigger gate masks these while a combination holds it).
+pub(crate) fn game_bits(b: Button) -> u16 {
+    (bits_for(&gamepad_bindings(), b) & u32::from(u16::MAX)) as u16
+}
+
+/// The settings overlay's fixed navigation buttons (`gamepad_nav_pad`).
+const NAV_BUTTONS: [(Button, u16); 7] = [
+    (Button::South, CONT_A),
+    (Button::East, CONT_B),
+    (Button::Start, CONT_START),
+    (Button::DPadUp, CONT_UP),
+    (Button::DPadDown, CONT_DOWN),
+    (Button::DPadLeft, CONT_LEFT),
+    (Button::DPadRight, CONT_RIGHT),
+];
+
+/// The N64 bit a gamepad button gives the settings overlay.
+pub(crate) fn nav_bits(b: Button) -> u16 {
+    NAV_BUTTONS
+        .iter()
+        .find(|(n, _)| *n == b)
+        .map_or(0, |&(_, bit)| bit)
 }
 
 /// Snapshot of the resolved gamepad bindings, minus the settings pad button.
@@ -962,15 +997,7 @@ pub(crate) fn digital_stick(x: i32, y: i32) -> (i8, i8) {
 /// button confirms.
 fn gamepad_nav_pad(g: &gilrs::Gamepad) -> Pad {
     let mut button = 0;
-    for (b, bit) in [
-        (Button::South, CONT_A),
-        (Button::East, CONT_B),
-        (Button::Start, CONT_START),
-        (Button::DPadUp, CONT_UP),
-        (Button::DPadDown, CONT_DOWN),
-        (Button::DPadLeft, CONT_LEFT),
-        (Button::DPadRight, CONT_RIGHT),
-    ] {
+    for (b, bit) in NAV_BUTTONS {
         if g.is_pressed(b) {
             button |= bit;
         }
@@ -2076,12 +2103,13 @@ pub fn spawn() {
             // U7: gilrs sends `Connected` for pads already present at init
             // on some backends. Toasts start after this grace period.
             let started = std::time::Instant::now();
-            // The settings trigger (`settings.rs`): a button the game never
-            // reads (`Select` by default — unmapped in `GAMEPAD_SLOTS`), so
-            // only the overlay consumes it. Edge-detected here; the toggle
+            // The settings trigger (`input/trigger.rs`): a button the game
+            // never reads (`Select` by default — unmapped in
+            // `GAMEPAD_SLOTS`) or a combination, gated per pad
+            // (`ChordGate`). Edge-detected here over all pads; the toggle
             // happens on the window thread (via the event loop proxy).
-            let settings_btn = crate::settings::pad_button();
             let mut settings_was_down = false;
+            let mut gates: HashMap<usize, trigger::ChordGate> = HashMap::new();
             // U26: when the last pad left (+ PAUSE_GRACE); cleared when one
             // reconnects. The window decides whether to pause, on its own
             // thread (`window::request_pause`).
@@ -2103,7 +2131,7 @@ pub fn spawn() {
                     }
                     // Controller setup: the raw capture takes its input
                     // first (any button, Unknown ones too, or an axis).
-                    if generic::capture_event(&gilrs, &ev) {
+                    if generic::capture_event(&gilrs, &ev) || trigger::capture_event(&ev) {
                         continue;
                     }
                     match ev.event {
@@ -2155,7 +2183,7 @@ pub fn spawn() {
                             if (PAD_CAPTURE.load(Ordering::Relaxed)
                                 || SOURCE_CAPTURE.load(Ordering::Relaxed))
                                 && !matches!(b, Button::Unknown | Button::Mode)
-                                && b != settings_btn =>
+                                && Some(b) != trigger::reserved() =>
                         {
                             if SOURCE_CAPTURE.load(Ordering::Relaxed) {
                                 // The pad itself, by name — but when several
@@ -2200,26 +2228,51 @@ pub fn spawn() {
                 // raw inputs instead of the gamepad bindings.
                 let profiles = generic::profiles();
                 generic::note_unrecognised(&gilrs, &profiles);
-                let reads: Vec<generic::PadRead> = pads
+                let pad_trigger = trigger::pad_trigger();
+                let focused = FOCUSED.load(Ordering::Relaxed);
+                let now = std::time::Instant::now();
+                gates.retain(|id, _| pads.iter().any(|(p, _)| usize::from(*p) == *id));
+                let mut trigger_down = false;
+                let mut reads: Vec<generic::PadRead> = pads
                     .iter()
-                    .map(|(_, g)| generic::read_pad(&profiles, g, settings_btn))
+                    .map(|(id, g)| {
+                        let mut r = generic::read_pad(&profiles, g, &pad_trigger);
+                        // W7: no settings trigger while another window is
+                        // focused (its members read as up).
+                        let held: Vec<bool> = r.trigger.iter().map(|m| focused && m.held).collect();
+                        let gate = gates.entry(usize::from(*id)).or_default();
+                        let out = gate.update(&held, now, r.grace);
+                        trigger_down |= out.down;
+                        // A combination's buttons stay out of the game and
+                        // the overlay while it waits / until released.
+                        for (m, &masked) in r.trigger.iter().zip(&out.mask) {
+                            if masked {
+                                r.game.button &= !m.game;
+                                r.nav.button &= !m.nav;
+                            }
+                        }
+                        r
+                    })
                     .collect();
                 // One entry per connected pad: per-player routing picks
                 // single pads out by name (split-screen), else they merge
                 // into controller 1.
                 let gamepads: Vec<(usize, String, Pad)> = pads
                     .iter()
-                    .zip(&reads)
+                    .zip(&mut reads)
                     .map(|((id, g), r)| (usize::from(*id), g.name().to_string(), r.game))
                     .collect();
                 let nav = reads.iter().map(|r| r.nav).fold(Pad::default(), Pad::merge);
-                // W7: no settings trigger while another window is focused.
-                let settings_down = FOCUSED.load(Ordering::Relaxed)
-                    && (reads.iter().any(|r| r.settings) || crate::ble::settings_pressed());
-                // Controller setup may be capturing the settings button
-                // itself: held back (edge state still tracked, so letting go
-                // after the capture doesn't toggle either).
-                if settings_down && !settings_was_down && !generic::capturing() {
+                let settings_down = trigger_down || (focused && crate::ble::settings_pressed());
+                // Controller setup / the trigger row may be capturing the
+                // settings buttons themselves: held back (edge state still
+                // tracked, so letting go after the capture doesn't toggle
+                // either).
+                if settings_down
+                    && !settings_was_down
+                    && !generic::capturing()
+                    && !trigger::capturing()
+                {
                     crate::window::notify_settings();
                 }
                 settings_was_down = settings_down;

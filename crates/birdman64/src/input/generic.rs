@@ -207,7 +207,8 @@ pub fn profile_for<'a>(
 pub struct Captured {
     pub guid: String,
     pub name: String,
-    pub input: RawInput,
+    /// One input; a settings combination (`Want::Chord`): all of them.
+    pub inputs: Vec<RawInput>,
 }
 
 struct Capture {
@@ -218,6 +219,9 @@ struct Capture {
     /// thread on its first poll after arming.
     rest: Option<HashMap<(usize, String), f32>>,
     got: Option<Captured>,
+    /// `Want::Chord`: the pad and the inputs pressed so far (done at the
+    /// first release).
+    chord: Option<(gilrs::GamepadId, Vec<RawInput>)>,
     /// A press came from a pad the setup can't key on (nil GUID).
     refused: bool,
 }
@@ -232,6 +236,7 @@ pub fn start_capture(want: Want, guid: Option<String>) {
         guid,
         rest: None,
         got: None,
+        chord: None,
         refused: false,
     });
     ARMED.store(true, Ordering::Relaxed);
@@ -289,11 +294,6 @@ pub fn capture_event(gilrs: &Gilrs, ev: &gilrs::Event) -> bool {
     if !capturing() {
         return false;
     }
-    let raw = match ev.event {
-        gilrs::EventType::ButtonPressed(_, code) => RawEvent::Pressed(code.to_string()),
-        gilrs::EventType::AxisChanged(_, v, code) => RawEvent::Axis(code.to_string(), v),
-        _ => return false,
-    };
     let mut g = CAPTURE.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(c) = g.as_mut().filter(|c| c.got.is_none() && c.rest.is_some()) else {
         return false;
@@ -303,6 +303,41 @@ pub fn capture_event(gilrs: &Gilrs, ev: &gilrs::Event) -> bool {
     if c.guid.as_ref().is_some_and(|want| *want != id) {
         return false;
     }
+    // A combination in progress: more presses join it, the first release
+    // of one of them ends it.
+    if let Some((cpad, held)) = &mut c.chord {
+        if *cpad != ev.id {
+            return false;
+        }
+        let released = match ev.event {
+            gilrs::EventType::ButtonReleased(_, code) => {
+                let code = code.to_string();
+                held.iter().any(|i| i.code == code && i.half.is_none())
+            }
+            gilrs::EventType::AxisChanged(_, v, code) => {
+                let code = code.to_string();
+                held.iter()
+                    .any(|i| i.code == code && i.half.is_some_and(|h| raw::half_level(h, v) < 0.5))
+            }
+            _ => false,
+        };
+        if released {
+            let inputs = std::mem::take(held);
+            c.chord = None;
+            c.got = Some(Captured {
+                guid: id,
+                name: pad.name().to_string(),
+                inputs,
+            });
+            ARMED.store(false, Ordering::Relaxed);
+            return true;
+        }
+    }
+    let raw = match ev.event {
+        gilrs::EventType::ButtonPressed(_, code) => RawEvent::Pressed(code.to_string()),
+        gilrs::EventType::AxisChanged(_, v, code) => RawEvent::Axis(code.to_string(), v),
+        _ => return false,
+    };
     let rest = match &raw {
         RawEvent::Axis(code, _) => c
             .rest
@@ -319,10 +354,18 @@ pub fn capture_event(gilrs: &Gilrs, ev: &gilrs::Event) -> bool {
         c.refused = true;
         return true;
     }
+    if c.want == Want::Chord {
+        let (_, held) = c.chord.get_or_insert_with(|| (ev.id, Vec::new()));
+        // An axis keeps sending values while held: it joins once.
+        if !held.iter().any(|i| i.code == input.code) && held.len() < 3 {
+            held.push(input);
+        }
+        return true;
+    }
     c.got = Some(Captured {
         guid: id,
         name: pad.name().to_string(),
-        input,
+        inputs: vec![input],
     });
     ARMED.store(false, Ordering::Relaxed);
     true
@@ -463,13 +506,25 @@ pub fn diag_poll(gilrs: &Gilrs) {
     *DIAG.lock().unwrap_or_else(PoisonError::into_inner) = pads;
 }
 
+/// One member of a pad's settings trigger, read once per poll: is it held,
+/// and which N64 buttons it gives the game and the overlay (what the
+/// trigger gate masks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Member {
+    pub held: bool,
+    pub game: u16,
+    pub nav: u16,
+}
+
 /// One connected pad, read once per poll: what it gives the game, the
-/// settings overlay's navigation, and whether it holds the settings
-/// trigger (its setup's SETTINGS input, else the configured pad button).
+/// settings overlay's navigation, and its settings trigger (its setup's
+/// SETTINGS inputs, else `[input] settings_pad_button`).
 pub struct PadRead {
     pub game: Pad,
     pub nav: Pad,
-    pub settings: bool,
+    pub trigger: Vec<Member>,
+    /// How long a lone trigger member is held back (combinations only).
+    pub grace: std::time::Duration,
 }
 
 /// Reads `g` through its model's custom setup if it has one, else through
@@ -477,22 +532,50 @@ pub struct PadRead {
 pub fn read_pad(
     profiles: &BTreeMap<String, Profile>,
     g: &gilrs::Gamepad,
-    settings_button: Button,
+    trigger: &super::trigger::PadTrigger,
 ) -> PadRead {
+    let grace = |n: usize| {
+        if n > 1 {
+            super::trigger::GRACE
+        } else {
+            std::time::Duration::ZERO
+        }
+    };
     match profile_for(profiles, g) {
         Some(p) => {
             let raw = GilrsRaw::new(g);
+            let trigger: Vec<Member> = p
+                .settings
+                .iter()
+                .zip(p.settings_held(&raw))
+                .map(|(i, held)| {
+                    let (game, nav) = p.input_bits(i);
+                    Member { held, game, nav }
+                })
+                .collect();
             PadRead {
                 game: p.pad(&raw),
                 nav: p.nav(&raw),
-                settings: p.settings(&raw),
+                grace: grace(trigger.len()),
+                trigger,
             }
         }
-        None => PadRead {
-            game: super::gamepad_pad(g),
-            nav: super::gamepad_nav_pad(g),
-            settings: g.is_pressed(settings_button),
-        },
+        None => {
+            let members = trigger.members();
+            PadRead {
+                game: super::gamepad_pad(g),
+                nav: super::gamepad_nav_pad(g),
+                trigger: members
+                    .iter()
+                    .map(|&b| Member {
+                        held: g.is_pressed(b),
+                        game: super::game_bits(b),
+                        nav: super::nav_bits(b),
+                    })
+                    .collect(),
+                grace: grace(members.len()),
+            }
+        }
     }
 }
 
