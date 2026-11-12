@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Hold the stick back to take off, close the throttle (B) to land and brake.
   Plane flights never save scores or medals. Flight model based on
   MegaMech's plane prototype.
+- Controller setup for generic USB controllers and N64 clones that aren't
+  in the controller database (Controls › Controller setup): every connected
+  controller is listed with its GUID, whether it is recognised and its live
+  raw input (axes, hats, buttons), and a guided setup binds the stick and
+  buttons to its raw inputs. The setup is saved per controller model and
+  applies again on reconnect.
+- Your own SDL2 controller mappings: put them in `gamecontrollerdb.txt` in
+  the data folder (or `SDL_GAMECONTROLLERCONFIG`). GUIDs from newer SDL tools
+  are matched too.
 
 ### Fixed
 

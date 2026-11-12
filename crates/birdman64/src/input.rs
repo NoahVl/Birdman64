@@ -52,6 +52,12 @@ pub use touch_pad::set_touch;
 mod ios_gc;
 #[cfg(target_os = "ios")]
 pub use ios_gc::poll as ios_gc_poll;
+// Controllers without a usable mapping: user SDL mappings, per-model custom
+// setups of raw inputs, the setup page's capture + diagnostics.
+pub mod generic;
+pub(crate) mod raw;
+mod sdl_map;
+pub(crate) use raw::normalise_guid;
 
 // libultra `os_cont.h` button bits.
 pub const CONT_A: u16 = 0x8000;
@@ -2043,7 +2049,7 @@ pub fn spawn() {
     let r = std::thread::Builder::new()
         .name("pw64-input".into())
         .spawn(move || {
-            let mut gilrs = match Gilrs::new() {
+            let mut gilrs = match generic::build_gilrs() {
                 Ok(g) => g,
                 Err(gilrs::Error::NotImplemented(g)) => {
                     eprintln!("[input] gamepads not supported on this platform");
@@ -2059,7 +2065,7 @@ pub fn spawn() {
                 gilrs.gamepads().count()
             );
             for (_, g) in gilrs.gamepads() {
-                eprintln!("[input] gamepad: {} ({:?})", g.name(), g.mapping_source());
+                eprintln!("[input] gamepad: {}", pad_summary(&g));
             }
             // Pads present at startup fire Connected only on some backends:
             // seed the active pad from the first connected one, so
@@ -2087,6 +2093,7 @@ pub fn spawn() {
                 }
             }
             loop {
+                generic::capture_poll(&gilrs);
                 while let Some(ev) = gilrs.next_event() {
                     if let Some(log) = padlog.as_mut() {
                         log.event(&ev);
@@ -2094,10 +2101,15 @@ pub fn spawn() {
                             log.pad_info(ev.id, &gilrs.gamepad(ev.id));
                         }
                     }
+                    // Controller setup: the raw capture takes its input
+                    // first (any button, Unknown ones too, or an axis).
+                    if generic::capture_event(&gilrs, &ev) {
+                        continue;
+                    }
                     match ev.event {
                         gilrs::EventType::Connected => {
                             let g = gilrs.gamepad(ev.id);
-                            eprintln!("[input] connected: {} ({:?})", g.name(), g.mapping_source());
+                            eprintln!("[input] connected: {}", pad_summary(&g));
                             set_active_pad(ev.id, &g);
                             // U26: a pad back within the grace: no pause.
                             pause_at = None;
@@ -2166,6 +2178,14 @@ pub fn spawn() {
                                 PAD_CAPTURE.store(false, Ordering::Relaxed);
                             }
                         }
+                        // A binding capture can't use a button gilrs can't
+                        // name: the Controls page points to Controller setup.
+                        gilrs::EventType::ButtonPressed(Button::Unknown, _)
+                            if PAD_CAPTURE.load(Ordering::Relaxed) =>
+                        {
+                            UNKNOWN_PRESSED.store(true, Ordering::Relaxed);
+                            active_pad_pressed(&gilrs, ev.id);
+                        }
                         // Any other press: that pad becomes the active one
                         // (last used wins; `active_pad` names its buttons).
                         gilrs::EventType::ButtonPressed(_, _) => {
@@ -2174,23 +2194,32 @@ pub fn spawn() {
                         _ => {}
                     }
                 }
+                generic::diag_poll(&gilrs);
                 let pads: Vec<_> = gilrs.gamepads().filter(|(_, g)| g.is_connected()).collect();
+                // A model with a custom setup (`[input.devices]`) reads its
+                // raw inputs instead of the gamepad bindings.
+                let profiles = generic::profiles();
+                generic::note_unrecognised(&gilrs, &profiles);
+                let reads: Vec<generic::PadRead> = pads
+                    .iter()
+                    .map(|(_, g)| generic::read_pad(&profiles, g, settings_btn))
+                    .collect();
                 // One entry per connected pad: per-player routing picks
                 // single pads out by name (split-screen), else they merge
                 // into controller 1.
                 let gamepads: Vec<(usize, String, Pad)> = pads
                     .iter()
-                    .map(|(id, g)| (usize::from(*id), g.name().to_string(), gamepad_pad(g)))
+                    .zip(&reads)
+                    .map(|((id, g), r)| (usize::from(*id), g.name().to_string(), r.game))
                     .collect();
-                let nav = pads
-                    .iter()
-                    .map(|(_, g)| gamepad_nav_pad(g))
-                    .fold(Pad::default(), Pad::merge);
+                let nav = reads.iter().map(|r| r.nav).fold(Pad::default(), Pad::merge);
                 // W7: no settings trigger while another window is focused.
                 let settings_down = FOCUSED.load(Ordering::Relaxed)
-                    && (pads.iter().any(|(_, g)| g.is_pressed(settings_btn))
-                        || crate::ble::settings_pressed());
-                if settings_down && !settings_was_down {
+                    && (reads.iter().any(|r| r.settings) || crate::ble::settings_pressed());
+                // Controller setup may be capturing the settings button
+                // itself: held back (edge state still tracked, so letting go
+                // after the capture doesn't toggle either).
+                if settings_down && !settings_was_down && !generic::capturing() {
                     crate::window::notify_settings();
                 }
                 settings_was_down = settings_down;
@@ -2352,15 +2381,17 @@ impl PadLog {
     }
 
     fn pad_info(&mut self, id: gilrs::GamepadId, g: &gilrs::Gamepad) {
-        let uuid: String = g.uuid().iter().map(|b| format!("{b:02x}")).collect();
+        let uuid = generic::guid(g);
         self.line(&format!(
             "pad {id}: name={:?} os_name={:?} vendor={:04x?} product={:04x?} uuid={uuid} \
-             mapping={:?} connected={}",
+             mapping={:?} status={:?} custom_setup={} connected={}",
             g.name(),
             g.os_name(),
             g.vendor_id(),
             g.product_id(),
             g.mapping_source(),
+            generic::status(g),
+            generic::profiles().contains_key(&uuid),
             g.is_connected()
         ));
     }
@@ -2377,6 +2408,24 @@ impl PadLog {
             ));
         }
     }
+}
+
+/// One line for stderr on connect: name, GUID and how it is read.
+fn pad_summary(g: &gilrs::Gamepad) -> String {
+    let guid = generic::guid(g);
+    let how = if generic::profiles().contains_key(&guid) {
+        "custom setup".to_string()
+    } else {
+        match generic::status(g) {
+            generic::Status::Mapped { name, user: true } => format!("your SDL mapping {name:?}"),
+            generic::Status::Mapped { name, user: false } => format!("SDL mapping {name:?}"),
+            generic::Status::Standard => "standard layout".to_string(),
+            generic::Status::Unrecognised => {
+                "not recognised: Settings > Controls > Controller setup".to_string()
+            }
+        }
+    };
+    format!("{} (GUID {guid}, {how})", g.name())
 }
 
 /// (Re)sets the active pad from a gilrs handle.
@@ -2467,12 +2516,21 @@ pub fn button_name(b: Button, f: PadFamily) -> &'static str {
 /// the game, and disarms itself.
 static PAD_CAPTURE: AtomicBool = AtomicBool::new(false);
 static CAPTURED_BUTTON: Mutex<Option<Button>> = Mutex::new(None);
+/// A button gilrs can't name (`Button::Unknown`) was pressed while a binding
+/// capture waited: the pad needs a custom setup (Controller setup).
+static UNKNOWN_PRESSED: AtomicBool = AtomicBool::new(false);
+
+/// Taken once: an unrecognised button was pressed during a binding capture.
+pub fn take_unknown_press() -> bool {
+    UNKNOWN_PRESSED.swap(false, Ordering::Relaxed)
+}
 
 /// Arms pad capture: the next pressed pad button (`Unknown`, `Mode` and the
 /// settings trigger never count) is stored for `take_captured_button`.
 #[allow(dead_code)] // R5
 pub fn start_pad_capture() {
     *CAPTURED_BUTTON.lock().unwrap() = None;
+    UNKNOWN_PRESSED.store(false, Ordering::Relaxed);
     PAD_CAPTURE.store(true, Ordering::Relaxed);
 }
 
