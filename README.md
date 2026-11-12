@@ -183,6 +183,32 @@ button printed B is the N64 A):
 | D-pad | D-pad | Not used in this game |
 | Select (Xbox: View, PlayStation: Create, Nintendo: minus) | Settings screen | Open or close the settings screen |
 
+### Generic USB controllers and N64 clones
+
+Controllers the built-in SDL controller database doesn't know (generic "USB
+Joystick" devices, many N64-style clones) still show up, but their buttons
+have no names. Set one up from the keyboard: press **F10** (or Esc), open
+**Controls › Controller setup**, then **Set up a controller…** and do what
+each step asks on the controller (Backspace skips a step, Esc stops). The page
+lists every connected controller with its GUID and whether it is recognised,
+and shows its raw input live: analog axes with their in-between values (`ABS(0)
+axis +0.42`), hats as whole directions (`ABS(16) hat -1`), and held buttons.
+
+The setup is saved per controller model in `pw64.toml` under
+`[input.devices."<GUID>"]` and applies again whenever that controller
+reconnects. It replaces the gamepad bindings for that model only; the setup's
+optional Settings button opens this screen from the controller. To undo it,
+use **Remove custom setup** on the same page.
+
+Already have an SDL2 mapping (from SDL2 Gamepad Tool, Steam or
+[SDL_GameControllerDB](https://github.com/mdqinc/SDL_GameControllerDB))?
+Put the line in `gamecontrollerdb.txt` in the data folder (next to
+`pw64.toml`) and restart; `SDL_GAMECONTROLLERCONFIG` works too. Lines for
+another platform are skipped, and the name checksum newer SDL tools put in
+the GUID (`0300`**`3086`**`79000000…`) is removed so the mapping matches. A
+controller the built-in database already knows keeps the built-in mapping;
+use Controller setup to change one of those.
+
 ## Features
 
 - Two-player split-screen (top/bottom or side by side) with every vehicle,
@@ -410,6 +436,12 @@ so back up `pw64.eep` first if you want to keep them.
   `linux_window = "x11"` under `[graphics]` in `pw64.toml` (or start the
   game with `PW64_LINUX_WINDOW=x11`). `linux_window = "wayland"` turns the
   workaround off.
+- **A controller connects but its buttons do nothing:** it isn't in the
+  controller database. Set it up in **Controls › Controller setup** (see
+  [Generic USB controllers and N64 clones](#generic-usb-controllers-and-n64-clones));
+  the keyboard's F10 or Esc always opens the settings screen. A stick that
+  only ever shows values near -1, 0 and +1 there reports no in-between
+  positions, which software can't restore.
 - **Verify a download:** every release file carries a build provenance
   attestation. With the GitHub `gh` CLI:
   `gh attestation verify <file> --repo <owner>/<repo>`.
