@@ -183,6 +183,14 @@ button printed B is the N64 A):
 | D-pad | D-pad | Not used in this game |
 | Select (Xbox: View, PlayStation: Create, Nintendo: minus) | Settings screen | Open or close the settings screen |
 
+Want Select as a game button? On the Controls page, select **Open settings**,
+hold two or three buttons together (for example Select and Start) and let
+go. Pressed together on one controller they open the settings screen; on
+their own each still works in the game, so you can bind Select like any other
+button. (`settings_pad_button = "Select+Start"` under `[input]` in
+`pw64.toml` does the same.) F10 and Esc always open the settings screen from
+the keyboard; `settings_key = "F1"` under `[input]` makes it F1.
+
 ### Generic USB controllers and N64 clones
 
 Controllers the built-in SDL controller database doesn't know (generic "USB

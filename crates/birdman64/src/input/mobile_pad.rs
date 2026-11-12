@@ -71,6 +71,9 @@ struct State {
     /// Some axis event arrived: the d-pad stops doubling as the stick.
     axes_seen: bool,
     settings_down: bool,
+    /// The settings trigger's per-pad gate (a combination fires once and
+    /// keeps its buttons from the game until released).
+    gate: super::trigger::ChordGate,
     /// The pad name a platform module stored ([`set_pad`]); empty falls
     /// back to [`PAD_NAME`].
     name: String,
@@ -92,6 +95,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     raw: RawAxes::new(),
     axes_seen: false,
     settings_down: false,
+    gate: super::trigger::ChordGate::new(),
     name: String::new(),
 });
 
@@ -201,13 +205,13 @@ pub fn android_key(key: PhysicalKey, pressed: bool, repeat: bool) -> AndroidKey 
     if repeat {
         return AndroidKey::Pad;
     }
-    let settings_btn = crate::settings::pad_button();
+    let trigger = super::trigger::pad_trigger();
     // Pad capture (settings screen rebinding): the press is stored for the
     // overlay and never reaches the game (same rule as the gilrs thread).
     if pressed
         && PAD_CAPTURE.load(Ordering::Relaxed)
         && !matches!(button, Button::Mode)
-        && button != settings_btn
+        && Some(button) != trigger.reserved()
     {
         *CAPTURED_BUTTON.lock().unwrap() = Some(button);
         PAD_CAPTURE.store(false, Ordering::Relaxed);
@@ -218,7 +222,7 @@ pub fn android_key(key: PhysicalKey, pressed: bool, repeat: bool) -> AndroidKey 
     if pressed {
         st.held.push(button);
     }
-    republish_state(&mut st, settings_btn);
+    republish_state(&mut st, &trigger);
     AndroidKey::Pad
 }
 
@@ -235,7 +239,7 @@ pub fn release_all() {
     {
         st.raw = RawAxes::new();
     }
-    republish_state(&mut st, crate::settings::pad_button());
+    republish_state(&mut st, &super::trigger::pad_trigger());
 }
 
 /// The window's `AxisMotion` event (one per axis of a pad MotionEvent) →
@@ -247,7 +251,7 @@ pub fn android_axis(axis: u32, value: f32) -> bool {
     if value.abs() > 0.5 {
         note_input(format!("axis {} {value:+.2}", axis_name(axis)));
     }
-    let settings_btn = crate::settings::pad_button();
+    let trigger = super::trigger::pad_trigger();
     let mut st = STATE.lock().unwrap();
     st.raw.set(axis, value);
     let axes = st.raw.axes();
@@ -265,7 +269,7 @@ pub fn android_axis(axis: u32, value: f32) -> bool {
         let before = axis_buttons(&st.axes, TRIGGER_THRESHOLD);
         if let Some(&b) = pressed
             .iter()
-            .find(|&&b| !before.contains(&b) && b != settings_btn)
+            .find(|&&b| !before.contains(&b) && Some(b) != trigger.reserved())
         {
             *CAPTURED_BUTTON.lock().unwrap() = Some(b);
             PAD_CAPTURE.store(false, Ordering::Relaxed);
@@ -273,7 +277,7 @@ pub fn android_axis(axis: u32, value: f32) -> bool {
     }
     st.axes = axes;
     st.axes_seen = true;
-    republish_state(&mut st, settings_btn);
+    republish_state(&mut st, &trigger);
     in_use
 }
 
@@ -283,7 +287,7 @@ pub fn android_axis(axis: u32, value: f32) -> bool {
 /// never doubles as the stick. No Android caller yet (keys only).
 #[allow(dead_code)]
 pub fn set_pad(held: &[Button], axes: Axes, name: &str) {
-    let settings_btn = crate::settings::pad_button();
+    let trigger = super::trigger::pad_trigger();
     let mut st = STATE.lock().unwrap();
     // Pad capture (settings screen rebinding), as in `android_key`: the
     // first newly pressed button is stored for the overlay (the game is
@@ -291,7 +295,7 @@ pub fn set_pad(held: &[Button], axes: Axes, name: &str) {
     if PAD_CAPTURE.load(Ordering::Relaxed)
         && let Some(&b) = held
             .iter()
-            .find(|&&b| !st.held.contains(&b) && b != Button::Mode && b != settings_btn)
+            .find(|&&b| !st.held.contains(&b) && b != Button::Mode && Some(b) != trigger.reserved())
     {
         *CAPTURED_BUTTON.lock().unwrap() = Some(b);
         PAD_CAPTURE.store(false, Ordering::Relaxed);
@@ -300,7 +304,7 @@ pub fn set_pad(held: &[Button], axes: Axes, name: &str) {
     st.axes = axes;
     st.axes_seen = true;
     st.name = name.to_string();
-    republish_state(&mut st, settings_btn);
+    republish_state(&mut st, &trigger);
 }
 
 /// One pad's N64 state from the resolved gamepad bindings (the gilrs
@@ -380,21 +384,39 @@ fn nav_pad(held: &[Button], a: &Axes) -> Pad {
 /// this when only its state changed (keys, axes and touch land in one
 /// publish).
 pub(crate) fn republish() {
-    let settings_btn = crate::settings::pad_button();
+    let trigger = super::trigger::pad_trigger();
     let mut st = STATE.lock().unwrap();
-    republish_state(&mut st, settings_btn);
+    republish_state(&mut st, &trigger);
 }
 
 /// Publishes the pad (window thread) and edge-detects the settings trigger.
-fn republish_state(st: &mut State, settings_btn: Button) {
-    let settings_down = FOCUSED.load(Ordering::Relaxed) && st.held.contains(&settings_btn);
-    if settings_down && !st.settings_down {
+/// A combination's buttons are kept from the game and the overlay once it
+/// fired, until released; there is no hold-back before it completes (this
+/// state republishes on input events only, so a held-back press would wait
+/// for the next one).
+fn republish_state(st: &mut State, trigger: &super::trigger::PadTrigger) {
+    let focused = FOCUSED.load(Ordering::Relaxed);
+    let members = trigger.members();
+    let held: Vec<bool> = members
+        .iter()
+        .map(|b| focused && st.held.contains(b))
+        .collect();
+    let out = st
+        .gate
+        .update(&held, std::time::Instant::now(), std::time::Duration::ZERO);
+    if out.down && !st.settings_down {
         crate::window::notify_settings();
     }
-    st.settings_down = settings_down;
+    st.settings_down = out.down;
     let touch = super::touch_pad::touch();
-    let pad = game_pad(&st.held, &st.axes, st.axes_seen, &touch);
-    let nav = nav_pad(&st.held, &st.axes);
+    let mut pad = game_pad(&st.held, &st.axes, st.axes_seen, &touch);
+    let mut nav = nav_pad(&st.held, &st.axes);
+    for (&b, &masked) in members.iter().zip(&out.mask) {
+        if masked {
+            pad.button &= !super::game_bits(b);
+            nav.button &= !super::nav_bits(b);
+        }
+    }
     let name = if st.name.is_empty() {
         PAD_NAME
     } else {

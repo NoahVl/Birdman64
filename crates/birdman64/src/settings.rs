@@ -91,23 +91,6 @@ pub fn key() -> KeyCode {
     })
 }
 
-/// The pad trigger (`[input] settings_pad_button`, default Select). Never
-/// bound to an N64 slot (`input::gamepad_bindings`), so the game never sees it.
-pub fn pad_button() -> Button {
-    static BTN: OnceLock<Button> = OnceLock::new();
-    *BTN.get_or_init(|| {
-        let name = config::get().input.settings.pad_button.as_deref();
-        name.and_then(|n| {
-            let b = input::parse_gamepad_button(n);
-            if b.is_none() {
-                eprintln!("[config] input.settings_pad_button = {n:?}: unknown; using Select");
-            }
-            b
-        })
-        .unwrap_or(Button::Select)
-    })
-}
-
 /// One selectable row (R4/U2): per page, in navigation order
 /// ([`Overlay::rows`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +152,9 @@ enum Row {
     /// Main (Android only, after an import): close the app so the next
     /// start loads the imported save.
     CloseApp,
+    /// Controls (desktop): the controller's settings trigger: capture one
+    /// button, or two or three held together (`input::PadTrigger`).
+    PadTrigger,
     /// Controls (desktop): open the Controller setup page.
     PadSetup,
     /// Controller setup: start the guided setup of a controller's raw
@@ -618,6 +604,9 @@ pub struct Overlay {
     p2_assigned: Option<(Instant, String)>,
     /// Red line for a rejected key ("reserved") or a timed-out pad capture.
     capture_error: Option<String>,
+    /// The "Open settings" row's capture in progress: when it started
+    /// (`None`: idle).
+    trigger_capture: Option<Instant>,
     /// Controller setup: the guided raw setup in progress (`None`: idle).
     wizard: Option<input::raw::Wizard>,
     /// Controller setup's status line (text, is an error): a step's
@@ -759,6 +748,7 @@ impl Overlay {
             p2_capture: None,
             p2_assigned: None,
             capture_error: None,
+            trigger_capture: None,
             wizard: None,
             setup_status: None,
             ppp: 1.0,
@@ -897,6 +887,7 @@ impl Overlay {
         self.end_capture();
         self.end_p2_capture();
         // The guided setup and the setup page's diagnostics end with it.
+        self.end_trigger_capture();
         self.stop_wizard(false);
         input::generic::set_diagnostics(false);
         // Closing keeps what was applied: the countdown has nothing to revert
@@ -1328,6 +1319,32 @@ impl Overlay {
         }
     }
 
+    /// The "Open settings" capture poll + timeout, each overlay frame: the
+    /// captured button or combination applies at once and is saved.
+    fn poll_trigger_capture(&mut self) {
+        let Some(started) = self.trigger_capture else {
+            return;
+        };
+        if let Some(t) = input::trigger::take_capture() {
+            self.end_trigger_capture();
+            if let Err(e) = input::set_pad_trigger(t) {
+                self.capture_error = Some(format!("Applied until you quit, but not saved: {e}"));
+            }
+        } else if started.elapsed() >= CAPTURE_TIMEOUT {
+            self.end_trigger_capture();
+            self.capture_error = Some("No button pressed. Select the row to try again.".into());
+        }
+    }
+
+    /// Ends the trigger capture (done, cancelled, timed out, overlay
+    /// closed); the buttons that ended it don't confirm a row.
+    fn end_trigger_capture(&mut self) {
+        if self.trigger_capture.take().is_some() {
+            input::trigger::cancel_capture();
+            self.prev_pad = input::overlay_pad();
+        }
+    }
+
     /// Opens Controller setup (from Controls): the input thread starts
     /// publishing the pads' raw state for it.
     fn enter_setup(&mut self) {
@@ -1447,8 +1464,13 @@ impl Overlay {
         if w.pad.is_none() {
             w.pad = Some((c.guid.clone(), c.name.clone()));
         }
-        let shown = c.input.to_config();
-        self.setup_status = match w.take(c.input) {
+        let shown = c
+            .inputs
+            .iter()
+            .map(input::raw::RawInput::to_config)
+            .collect::<Vec<_>>()
+            .join("+");
+        self.setup_status = match w.take(c.inputs) {
             Ok(()) => None,
             Err(slot) => Some((
                 format!(
@@ -1667,6 +1689,13 @@ impl Overlay {
         if !pressed {
             return;
         }
+        // The settings-trigger capture: Escape cancels, other keys wait.
+        if self.trigger_capture.is_some() {
+            if code == KeyCode::Escape {
+                self.end_trigger_capture();
+            }
+            return;
+        }
         // The guided controller setup owns the keyboard: Escape stops it
         // (nothing saved), Backspace / Delete skip the step.
         if self.wizard.is_some() {
@@ -1759,6 +1788,7 @@ impl Overlay {
         self.poll_capture();
         self.poll_p2_capture();
         self.poll_setup();
+        self.poll_trigger_capture();
         // The setup page's rows follow the connected pads: a pad unplugged
         // under the selection must not leave it past the end.
         self.sel = self.sel.min(self.rows().len().saturating_sub(1));
@@ -2112,8 +2142,10 @@ impl Overlay {
                         .map(|i| Row::Bind(Kind::Gamepad, i)),
                 );
                 rows.push(Row::Reset(Kind::Gamepad));
-                // Generic controllers (gilrs, desktop only): their own page.
+                // The settings trigger and generic controllers (gilrs,
+                // desktop only).
                 if !MOBILE {
+                    rows.push(Row::PadTrigger);
                     rows.push(Row::PadSetup);
                 }
                 // Switch 2 pads over Bluetooth (experimental), under the
@@ -2446,6 +2478,23 @@ impl Overlay {
                     .size(14.0),
                 );
                 self.text_row(ui, kb.len() + 1 + gp.len(), "Reset gamepad to defaults");
+                if rows.contains(&Row::PadTrigger) {
+                    let family =
+                        input::active_pad().map_or(input::PadFamily::Generic, |p| p.family);
+                    let value = if self.trigger_capture.is_some() {
+                        "hold the button(s), then let go\u{2026} (Esc cancels)".to_string()
+                    } else {
+                        input::pad_trigger().label(family)
+                    };
+                    self.bind_row(
+                        ui,
+                        at(Row::PadTrigger),
+                        None,
+                        "Open settings",
+                        &value,
+                        "One button, or two or three held together (they still work in the game)",
+                    );
+                }
                 if rows.contains(&Row::PadSetup) {
                     let unrecognised = input::generic::unrecognised_connected();
                     self.text_row(
@@ -3034,6 +3083,9 @@ impl Overlay {
             self.end_capture();
             self.end_p2_capture();
         }
+        // A running trigger capture ends with any confirm (a click elsewhere,
+        // or re-confirming its own row restarts it below).
+        self.end_trigger_capture();
         // The guided setup: its own row skips a step (a click), any other
         // row stops it.
         if self.wizard.is_some() && rows[self.sel] != Row::SetupStart {
@@ -3139,6 +3191,12 @@ impl Overlay {
             // The Back row (sub-pages only; on Main, B / Escape close).
             Row::Back => self.back(),
             Row::PadSetup => self.enter_setup(),
+            Row::PadTrigger => {
+                self.end_capture();
+                self.capture_error = None;
+                input::trigger::start_capture();
+                self.trigger_capture = Some(Instant::now());
+            }
             Row::SetupStart => {
                 if self.wizard.is_some() {
                     self.skip_step();
@@ -3364,6 +3422,7 @@ impl Overlay {
             | Row::UnlockAll
             | Row::RestoreUnlock
             | Row::RestartNow
+            | Row::PadTrigger
             | Row::PadSetup
             | Row::SetupStart
             | Row::SetupRemove(_) => {}
@@ -3489,7 +3548,11 @@ impl Overlay {
     /// Skipped while a capture runs: the A that arms it must not confirm
     /// again, and a captured button must not navigate.
     fn pad_nav(&mut self) {
-        if self.capture.is_some() || self.p2_capture.is_some() || self.wizard.is_some() {
+        if self.capture.is_some()
+            || self.p2_capture.is_some()
+            || self.wizard.is_some()
+            || self.trigger_capture.is_some()
+        {
             return;
         }
         let pad = input::overlay_pad();
@@ -4160,6 +4223,11 @@ fn help(row: Row) -> &'static str {
             "Playing with a controller? Hide the on-screen buttons. The menu button always \
              stays."
         }
+        Row::PadTrigger => {
+            "The controller button that opens this screen. Hold two or three together \
+             (say Select and Start) and let go to use a combination: then each of them \
+             still works in the game. F10 and Esc always work on the keyboard."
+        }
         Row::PadSetup => {
             "For controllers that aren't recognised, like generic USB joysticks and N64 \
              clones: see their raw inputs and set them up."
@@ -4428,7 +4496,7 @@ pub(crate) fn welcome_card() -> (String, Vec<String>) {
     let f10 = key_label(config::get().input.settings.key.as_deref().unwrap_or("F10"));
     lines.push(format!(
         "Esc, {f10} or {}: settings, controls and quit",
-        input::button_name(pad_button(), family)
+        input::pad_trigger().label(family)
     ));
     ("Welcome to Birdman64".to_string(), lines)
 }
@@ -5089,13 +5157,13 @@ mod tests {
         assert_eq!(o.rows()[o.sel], Row::Graphics);
         // Confirm on Controls opens the Controls page with the two binding
         // grids in the U9 order (game controls first, unused slots last:
-        // 18 keyboard + reset, 15 gamepad + reset), Controller setup, the
-        // Switch 2 (BLE) row and Back.
+        // 18 keyboard + reset, 15 gamepad + reset), the settings trigger,
+        // Controller setup, the Switch 2 (BLE) row and Back.
         o.sel = 1;
         o.confirm();
         assert_eq!(o.page, Page::Controls);
         let rows = o.rows();
-        assert_eq!(rows.len(), 18 + 1 + 15 + 1 + 1 + 1 + 1);
+        assert_eq!(rows.len(), 18 + 1 + 15 + 1 + 1 + 1 + 1 + 1);
         assert_eq!(rows[0], Row::Bind(Kind::Keyboard, 0));
         // The unused keyboard slots (L, the D-pad) moved last, after the
         // stick rows.
@@ -5110,10 +5178,11 @@ mod tests {
         assert_eq!(rows[29], Row::Bind(Kind::Gamepad, 3));
         assert_eq!(rows[33], Row::Bind(Kind::Gamepad, 10));
         assert_eq!(rows[34], Row::Reset(Kind::Gamepad));
-        assert_eq!(rows[35], Row::PadSetup);
-        assert_eq!(rows[36], Row::Opt(Opt::Ble));
-        assert_eq!(rows[37], Row::Back);
-        o.sel = 37;
+        assert_eq!(rows[35], Row::PadTrigger);
+        assert_eq!(rows[36], Row::PadSetup);
+        assert_eq!(rows[37], Row::Opt(Opt::Ble));
+        assert_eq!(rows[38], Row::Back);
+        o.sel = 38;
         o.confirm();
         assert_eq!(o.page, Page::Main);
         assert_eq!(o.rows()[o.sel], Row::Controls);
@@ -5158,8 +5227,10 @@ mod tests {
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::PadSetup);
         o.move_sel(-1);
+        assert_eq!(o.rows()[o.sel], Row::PadTrigger);
+        o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Reset(Kind::Gamepad));
-        o.move_sel(2);
+        o.move_sel(3);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));
         let (name, value, hint) = o.row_text(Opt::Ble);
         assert_eq!(
@@ -5248,6 +5319,52 @@ mod tests {
         o.confirm();
         o.on_key(KeyCode::Escape, false, true);
         assert_eq!(o.page, Page::Controls);
+    }
+
+    /// The "Open settings" row: confirm arms the trigger capture (pad
+    /// navigation pauses, the label asks to hold buttons), Escape cancels,
+    /// a timeout leaves the red line, and the default trigger reads Select
+    /// in the family's names. (A captured trigger would be saved to
+    /// pw64.toml, so none is applied here.)
+    #[test]
+    fn pad_trigger_row_capture() {
+        let _g = SETUP_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut o = Overlay::new();
+        o.page = Page::Controls;
+        o.sel = o.rows().iter().position(|&r| r == Row::PadTrigger).unwrap();
+        o.confirm();
+        assert!(o.trigger_capture.is_some());
+        assert!(input::trigger::capturing());
+        // Navigation keys wait while it runs; Escape cancels.
+        let sel = o.sel;
+        o.on_key(KeyCode::ArrowDown, false, true);
+        assert_eq!(o.sel, sel);
+        o.on_key(KeyCode::Escape, false, true);
+        assert!(o.trigger_capture.is_none());
+        assert!(!input::trigger::capturing());
+        assert_eq!(o.page, Page::Controls, "Escape cancelled, didn't leave");
+        // Timeout.
+        o.confirm();
+        o.trigger_capture = Some(Instant::now() - CAPTURE_TIMEOUT);
+        o.poll_trigger_capture();
+        assert!(o.trigger_capture.is_none());
+        assert!(
+            o.capture_error
+                .as_deref()
+                .unwrap()
+                .contains("No button pressed")
+        );
+        assert!(!input::trigger::capturing());
+        assert_eq!(
+            input::trigger::PadTrigger::default().label(input::PadFamily::PlayStation),
+            "Create"
+        );
+        // Closing the overlay ends a running capture.
+        o.confirm();
+        o.close();
+        assert!(!input::trigger::capturing());
     }
 
     /// The setup page draws (a real egui pass through `build_ui`) idle,

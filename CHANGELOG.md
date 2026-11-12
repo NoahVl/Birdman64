@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   raw input (axes, hats, buttons), and a guided setup binds the stick and
   buttons to its raw inputs. The setup is saved per controller model and
   applies again on reconnect.
+- The controller's settings button can be a combination, such as Select +
+  Start (Controls › Open settings, or `settings_pad_button = "Select+Start"`).
+  Pressed together on one controller they open the settings screen without
+  reaching the game; each still works on its own as a normal, rebindable
+  game button. The default stays Select alone.
 - Your own SDL2 controller mappings: put them in `gamecontrollerdb.txt` in
   the data folder (or `SDL_GAMECONTROLLERCONFIG`). GUIDs from newer SDL tools
   are matched too.
