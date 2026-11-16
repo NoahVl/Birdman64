@@ -1,0 +1,235 @@
+{
+    "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+    "format": 1,
+    "requires": [
+        "start",
+        "setup",
+        "settings.toml",
+        "settings.choices"
+    ],
+    "game": {
+        "kind": "iso",
+        "label": "Your Pilotwings 64 ROM, the USA version (a .z64, .n64 or .v64 file, or a .zip containing one)."
+    },
+    "prepare": {
+        "program": [
+            "Birdman64.exe"
+        ],
+        "args": [
+            "--build-game"
+        ],
+        "label": "Downloads the open source decompilation and builds the game (internet needed once)"
+    },
+    "start": {
+        "program": [
+            "Birdman64.exe"
+        ],
+        "args": [
+            "{game}"
+        ]
+    },
+    "config": [
+        {
+            "id": "main",
+            "format": "toml",
+            "file": [
+                {
+                    "path": "{install}/pw64.toml",
+                    "if": "{install}/portable.txt"
+                },
+                {
+                    "path": "{config}/Birdman64/pw64.toml"
+                }
+            ]
+        }
+    ],
+    "folders": {
+        "saves": [
+            {
+                "path": "{install}",
+                "if": "{install}/portable.txt"
+            },
+            {
+                "path": "{install}",
+                "if": "{install}/pw64.eep"
+            },
+            {
+                "path": "{config}/Birdman64"
+            }
+        ],
+        "logs": [
+            {
+                "path": "{install}",
+                "if": "{install}/portable.txt"
+            },
+            {
+                "path": "{install}",
+                "if": "{install}/pw64.eep"
+            },
+            {
+                "path": "{config}/Birdman64"
+            }
+        ]
+    },
+    "settings": [
+        {
+            "id": "display_mode",
+            "label": "Window",
+            "help": "Window, borderless fullscreen or exclusive fullscreen. F11 or Alt+Enter also switches.",
+            "choices": [
+                {
+                    "label": "Window",
+                    "set": {
+                        "graphics/display_mode": "\"windowed\""
+                    }
+                },
+                {
+                    "label": "Fullscreen",
+                    "set": {
+                        "graphics/display_mode": "\"borderless\""
+                    }
+                },
+                {
+                    "label": "Exclusive fullscreen",
+                    "set": {
+                        "graphics/display_mode": "\"exclusive\""
+                    }
+                }
+            ]
+        },
+        {
+            "id": "msaa",
+            "label": "Anti-aliasing",
+            "help": "Smooths the edges of models. Applies after a restart.",
+            "choices": [
+                {
+                    "label": "1x",
+                    "set": {
+                        "graphics/msaa": "1"
+                    }
+                },
+                {
+                    "label": "4x",
+                    "set": {
+                        "graphics/msaa": "4"
+                    }
+                },
+                {
+                    "label": "8x",
+                    "set": {
+                        "graphics/msaa": "8"
+                    }
+                }
+            ]
+        },
+        {
+            "id": "widescreen",
+            "label": "Widescreen",
+            "help": "Shows more of the world on wide screens instead of stretching it. Applies after a restart.",
+            "choices": [
+                {
+                    "label": "Off",
+                    "set": {
+                        "graphics/widescreen": "0"
+                    }
+                },
+                {
+                    "label": "16:9",
+                    "set": {
+                        "graphics/widescreen": "\"16:9\""
+                    }
+                },
+                {
+                    "label": "21:9",
+                    "set": {
+                        "graphics/widescreen": "\"21:9\""
+                    }
+                }
+            ]
+        },
+        {
+            "id": "frame_rate",
+            "label": "Frame rate",
+            "help": "Monitor matches your screen's refresh rate. Uncapped runs as fast as your PC can.",
+            "choices": [
+                {
+                    "label": "Monitor",
+                    "set": {
+                        "graphics/fps": "\"monitor\""
+                    }
+                },
+                {
+                    "label": "Uncapped",
+                    "set": {
+                        "graphics/fps": "0"
+                    }
+                }
+            ]
+        },
+        {
+            "id": "vsync",
+            "label": "V-Sync",
+            "help": "Paces frames to the screen: less judder, a little more lag.",
+            "choices": [
+                {
+                    "label": "On",
+                    "set": {
+                        "graphics/vsync": "true"
+                    }
+                },
+                {
+                    "label": "Off",
+                    "set": {
+                        "graphics/vsync": "false"
+                    }
+                }
+            ]
+        },
+        {
+            "id": "texture_filter",
+            "label": "Texture filter",
+            "help": "The N64 look keeps the console's three-point filter. Smooth is a standard bilinear filter.",
+            "choices": [
+                {
+                    "label": "N64 look",
+                    "set": {
+                        "graphics/filter": "\"n64\""
+                    }
+                },
+                {
+                    "label": "Smooth",
+                    "set": {
+                        "graphics/filter": "\"bilinear\""
+                    }
+                }
+            ]
+        },
+        {
+            "id": "show_fps",
+            "label": "Show FPS",
+            "help": "Shows the frame rate in the window title.",
+            "choices": [
+                {
+                    "label": "Off",
+                    "set": {
+                        "graphics/show_fps": "false"
+                    }
+                },
+                {
+                    "label": "On",
+                    "set": {
+                        "graphics/show_fps": "true"
+                    }
+                }
+            ]
+        }
+    ],
+    "actions": [
+        {
+            "id": "saves",
+            "label": "Saves",
+            "help": "Your save, your settings and the crash log.",
+            "open": "saves"
+        }
+    ]
+}
