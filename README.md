@@ -1,5 +1,7 @@
 # Birdman64
 
+<a href="https://recomplauncher.com/game/birdman64"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+
 **Pilotwings 64 as a native PC game for Windows and Linux.** Widescreen up to
 21:9, your monitor's full refresh rate (144 Hz and beyond), modern gamepads,
 rebindable controls and an in-game settings menu. No emulator: the game's own
