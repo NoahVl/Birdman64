@@ -132,9 +132,7 @@ pub unsafe extern "C-unwind" fn pw64_fatal(msg: *const c_char, value: u32) -> ! 
 /// `msg` must point at a NUL-terminated string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C-unwind" fn pw64_log(msg: *const c_char, value: u32) {
-    if !crate::os::trace_enabled() {
-        return;
-    }
+
     // SAFETY: the C passes a NUL-terminated literal.
     let msg = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
     eprintln!("[c] {msg} (0x{value:x})");

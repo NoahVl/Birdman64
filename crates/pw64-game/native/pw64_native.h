@@ -132,6 +132,7 @@ void pw64_hud_tag(int on);
 #define PW64_HUD_CB_POWER 10
 #define PW64_HUD_CB_HEADING 11
 #define PW64_HUD_CB_ELEVATION 12
+#define PW64_HUD_FLAPS 13
 extern int pw64_hud_elem;
 void pw64_hud_element(int id);
 void pw64_hud_emit_element(int id);
@@ -296,6 +297,8 @@ int pw64_plane_accel(struct GyrocopterData* gc);
 int pw64_plane_props(struct GyrocopterData* gc);
 int pw64_plane_pose(struct GyrocopterData* gc);
 int pw64_plane_rest(struct GyrocopterData* gc);
+void pw64_plane_movement_frame(struct GyrocopterData* gcData, unsigned char gameState);
+void pw64_plane_draw_hud(void);
 /* Split-screen: player 2's pilot (native/src/pw64_split.c), -1 = player
  * 1's. Set by the pilot select's second pass (game.c.patch) or, on a
  * PW64_START boot, by PW64_P2_PILOT (pw64-platform start.rs). */

@@ -131,6 +131,16 @@
          D_8034F914 = 0;
      }
  }
+@@ -726,6 +764,9 @@ void hudDrawGyrocopter(HUDState* hud) {
+     hudDrawFuel(98, 37, hud->fuel);
+     hudDrawThrottle(27, 82, hud->power);
+     hudDrawTimer(27, 222, hud->elapsedTime);
++    if (pw64_plane_run) {
++        pw64_plane_draw_hud();
++    }
+     if (hud->renderFlags & HUD_RENDER_RETICLE) {
+         hudDrawAimReticle((s32)hud->reticleX, (s32)hud->reticleY, 0);
+     }
 @@ -918,6 +961,7 @@ void hud_8031A8E0(s32 idx) {
  }
  
