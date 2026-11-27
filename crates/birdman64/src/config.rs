@@ -56,6 +56,11 @@
 //! [input.gamepad]          # N64 slot → gilrs button
 //! Z = "LeftTrigger2"
 //!
+//! [input.devices."03000000790000000600000000000000"] # custom setup of one
+//! name = "USB Joystick"    # controller model (GUID), raw inputs (input/raw.rs)
+//! STICK_X = "ABS(0)+"
+//! A = "KEY(290)"
+//!
 //! [input.ble]              # Switch 2 pads over Bluetooth LE (`PW64_BLE`)
 //! enabled = true
 //!
@@ -240,6 +245,9 @@ pub struct InputMaps {
     pub settings: Settings,
     pub keyboard: HashMap<String, String>,
     pub gamepad: HashMap<String, String>,
+    /// `[input.devices."<GUID>"]`: custom setups of controllers without a
+    /// usable mapping (`input/raw.rs`), GUID (lower case) → slot → raw input.
+    pub devices: BTreeMap<String, BTreeMap<String, String>>,
     /// `[input.ble] enabled` — Switch 2 pads over BLE; `ble::enabled()` resolves
     /// it against the `PW64_BLE` env var and the default (off).
     pub ble: Option<bool>,
@@ -652,6 +660,17 @@ fn from_table(table: &toml::Table) -> Config {
                         }
                     }
                 }
+                if let Some(d) = i.get("devices") {
+                    match d.as_table() {
+                        Some(d) => cfg.input.devices = devices_of(d, &mut ignored),
+                        None => ignore(
+                            &mut ignored,
+                            "input.devices",
+                            d,
+                            "must be [input.devices.\"<GUID>\"] tables",
+                        ),
+                    }
+                }
                 if let Some(b) = i.get("ble") {
                     match b.as_table() {
                         Some(b) => {
@@ -867,6 +886,99 @@ fn pair_in(v: &toml::Value, lo: f32, hi: f32) -> Option<(f32, f32)> {
     };
     let (x, y) = (coerce_f32(x)?, coerce_f32(y)?);
     ((lo..=hi).contains(&x) && (lo..=hi).contains(&y)).then_some((x, y))
+}
+
+/// `[input.devices]`: one table per controller GUID (32 hex digits) of
+/// slot = "raw input" strings. Values are checked by `input/raw.rs` when the
+/// setup is used; a non-table or non-string entry is dropped here.
+fn devices_of(
+    t: &toml::Table,
+    ignored: &mut Vec<String>,
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for (guid, dev) in t {
+        let path = format!("input.devices.{guid}");
+        let Some(norm) = crate::input::normalise_guid(guid) else {
+            ignore(
+                ignored,
+                &path,
+                guid,
+                "the key must be a 32-digit controller GUID",
+            );
+            continue;
+        };
+        let Some(dev) = dev.as_table() else {
+            ignore(
+                ignored,
+                &path,
+                dev,
+                "must be a table of slot = \"raw input\"",
+            );
+            continue;
+        };
+        let mut slots = BTreeMap::new();
+        for (slot, v) in dev {
+            match v.as_str() {
+                Some(s) => {
+                    slots.insert(slot.clone(), s.to_string());
+                }
+                None => ignore(
+                    ignored,
+                    &format!("{path}.{slot}"),
+                    v,
+                    "must be text in quotes",
+                ),
+            }
+        }
+        out.insert(norm, slots);
+    }
+    out
+}
+
+/// Writes (or with `None` removes) one controller's custom setup,
+/// `[input.devices."<guid>"]`, right away (Controller setup page). Same file
+/// discipline as `save_settings`: everything else survives.
+pub fn save_device(guid: &str, setup: Option<&BTreeMap<String, String>>) -> Result<(), String> {
+    let table = read_table()?;
+    write_table(&with_device(table, guid, setup)?)
+}
+
+/// [`save_device`]'s table edit (separate from the file I/O for tests).
+/// Removing the last setup removes `[input.devices]`, and an `[input]` left
+/// empty goes with it.
+fn with_device(
+    mut table: toml::Table,
+    guid: &str,
+    setup: Option<&BTreeMap<String, String>>,
+) -> Result<toml::Table, String> {
+    let input = table
+        .entry("input")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let toml::Value::Table(input) = input else {
+        return Err("[input] is not a table in pw64.toml; not saved".to_string());
+    };
+    let devices = input
+        .entry("devices")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let toml::Value::Table(devices) = devices else {
+        return Err("[input.devices] is not a table in pw64.toml; not saved".to_string());
+    };
+    // Any spelling of the GUID (upper case typed by hand) is the same device.
+    devices.retain(|k, _| !k.eq_ignore_ascii_case(guid));
+    if let Some(m) = setup {
+        let t: toml::Table = m
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone().into()))
+            .collect();
+        devices.insert(guid.to_string(), t.into());
+    }
+    if devices.is_empty() {
+        input.remove("devices");
+    }
+    if input.is_empty() {
+        table.remove("input");
+    }
+    Ok(table)
 }
 
 /// One `[touch]` value: a two-number array, each in -1..=1.
@@ -2394,6 +2506,45 @@ mod tests {
         assert_eq!(c.graphics.widescreen.as_deref(), Some("0"));
         let c = parse("[graphics]\nwidescreen = \"wide\"\n").unwrap();
         assert_eq!(c.graphics.widescreen, None);
+    }
+
+    #[test]
+    fn device_setups_parse_save_and_remove() {
+        let text = "[input]\nsettings_key = \"F9\"\n\n\
+                    [input.devices.03000000790000000600000000000000]\nname = \"USB Joystick\"\n\
+                    A = \"KEY(290)\"\nB = 3\n\n[input.devices.nothex]\nA = \"KEY(1)\"\n";
+        let c = parse(text).unwrap();
+        let dev = &c.input.devices["03000000790000000600000000000000"];
+        assert_eq!(dev.get("A").map(String::as_str), Some("KEY(290)"));
+        assert!(!dev.contains_key("B"), "a number is not a raw input");
+        assert_eq!(c.input.devices.len(), 1, "bad GUID dropped");
+        assert_eq!(
+            c.ignored,
+            vec![
+                "input.devices.03000000790000000600000000000000.B".to_string(),
+                "input.devices.nothex".to_string()
+            ]
+        );
+        // Save replaces the device (any GUID case) and keeps the rest.
+        let table: toml::Table = toml::from_str(
+            "[input]\nsettings_key = \"F9\"\n\n[input.devices.03000000790000000600000000000ABC]\n\
+             A = \"KEY(1)\"\n",
+        )
+        .unwrap();
+        let setup: BTreeMap<String, String> = [("A".to_string(), "KEY(2)".to_string())].into();
+        let guid = "03000000790000000600000000000abc";
+        let t = with_device(table, guid, Some(&setup)).unwrap();
+        let back = from_table(&t);
+        assert_eq!(back.input.devices.len(), 1);
+        assert_eq!(back.input.devices[guid]["A"], "KEY(2)");
+        assert_eq!(back.input.settings.key.as_deref(), Some("F9"));
+        // Removing the last setup drops [input.devices]; [input] stays.
+        let t = with_device(t, guid, None).unwrap();
+        assert!(t["input"].get("devices").is_none());
+        assert_eq!(t["input"]["settings_key"].as_str(), Some("F9"));
+        // …and an [input] left empty goes too.
+        let t = with_device(toml::Table::new(), guid, Some(&setup)).unwrap();
+        assert!(with_device(t, guid, None).unwrap().is_empty());
     }
 
     #[test]

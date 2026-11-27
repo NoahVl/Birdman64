@@ -43,6 +43,11 @@
 //!   key and F11 are rejected) or pad button (the input thread's pad
 //!   capture, 5 s timeout); Reset rows restore the defaults. Save writes
 //!   the resulting `[input.keyboard]` / `[input.gamepad]` maps.
+//! - **Controller setup** (Controls › Controller setup, desktop): generic
+//!   controllers with their GUID, status and live raw inputs, and the
+//!   guided raw setup (`input/raw.rs`), saved per model to
+//!   `[input.devices]` as soon as it finishes (docs/notes/input.md
+//!   "Generic controllers").
 
 use crate::window::Gpu;
 use crate::{audio, config, input, opts};
@@ -164,6 +169,14 @@ enum Row {
     /// Main (Android only, after an import): close the app so the next
     /// start loads the imported save.
     CloseApp,
+    /// Controls (desktop): open the Controller setup page.
+    PadSetup,
+    /// Controller setup: start the guided setup of a controller's raw
+    /// inputs; while it runs, confirming skips the current step.
+    SetupStart,
+    /// Controller setup: remove the custom setup of the n-th connected pad
+    /// (an index into `input::generic::diagnostics`).
+    SetupRemove(usize),
 }
 
 /// Which input kind a Bind / Reset row edits.
@@ -185,6 +198,9 @@ enum Page {
     Split,
     /// The performance overlay (`perf.rs`): what it shows and where.
     Perf,
+    /// Controller setup (under Controls): generic controllers, their GUIDs
+    /// and live raw inputs, the guided raw setup (`input/raw.rs`).
+    PadSetup,
 }
 
 impl Page {
@@ -196,12 +212,13 @@ impl Page {
             Page::Controls => 2,
             Page::Split => 3,
             Page::Perf => 4,
+            Page::PadSetup => 5,
         }
     }
 }
 
 /// How many pages (`Page::index` is the slot).
-const N_PAGES: usize = 5;
+const N_PAGES: usize = 6;
 
 /// The conditions a panel height was measured at: the safe egui screen
 /// (points) and the zoom. A change of either re-measures (text wraps and
@@ -601,6 +618,11 @@ pub struct Overlay {
     p2_assigned: Option<(Instant, String)>,
     /// Red line for a rejected key ("reserved") or a timed-out pad capture.
     capture_error: Option<String>,
+    /// Controller setup: the guided raw setup in progress (`None`: idle).
+    wizard: Option<input::raw::Wizard>,
+    /// Controller setup's status line (text, is an error): a step's
+    /// rejection, the saved / removed confirmation.
+    setup_status: Option<(String, bool)>,
     /// Window scale factor (physical px per egui point) times the UI zoom
     /// (U1): pointer events divide by this.
     ppp: f32,
@@ -737,6 +759,8 @@ impl Overlay {
             p2_capture: None,
             p2_assigned: None,
             capture_error: None,
+            wizard: None,
+            setup_status: None,
             ppp: 1.0,
             events: Vec::new(),
             sel: 0,
@@ -872,6 +896,9 @@ impl Overlay {
         // must not outlive it.
         self.end_capture();
         self.end_p2_capture();
+        // The guided setup and the setup page's diagnostics end with it.
+        self.stop_wizard(false);
+        input::generic::set_diagnostics(false);
         // Closing keeps what was applied: the countdown has nothing to revert
         // to once the overlay stops redrawing.
         self.revert = None;
@@ -1261,6 +1288,14 @@ impl Overlay {
             let name = cap.name;
             input::bind_button(name, b);
             self.end_capture();
+        } else if input::take_unknown_press() {
+            // gilrs can't name that button: the pad needs a custom setup.
+            self.end_capture();
+            self.capture_error = Some(
+                "That controller isn't recognised. Set it up in Controller setup (below the \
+                 controller rows)."
+                    .into(),
+            );
         } else if cap.started.elapsed() >= CAPTURE_TIMEOUT {
             // Ended first (it clears the red line), then the message.
             self.end_capture();
@@ -1291,6 +1326,236 @@ impl Overlay {
             self.capture_error = None;
             self.prev_pad = input::overlay_pad();
         }
+    }
+
+    /// Opens Controller setup (from Controls): the input thread starts
+    /// publishing the pads' raw state for it.
+    fn enter_setup(&mut self) {
+        input::generic::set_diagnostics(true);
+        self.setup_status = None;
+        self.page = Page::PadSetup;
+        self.sel = 0;
+        self.follow_sel = true;
+        self.apply_page_body();
+    }
+
+    /// Back from Controller setup to Controls, selection on its row.
+    fn leave_setup(&mut self) {
+        self.stop_wizard(false);
+        input::generic::set_diagnostics(false);
+        self.page = Page::Controls;
+        self.sel = self
+            .rows()
+            .iter()
+            .position(|r| *r == Row::PadSetup)
+            .unwrap_or(0);
+        self.follow_sel = true;
+        self.apply_page_body();
+    }
+
+    /// Starts the guided setup: the first step's capture takes any pad
+    /// (the one that answers is the one set up).
+    fn start_wizard(&mut self) {
+        self.end_capture();
+        self.end_p2_capture();
+        self.wizard = Some(input::raw::Wizard::default());
+        self.setup_status = None;
+        self.arm_step();
+    }
+
+    /// Arms the capture for the current step, locked to the pad being set
+    /// up once it is known.
+    fn arm_step(&mut self) {
+        let Some(w) = &self.wizard else { return };
+        if let Some((_, _, want)) = w.current() {
+            input::generic::start_capture(want, w.pad.as_ref().map(|(g, _)| g.clone()));
+        }
+    }
+
+    /// Backspace / Delete / a click on the row: no input for this step.
+    fn skip_step(&mut self) {
+        if let Some(w) = self.wizard.as_mut() {
+            w.skip();
+            self.setup_status = None;
+        }
+        self.next_step();
+    }
+
+    /// After a step: arm the next one, or save once all are done.
+    fn next_step(&mut self) {
+        match &self.wizard {
+            Some(w) if w.done() => self.finish_wizard(),
+            Some(_) => self.arm_step(),
+            None => {}
+        }
+    }
+
+    /// The last step is done: apply the setup to that controller model
+    /// (live, every connected pad of it) and save it to pw64.toml.
+    fn finish_wizard(&mut self) {
+        input::generic::cancel_capture();
+        let Some(w) = self.wizard.take() else { return };
+        // The press that finished it must not confirm a row.
+        self.prev_pad = input::overlay_pad();
+        let Some((guid, name)) = w.pad.clone() else {
+            self.setup_status = Some(("Nothing was captured, so nothing changed.".into(), false));
+            return;
+        };
+        self.setup_status = Some(
+            match input::generic::set_profile(&guid, Some(w.profile())) {
+                Ok(()) => (
+                    format!("Saved: {name} now uses this setup, also after reconnecting."),
+                    false,
+                ),
+                Err(e) => (format!("Applied until you quit, but not saved: {e}"), true),
+            },
+        );
+    }
+
+    /// Stops the guided setup without saving (Escape, another row, leaving
+    /// the page, the overlay closing). `say`: leave a status line.
+    fn stop_wizard(&mut self, say: bool) {
+        if self.wizard.take().is_some() {
+            input::generic::cancel_capture();
+            self.prev_pad = input::overlay_pad();
+            if say {
+                self.setup_status = Some(("Setup stopped; nothing changed.".into(), false));
+            }
+        }
+    }
+
+    /// The guided setup's poll, each overlay frame: a captured input fills
+    /// the step (or is refused as already used), then the next step arms.
+    fn poll_setup(&mut self) {
+        if self.wizard.is_none() {
+            return;
+        }
+        if input::generic::take_refused() {
+            self.setup_status = Some((
+                "That controller is fully supported already and needs no setup. Use the \
+                 one you want to set up, or Esc."
+                    .into(),
+                false,
+            ));
+        }
+        let Some(c) = input::generic::take_capture() else {
+            return;
+        };
+        let Some(w) = self.wizard.as_mut() else {
+            return;
+        };
+        if w.pad.is_none() {
+            w.pad = Some((c.guid.clone(), c.name.clone()));
+        }
+        let shown = c.input.to_config();
+        self.setup_status = match w.take(c.input) {
+            Ok(()) => None,
+            Err(slot) => Some((
+                format!(
+                    "{shown} is already used for {}. Use another one, or Backspace to skip.",
+                    slot_label(slot)
+                ),
+                true,
+            )),
+        };
+        self.next_step();
+    }
+
+    /// A Remove row: the pad's model goes back to the controller bindings.
+    fn remove_setup(&mut self, i: usize) {
+        let pads = input::generic::diagnostics();
+        let Some(p) = pads.get(i) else { return };
+        self.setup_status = Some(match input::generic::set_profile(&p.guid, None) {
+            Ok(()) => (
+                format!("Removed. {} uses the controller bindings again.", p.name),
+                false,
+            ),
+            Err(e) => (format!("Removed until you quit, but not saved: {e}"), true),
+        });
+    }
+
+    /// The Controller setup page: what the pads are, their live raw inputs,
+    /// the guided setup, and where SDL mappings go.
+    fn ui_pad_setup(&mut self, ui: &mut egui::Ui, rows: &[Row]) {
+        let at = |r: Row| rows.iter().position(|&x| x == r).unwrap();
+        ui.label(
+            egui::RichText::new(
+                "For controllers Birdman64 doesn't recognise, like generic USB joysticks and \
+                 N64 clones: set up their raw buttons, axes and hats here.",
+            )
+            .size(14.0),
+        );
+        if let Some((text, is_error)) = &self.setup_status {
+            let color = if *is_error {
+                egui::Color32::LIGHT_RED
+            } else {
+                egui::Color32::LIGHT_GREEN
+            };
+            ui.colored_label(color, text);
+        }
+        let pads = input::generic::diagnostics();
+        if pads.is_empty() {
+            ui.weak(
+                egui::RichText::new(
+                    "No controller found. Plug one in: it shows here even without a mapping.",
+                )
+                .size(14.0),
+            );
+        }
+        for p in &pads {
+            ui.add_space(2.0);
+            ui.strong(&p.name);
+            ui.label(egui::RichText::new(pad_status_text(p)).size(14.0));
+            ui.weak(egui::RichText::new(format!("GUID {}", p.guid)).size(13.0));
+            ui.weak(egui::RichText::new(live_text(&p.readings)).size(13.0));
+        }
+        ui.add_space(4.0);
+        let (row_text, hint) = match &self.wizard {
+            None => ("Set up a controller\u{2026}".to_string(), None),
+            Some(w) => {
+                let step = match w.current() {
+                    Some((_, prompt, _)) => format!(
+                        "{prompt}\u{2026}  ({}/{})",
+                        w.step + 1,
+                        input::raw::STEPS.len()
+                    ),
+                    None => String::new(),
+                };
+                let hint = match &w.pad {
+                    Some((_, n)) => {
+                        format!("Setting up {n}. Backspace skips a step (or click it), Esc stops.")
+                    }
+                    None => "Use the controller you want to set up. Backspace skips a step \
+                             (or click it), Esc stops."
+                        .to_string(),
+                };
+                (step, Some(hint))
+            }
+        };
+        let mut text = egui::RichText::new(row_text).size(16.0);
+        if self.wizard.is_some() {
+            text = text.color(egui::Color32::YELLOW);
+        }
+        self.selectable(ui, at(Row::SetupStart), text.into());
+        if let Some(h) = hint {
+            ui.weak(egui::RichText::new(h).size(13.0));
+        }
+        for &row in rows {
+            if let Row::SetupRemove(i) = row {
+                let name = pads.get(i).map_or("", |p| p.name.as_str());
+                self.text_row(ui, at(row), &format!("Remove custom setup: {name}"));
+            }
+        }
+        ui.add_space(4.0);
+        for (line, warn) in mappings_lines(input::generic::mappings_info().as_ref()) {
+            if warn {
+                ui.colored_label(egui::Color32::ORANGE, egui::RichText::new(line).size(13.0));
+            } else {
+                ui.weak(egui::RichText::new(line).size(13.0));
+            }
+        }
+        ui.add_space(4.0);
+        self.text_row(ui, at(Row::Back), "\u{2039} Back");
     }
 
     /// Applies a captured player-2 input exactly like cycling the
@@ -1402,6 +1667,16 @@ impl Overlay {
         if !pressed {
             return;
         }
+        // The guided controller setup owns the keyboard: Escape stops it
+        // (nothing saved), Backspace / Delete skip the step.
+        if self.wizard.is_some() {
+            match code {
+                KeyCode::Escape => self.stop_wizard(true),
+                KeyCode::Backspace | KeyCode::Delete if !repeat => self.skip_step(),
+                _ => {}
+            }
+            return;
+        }
         if self.capture.is_some() {
             if code == KeyCode::Escape {
                 self.end_capture();
@@ -1483,6 +1758,10 @@ impl Overlay {
     pub fn render(&mut self, gpu: &mut Gpu, view: &wgpu::TextureView) -> bool {
         self.poll_capture();
         self.poll_p2_capture();
+        self.poll_setup();
+        // The setup page's rows follow the connected pads: a pad unplugged
+        // under the selection must not leave it past the end.
+        self.sel = self.sel.min(self.rows().len().saturating_sub(1));
         self.poll_transfer();
         self.quit_check();
         self.pad_nav();
@@ -1618,6 +1897,7 @@ impl Overlay {
             Page::Graphics => "Display & graphics",
             Page::Split => "Split-screen",
             Page::Perf => "Performance overlay",
+            Page::PadSetup => "Controller setup",
         };
         // The wide Controls page (U9): with room for both, the binding list
         // scrolls on the left and the controller drawing sits fixed on the
@@ -1832,6 +2112,10 @@ impl Overlay {
                         .map(|i| Row::Bind(Kind::Gamepad, i)),
                 );
                 rows.push(Row::Reset(Kind::Gamepad));
+                // Generic controllers (gilrs, desktop only): their own page.
+                if !MOBILE {
+                    rows.push(Row::PadSetup);
+                }
                 // Switch 2 pads over Bluetooth (experimental), under the
                 // controller section. Not on Android: the scanner never
                 // starts there.
@@ -1853,6 +2137,21 @@ impl Overlay {
                 Row::Opt(Opt::ShareScores),
                 Row::Back,
             ],
+            // Controller setup: the guided setup, one Remove row per
+            // connected pad whose model has a custom setup, Back (to
+            // Controls).
+            Page::PadSetup => {
+                let mut rows = vec![Row::SetupStart];
+                rows.extend(
+                    input::generic::diagnostics()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| p.custom)
+                        .map(|(i, _)| Row::SetupRemove(i)),
+                );
+                rows.push(Row::Back);
+                rows
+            }
             // Performance overlay: the counter first (the simple case), then
             // the opt-in extras.
             Page::Perf => vec![
@@ -1881,6 +2180,11 @@ impl Overlay {
     /// B / Escape / the Back row on a sub-page: back to Main, with the
     /// selection resting on the row that opened it.
     fn back(&mut self) {
+        // Controller setup is a page under Controls: back goes there.
+        if self.page == Page::PadSetup {
+            self.leave_setup();
+            return;
+        }
         if self.page != Page::Main {
             self.page = Page::Main;
             self.sel = self
@@ -2142,6 +2446,18 @@ impl Overlay {
                     .size(14.0),
                 );
                 self.text_row(ui, kb.len() + 1 + gp.len(), "Reset gamepad to defaults");
+                if rows.contains(&Row::PadSetup) {
+                    let unrecognised = input::generic::unrecognised_connected();
+                    self.text_row(
+                        ui,
+                        at(Row::PadSetup),
+                        if unrecognised {
+                            "Controller setup \u{203a}  (a controller needs it)"
+                        } else {
+                            "Controller setup \u{203a}"
+                        },
+                    );
+                }
                 ui.add_space(4.0);
                 // Not on Android: the BLE scanner never starts there.
                 if !cfg!(target_os = "android") {
@@ -2178,6 +2494,7 @@ impl Overlay {
                 ui.add_space(4.0);
                 self.text_row(ui, at(Row::Back), "\u{2039} Back");
             }
+            Page::PadSetup => self.ui_pad_setup(ui, &rows),
         }
         // U5: one weak, wrapped help line for the selected row, above the
         // footer.
@@ -2717,6 +3034,11 @@ impl Overlay {
             self.end_capture();
             self.end_p2_capture();
         }
+        // The guided setup: its own row skips a step (a click), any other
+        // row stops it.
+        if self.wizard.is_some() && rows[self.sel] != Row::SetupStart {
+            self.stop_wizard(true);
+        }
         // Confirming anything but Quit disarms the Quit row (U3).
         if rows[self.sel] != Row::Quit {
             self.quit_armed = None;
@@ -2816,6 +3138,15 @@ impl Overlay {
             Row::ResetGraphics => self.reset_graphics(),
             // The Back row (sub-pages only; on Main, B / Escape close).
             Row::Back => self.back(),
+            Row::PadSetup => self.enter_setup(),
+            Row::SetupStart => {
+                if self.wizard.is_some() {
+                    self.skip_step();
+                } else {
+                    self.start_wizard();
+                }
+            }
+            Row::SetupRemove(i) => self.remove_setup(i),
             // A Bind row: capture the next input for the slot. The row
             // names come straight from the live bindings, so the capture
             // binds what the list shows.
@@ -3032,7 +3363,10 @@ impl Overlay {
             | Row::OpenPacksFolder
             | Row::UnlockAll
             | Row::RestoreUnlock
-            | Row::RestartNow => {}
+            | Row::RestartNow
+            | Row::PadSetup
+            | Row::SetupStart
+            | Row::SetupRemove(_) => {}
             // Neither do Resume / the page-open rows / Reset to defaults.
             Row::Resume | Row::Graphics | Row::PerfPage | Row::SplitScreen | Row::ResetGraphics => {
             }
@@ -3155,7 +3489,7 @@ impl Overlay {
     /// Skipped while a capture runs: the A that arms it must not confirm
     /// again, and a captured button must not navigate.
     fn pad_nav(&mut self) {
-        if self.capture.is_some() || self.p2_capture.is_some() {
+        if self.capture.is_some() || self.p2_capture.is_some() || self.wizard.is_some() {
             return;
         }
         let pad = input::overlay_pad();
@@ -3826,7 +4160,107 @@ fn help(row: Row) -> &'static str {
             "Playing with a controller? Hide the on-screen buttons. The menu button always \
              stays."
         }
+        Row::PadSetup => {
+            "For controllers that aren't recognised, like generic USB joysticks and N64 \
+             clones: see their raw inputs and set them up."
+        }
+        Row::SetupStart => {
+            "Walks through the stick and every button: do each on the controller. The \
+             setup is saved for that controller model and comes back when it reconnects. \
+             Backspace skips a step, Esc stops."
+        }
+        Row::SetupRemove(_) => {
+            "Forgets this controller's custom setup: it uses the controller bindings again."
+        }
     }
+}
+
+/// One pad's status line on the Controller setup page.
+fn pad_status_text(p: &input::generic::PadDiag) -> String {
+    use input::generic::Status;
+    if p.custom {
+        return "Custom setup in use (instead of the controller bindings).".into();
+    }
+    if !p.settable {
+        return "Fully supported: no setup needed.".into();
+    }
+    match &p.status {
+        Status::Mapped { name, user: true } => format!("Uses your SDL mapping \"{name}\"."),
+        Status::Mapped { name, user: false } => format!("Recognised (SDL mapping \"{name}\")."),
+        Status::Standard => "Recognised (standard gamepad layout).".into(),
+        Status::Unrecognised => {
+            "Not recognised: set it up below, or add an SDL mapping for it.".into()
+        }
+    }
+}
+
+/// The live raw readout: held buttons, every axis seen with its value (two
+/// decimals: an analog stick shows the values in between, a stick that only
+/// reports its ends doesn't), hats as whole directions.
+fn live_text(readings: &[input::generic::Reading]) -> String {
+    use input::generic::Kind;
+    const MAX: usize = 16;
+    if readings.is_empty() {
+        return "Live: press a button or move the stick".into();
+    }
+    let mut parts: Vec<String> = readings
+        .iter()
+        .take(MAX)
+        .map(|r| match r.kind {
+            Kind::Button => format!("{} pressed", r.code),
+            Kind::Axis => format!("{} axis {:+.2}", r.code, r.value),
+            Kind::Hat => format!("{} hat {:+.0}", r.code, r.value),
+        })
+        .collect();
+    if readings.len() > MAX {
+        parts.push(format!("+{} more", readings.len() - MAX));
+    }
+    format!("Live: {}", parts.join(" \u{b7} "))
+}
+
+/// The SDL-mapping lines under the setup (text, is a warning): what loaded
+/// at startup, where a mapping file goes, and up to three problems with it.
+fn mappings_lines(info: Option<&input::generic::MappingsInfo>) -> Vec<(String, bool)> {
+    let file = input::generic::MAPPINGS_FILE;
+    let Some(m) = info else {
+        return vec![(
+            "SDL mappings: not loaded (controller support is off).".into(),
+            false,
+        )];
+    };
+    let mut out = vec![if m.loaded.is_empty() {
+        (
+            format!(
+                "Have an SDL2 mapping for it? Put it in {} and restart.",
+                m.path.display()
+            ),
+            false,
+        )
+    } else {
+        (
+            format!(
+                "SDL mappings: {} of yours loaded from {file} (restart after editing it).",
+                m.loaded.len()
+            ),
+            false,
+        )
+    }];
+    if !m.file_found && !m.loaded.is_empty() {
+        out[0].0 = format!(
+            "SDL mappings: {} of yours loaded from SDL_GAMECONTROLLERCONFIG.",
+            m.loaded.len()
+        );
+    }
+    for note in m.notes.iter().take(3) {
+        out.push((note.clone(), true));
+    }
+    if m.notes.len() > 3 {
+        out.push((
+            format!("\u{2026}and {} more in the log.", m.notes.len() - 3),
+            true,
+        ));
+    }
+    out
 }
 
 /// The Resolution row's label for one video mode.
@@ -3902,6 +4336,9 @@ fn slot_label(code: &str) -> String {
         "STICK_DOWN" => "Stick Down".into(),
         "STICK_LEFT" => "Stick Left".into(),
         "STICK_RIGHT" => "Stick Right".into(),
+        "STICK_X" => "Stick left/right".into(),
+        "STICK_Y" => "Stick up/down".into(),
+        "SETTINGS" => "Settings".into(),
         other => other.to_string(),
     }
 }
@@ -4652,13 +5089,13 @@ mod tests {
         assert_eq!(o.rows()[o.sel], Row::Graphics);
         // Confirm on Controls opens the Controls page with the two binding
         // grids in the U9 order (game controls first, unused slots last:
-        // 18 keyboard + reset, 15 gamepad + reset), the Switch 2 (BLE) row
-        // and Back.
+        // 18 keyboard + reset, 15 gamepad + reset), Controller setup, the
+        // Switch 2 (BLE) row and Back.
         o.sel = 1;
         o.confirm();
         assert_eq!(o.page, Page::Controls);
         let rows = o.rows();
-        assert_eq!(rows.len(), 18 + 1 + 15 + 1 + 1 + 1);
+        assert_eq!(rows.len(), 18 + 1 + 15 + 1 + 1 + 1 + 1);
         assert_eq!(rows[0], Row::Bind(Kind::Keyboard, 0));
         // The unused keyboard slots (L, the D-pad) moved last, after the
         // stick rows.
@@ -4673,9 +5110,10 @@ mod tests {
         assert_eq!(rows[29], Row::Bind(Kind::Gamepad, 3));
         assert_eq!(rows[33], Row::Bind(Kind::Gamepad, 10));
         assert_eq!(rows[34], Row::Reset(Kind::Gamepad));
-        assert_eq!(rows[35], Row::Opt(Opt::Ble));
-        assert_eq!(rows[36], Row::Back);
-        o.sel = 36;
+        assert_eq!(rows[35], Row::PadSetup);
+        assert_eq!(rows[36], Row::Opt(Opt::Ble));
+        assert_eq!(rows[37], Row::Back);
+        o.sel = 37;
         o.confirm();
         assert_eq!(o.page, Page::Main);
         assert_eq!(o.rows()[o.sel], Row::Controls);
@@ -4718,8 +5156,10 @@ mod tests {
         o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));
         o.move_sel(-1);
+        assert_eq!(o.rows()[o.sel], Row::PadSetup);
+        o.move_sel(-1);
         assert_eq!(o.rows()[o.sel], Row::Reset(Kind::Gamepad));
-        o.move_sel(1);
+        o.move_sel(2);
         assert_eq!(o.rows()[o.sel], Row::Opt(Opt::Ble));
         let (name, value, hint) = o.row_text(Opt::Ble);
         assert_eq!(
@@ -4735,6 +5175,190 @@ mod tests {
         // Unlocked (simulated): a toggle is saved, toggling back is not.
         o.ble = true;
         assert_eq!(changed_since(o.staged_settings(), &snap).ble, Some(true));
+    }
+
+    /// Controller setup: opened from Controls and back there; the guided
+    /// setup owns the keyboard (Backspace skips, Escape stops, nothing is
+    /// saved without a captured pad), pad navigation pauses while it runs,
+    /// and another row stops it. No input thread here: no pads, no capture.
+    /// The Controller setup tests share the input thread's globals (the
+    /// raw capture, the diagnostics): one at a time.
+    static SETUP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn pad_setup_page_and_wizard() {
+        let _g = SETUP_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut o = Overlay::new();
+        o.page = Page::Controls;
+        o.sel = o.rows().iter().position(|&r| r == Row::PadSetup).unwrap();
+        o.confirm();
+        assert_eq!(o.page, Page::PadSetup);
+        assert_eq!(o.rows(), [Row::SetupStart, Row::Back]);
+        // Start, skip two steps with the keyboard, stop with Escape.
+        o.confirm();
+        assert!(o.wizard.is_some());
+        assert!(input::generic::capturing());
+        o.on_key(KeyCode::Backspace, false, true);
+        o.on_key(KeyCode::Delete, false, true);
+        assert_eq!(o.wizard.as_ref().unwrap().step, 2);
+        // Arrow keys don't navigate while it runs.
+        o.on_key(KeyCode::ArrowDown, false, true);
+        assert_eq!(o.sel, 0);
+        o.on_key(KeyCode::Escape, false, true);
+        assert!(o.wizard.is_none());
+        assert!(!input::generic::capturing());
+        assert_eq!(
+            o.page,
+            Page::PadSetup,
+            "Escape stopped the setup, not the page"
+        );
+        assert!(
+            o.setup_status
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("nothing changed")
+        );
+        // Skipping every step finishes without a pad: nothing is saved.
+        o.confirm();
+        for _ in 0..input::raw::STEPS.len() {
+            o.confirm(); // a click on the running row skips
+        }
+        assert!(o.wizard.is_none());
+        assert!(
+            o.setup_status
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("Nothing was captured")
+        );
+        // Another row (Back) stops a running setup and returns to Controls,
+        // selection on Controller setup.
+        o.sel = 0;
+        o.confirm();
+        o.sel = 1;
+        o.confirm();
+        assert!(o.wizard.is_none());
+        assert!(!input::generic::capturing());
+        assert_eq!(o.page, Page::Controls);
+        assert_eq!(o.rows()[o.sel], Row::PadSetup);
+        // Escape on the page itself goes back to Controls too.
+        o.confirm();
+        o.on_key(KeyCode::Escape, false, true);
+        assert_eq!(o.page, Page::Controls);
+    }
+
+    /// The setup page draws (a real egui pass through `build_ui`) idle,
+    /// mid-setup and with a pad whose model has a custom setup (its Remove
+    /// row).
+    #[test]
+    fn pad_setup_page_draws() {
+        let _g = SETUP_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use input::generic::{Kind as K, PadDiag, Reading, Status};
+        let pad = |name: &str, custom| PadDiag {
+            name: name.into(),
+            guid: "03000000790000000600000000000000".into(),
+            status: Status::Unrecognised,
+            custom,
+            settable: true,
+            readings: vec![Reading {
+                code: "ABS(0)".into(),
+                kind: K::Axis,
+                value: 0.5,
+            }],
+        };
+        input::generic::set_test_diagnostics(vec![pad("Pad A", false), pad("Pad B", true)]);
+        let mut o = Overlay::new();
+        o.show = true;
+        o.page = Page::PadSetup;
+        assert_eq!(o.rows(), [Row::SetupStart, Row::SetupRemove(1), Row::Back]);
+        let ctx = o.ctx.clone();
+        let frame = |o: &mut Overlay| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(960.0, 720.0),
+                )),
+                ..Default::default()
+            };
+            let out = ctx.run(raw, |ctx| o.build_ui(ctx));
+            assert!(!out.shapes.is_empty());
+        };
+        frame(&mut o);
+        o.sel = 0;
+        o.confirm();
+        assert!(o.wizard.is_some());
+        frame(&mut o);
+        o.stop_wizard(false);
+        o.sel = 2;
+        frame(&mut o);
+        input::generic::set_test_diagnostics(Vec::new());
+    }
+
+    /// The setup page's wording: pad status, the live readout (axis values
+    /// with two decimals, hats whole), and the SDL mapping lines.
+    #[test]
+    fn pad_setup_texts() {
+        use input::generic::{Kind as K, MappingsInfo, PadDiag, Reading, Status};
+        let mut p = PadDiag {
+            name: "USB Joystick".into(),
+            guid: "03000000790000000600000000000000".into(),
+            status: Status::Unrecognised,
+            custom: false,
+            settable: true,
+            readings: Vec::new(),
+        };
+        assert!(pad_status_text(&p).starts_with("Not recognised"));
+        p.custom = true;
+        assert!(pad_status_text(&p).starts_with("Custom setup in use"));
+        p.custom = false;
+        p.status = Status::Mapped {
+            name: "USB Joystick".into(),
+            user: true,
+        };
+        assert_eq!(
+            pad_status_text(&p),
+            "Uses your SDL mapping \"USB Joystick\"."
+        );
+        let r = |code: &str, kind, value| Reading {
+            code: code.into(),
+            kind,
+            value,
+        };
+        assert_eq!(
+            live_text(&[
+                r("ABS(0)", K::Axis, -0.4237),
+                r("ABS(16)", K::Hat, 1.0),
+                r("KEY(288)", K::Button, 1.0),
+            ]),
+            "Live: ABS(0) axis -0.42 \u{b7} ABS(16) hat +1 \u{b7} KEY(288) pressed"
+        );
+        assert!(live_text(&[]).contains("press a button"));
+        let info = MappingsInfo {
+            path: "/data/gamecontrollerdb.txt".into(),
+            file_found: false,
+            loaded: Vec::new(),
+            notes: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+        };
+        let lines = mappings_lines(Some(&info));
+        assert!(lines[0].0.contains("/data/gamecontrollerdb.txt"));
+        assert_eq!(lines.len(), 1 + 3 + 1, "three notes, then a count");
+        assert!(lines[1..].iter().all(|(_, warn)| *warn));
+        let loaded = MappingsInfo {
+            file_found: true,
+            loaded: vec![("g".into(), "n".into())],
+            notes: Vec::new(),
+            ..info
+        };
+        assert!(
+            mappings_lines(Some(&loaded))[0]
+                .0
+                .contains("1 of yours loaded")
+        );
     }
 
     /// SS-UI: the Player-2 controller choices (all gamepads, one per pad,
@@ -5339,7 +5963,13 @@ mod tests {
         let mut o = Overlay::new();
         o.msaa = 4;
         o.restore_available = true;
-        for page in [Page::Main, Page::Graphics, Page::Controls, Page::Split] {
+        for page in [
+            Page::Main,
+            Page::Graphics,
+            Page::Controls,
+            Page::Split,
+            Page::PadSetup,
+        ] {
             o.page = page;
             for row in o.rows() {
                 assert!(!help(row).is_empty(), "{row:?} on {page:?} has no help");
